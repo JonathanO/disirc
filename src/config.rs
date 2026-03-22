@@ -113,6 +113,143 @@ pub struct BridgeEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+impl Config {
+    /// Validate all fields according to the rules in `specs/01-configuration.md`.
+    /// Returns `Err(ConfigError::Validation(...))` on the first violation found.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        validate_sid(&self.irc.sid)?;
+        validate_link_name(&self.irc.link_name)?;
+
+        if self.bridges.is_empty() {
+            return Err(ConfigError::Validation(
+                "at least one [[bridge]] entry is required".into(),
+            ));
+        }
+
+        for entry in &self.bridges {
+            validate_discord_channel_id(&entry.discord_channel_id)?;
+            validate_irc_channel(&entry.irc_channel)?;
+            if let Some(url) = &entry.webhook_url {
+                validate_webhook_url(url)?;
+            }
+        }
+
+        validate_no_duplicates(&self.bridges)
+    }
+}
+
+/// SID must match `[0-9][A-Z0-9]{2}`.
+fn validate_sid(sid: &str) -> Result<(), ConfigError> {
+    let mut chars = sid.chars();
+    let valid = sid.len() == 3
+        && chars.next().is_some_and(|c| c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+    if valid {
+        Ok(())
+    } else {
+        Err(ConfigError::Validation(format!(
+            "irc.sid {sid:?} is invalid: must match [0-9][A-Z0-9]{{2}}"
+        )))
+    }
+}
+
+/// Server name must be hostname-like: two or more dot-separated labels,
+/// each label non-empty, containing only `[A-Za-z0-9-]`, not starting or
+/// ending with `-`.
+fn validate_link_name(name: &str) -> Result<(), ConfigError> {
+    let err = || {
+        ConfigError::Validation(format!(
+            "irc.link_name {name:?} is invalid: must be a valid server hostname (e.g. discord.example.net)"
+        ))
+    };
+
+    if name.is_empty() {
+        return Err(err());
+    }
+
+    let labels: Vec<&str> = name.split('.').collect();
+    if labels.len() < 2 {
+        return Err(err()); // no dot → not a server name
+    }
+
+    for label in &labels {
+        if label.is_empty() {
+            return Err(err()); // consecutive dots or leading/trailing dot
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(err());
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(err());
+        }
+    }
+
+    Ok(())
+}
+
+/// Discord channel ID must be a non-empty string of ASCII digits.
+fn validate_discord_channel_id(id: &str) -> Result<(), ConfigError> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(ConfigError::Validation(format!(
+            "bridge discord_channel_id {id:?} is invalid: must be a non-empty string of digits"
+        )));
+    }
+    Ok(())
+}
+
+/// IRC channel must start with `#`.
+fn validate_irc_channel(channel: &str) -> Result<(), ConfigError> {
+    if !channel.starts_with('#') {
+        return Err(ConfigError::Validation(format!(
+            "bridge irc_channel {channel:?} is invalid: must start with '#'"
+        )));
+    }
+    Ok(())
+}
+
+/// Webhook URL must be HTTPS with host `discord.com` or `discordapp.com`.
+fn validate_webhook_url(url: &str) -> Result<(), ConfigError> {
+    let err = || {
+        ConfigError::Validation(format!(
+            "bridge webhook_url {url:?} is invalid: must be an HTTPS URL with host discord.com or discordapp.com"
+        ))
+    };
+
+    let rest = url.strip_prefix("https://").ok_or_else(err)?;
+    let host = rest.split('/').next().unwrap_or("");
+    if host != "discord.com" && host != "discordapp.com" {
+        return Err(err());
+    }
+    Ok(())
+}
+
+/// No two bridge entries may share a `discord_channel_id` or `irc_channel`.
+fn validate_no_duplicates(bridges: &[BridgeEntry]) -> Result<(), ConfigError> {
+    let mut discord_ids = std::collections::HashSet::new();
+    let mut irc_channels = std::collections::HashSet::new();
+
+    for entry in bridges {
+        if !discord_ids.insert(entry.discord_channel_id.as_str()) {
+            return Err(ConfigError::Validation(format!(
+                "duplicate discord_channel_id {:?} in [[bridge]] entries",
+                entry.discord_channel_id
+            )));
+        }
+        if !irc_channels.insert(entry.irc_channel.as_str()) {
+            return Err(ConfigError::Validation(format!(
+                "duplicate irc_channel {:?} in [[bridge]] entries",
+                entry.irc_channel
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Serde defaults
 // ---------------------------------------------------------------------------
 
@@ -294,5 +431,211 @@ mod tests {
         // Omitting [pseudoclients] entirely should give defaults
         let cfg = parse(MINIMAL_TOML);
         assert_eq!(cfg.pseudoclients, PseudoclientConfig::default());
+    }
+
+    // -----------------------------------------------------------------------
+    // Validation tests
+    // -----------------------------------------------------------------------
+
+    fn valid_config() -> Config {
+        parse(MINIMAL_TOML)
+    }
+
+    #[test]
+    fn valid_config_passes_validation() {
+        assert!(valid_config().validate().is_ok());
+    }
+
+    // SID
+
+    #[test]
+    fn sid_valid_examples() {
+        for sid in &["0D0", "0AA", "9ZZ", "1A2", "0A0"] {
+            let mut cfg = valid_config();
+            cfg.irc.sid = (*sid).to_string();
+            assert!(cfg.validate().is_ok(), "expected {sid} to be valid");
+        }
+    }
+
+    #[test]
+    fn sid_invalid_examples() {
+        for sid in &[
+            "",     // empty
+            "0",    // too short
+            "0A",   // too short
+            "0A0B", // too long
+            "AA0",  // starts with letter
+            "0a0",  // lowercase
+            "0-0",  // invalid char
+            "   ",  // spaces
+        ] {
+            let mut cfg = valid_config();
+            cfg.irc.sid = (*sid).to_string();
+            assert!(cfg.validate().is_err(), "expected {sid} to be invalid");
+        }
+    }
+
+    // link_name
+
+    #[test]
+    fn link_name_valid_examples() {
+        for name in &["discord.example.net", "irc.example.com", "a.b"] {
+            let mut cfg = valid_config();
+            cfg.irc.link_name = (*name).to_string();
+            assert!(cfg.validate().is_ok(), "expected {name} to be valid");
+        }
+    }
+
+    #[test]
+    fn link_name_invalid_examples() {
+        for name in &[
+            "",           // empty
+            "nodot",      // no dot — not a server name
+            ".leading",   // leading dot
+            "trailing.",  // trailing dot
+            "-start.com", // label starts with hyphen
+            "end-.com",   // label ends with hyphen
+            "a..b",       // empty label
+        ] {
+            let mut cfg = valid_config();
+            cfg.irc.link_name = (*name).to_string();
+            assert!(cfg.validate().is_err(), "expected {name} to be invalid");
+        }
+    }
+
+    // discord_channel_id
+
+    #[test]
+    fn discord_channel_id_valid() {
+        let mut cfg = valid_config();
+        cfg.bridges[0].discord_channel_id = "123456789012345678".to_string();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn discord_channel_id_invalid_examples() {
+        for id in &["", "abc", "123abc", "12 34", "-1"] {
+            let mut cfg = valid_config();
+            cfg.bridges[0].discord_channel_id = (*id).to_string();
+            assert!(cfg.validate().is_err(), "expected {id} to be invalid");
+        }
+    }
+
+    // irc_channel
+
+    #[test]
+    fn irc_channel_valid() {
+        for ch in &["#general", "#a", "##meta"] {
+            let mut cfg = valid_config();
+            cfg.bridges[0].irc_channel = (*ch).to_string();
+            assert!(cfg.validate().is_ok(), "expected {ch} to be valid");
+        }
+    }
+
+    #[test]
+    fn irc_channel_invalid_examples() {
+        for ch in &["", "general", "&general", " #general"] {
+            let mut cfg = valid_config();
+            cfg.bridges[0].irc_channel = (*ch).to_string();
+            assert!(cfg.validate().is_err(), "expected {ch} to be invalid");
+        }
+    }
+
+    // webhook_url
+
+    #[test]
+    fn webhook_url_valid_examples() {
+        for url in &[
+            "https://discord.com/api/webhooks/111/aaa",
+            "https://discordapp.com/api/webhooks/222/bbb",
+        ] {
+            let mut cfg = valid_config();
+            cfg.bridges[0].webhook_url = Some((*url).to_string());
+            assert!(cfg.validate().is_ok(), "expected {url} to be valid");
+        }
+    }
+
+    #[test]
+    fn webhook_url_invalid_examples() {
+        for url in &[
+            "http://discord.com/api/webhooks/111/aaa", // http not https
+            "https://evil.com/api/webhooks/111/aaa",   // wrong host
+            "https://notdiscord.com/api/webhooks/1/a", // wrong host
+            "discord.com/api/webhooks/111/aaa",        // no scheme
+            "",                                        // empty
+        ] {
+            let mut cfg = valid_config();
+            cfg.bridges[0].webhook_url = Some((*url).to_string());
+            assert!(cfg.validate().is_err(), "expected {url} to be invalid");
+        }
+    }
+
+    // duplicate detection
+
+    #[test]
+    fn duplicate_discord_channel_id_fails() {
+        let mut cfg = parse(FULL_TOML);
+        cfg.bridges[1].discord_channel_id = cfg.bridges[0].discord_channel_id.clone();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn duplicate_irc_channel_fails() {
+        let mut cfg = parse(FULL_TOML);
+        cfg.bridges[1].irc_channel = cfg.bridges[0].irc_channel.clone();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn at_least_one_bridge_required() {
+        let mut cfg = valid_config();
+        cfg.bridges.clear();
+        assert!(cfg.validate().is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Proptest
+    // -----------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn valid_sid_always_passes(sid in "[0-9][A-Z0-9]{2}") {
+            let mut cfg = valid_config();
+            cfg.irc.sid = sid.clone();
+            prop_assert!(cfg.validate().is_ok(), "sid {sid} should be valid");
+        }
+
+        #[test]
+        fn wrong_length_sid_always_fails(s in "[0-9][A-Z0-9]{0,1}|[0-9][A-Z0-9]{3,10}") {
+            let mut cfg = valid_config();
+            cfg.irc.sid = s.clone();
+            prop_assert!(cfg.validate().is_err(), "sid {s} of wrong length should fail");
+        }
+
+        #[test]
+        fn nonempty_digit_string_is_valid_channel_id(s in "[0-9]{1,20}") {
+            let mut cfg = valid_config();
+            cfg.bridges[0].discord_channel_id = s.clone();
+            prop_assert!(cfg.validate().is_ok(), "channel id {s} should be valid");
+        }
+
+        #[test]
+        fn hash_prefixed_string_is_valid_irc_channel(rest in "[a-z][a-z0-9-]{0,29}") {
+            let channel = format!("#{rest}");
+            let mut cfg = valid_config();
+            cfg.bridges[0].irc_channel = channel.clone();
+            prop_assert!(cfg.validate().is_ok(), "irc channel {channel} should be valid");
+        }
+
+        #[test]
+        fn string_without_hash_prefix_is_invalid_irc_channel(
+            s in "[a-z][a-z0-9-]{0,29}",  // valid chars but no leading #
+        ) {
+            let mut cfg = valid_config();
+            cfg.bridges[0].irc_channel = s.clone();
+            prop_assert!(cfg.validate().is_err(), "irc channel {s} without # should be invalid");
+        }
     }
 }

@@ -17,8 +17,8 @@ Specs are approved. Implement in order (each builds on the previous).
 ### `specs/01-configuration.md`
 - [x] Define config structs with serde (`DiscordConfig`, `IrcConfig`, `PseudoclientConfig`, `BridgeEntry`, root `Config`)
 - [x] Config loading from file (read TOML, deserialize, CLI `--config` flag)
-- [ ] Validation logic (SID regex, channel names, webhook URL, duplicate detection, at-least-one-bridge)
-- [ ] Tests: unit tests + proptest for all validation rules
+- [x] Validation logic (SID regex, channel names, webhook URL, duplicate detection, at-least-one-bridge)
+- [x] Tests: unit tests + proptest for all validation rules
 - [ ] SIGHUP handler (tokio signal, send reload event into mpsc channel)
 - [ ] Reload diff logic (compute added/removed entries, apply, log summary; validate before applying)
 

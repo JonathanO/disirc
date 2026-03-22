@@ -1,0 +1,21 @@
+[discord]
+token = "Bot abc123"
+
+[irc]
+uplink = "irc.example.net"
+link_name = "discord.example.net"
+link_password = "secret"
+sid = "0D0"
+
+[pseudoclients]
+host_suffix = "users.example.net"
+ident = "bridge"
+
+[[bridge]]
+discord_channel_id = "123456789012345678"
+irc_channel = "#general"
+webhook_url = "https://discord.com/api/webhooks/111/aaa"
+
+[[bridge]]
+discord_channel_id = "987654321098765432"
+irc_channel = "#dev"

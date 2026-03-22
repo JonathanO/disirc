@@ -1,0 +1,15 @@
+# Rust
+/target/
+Cargo.lock
+
+# Config with real secrets — use config.example.toml instead
+config.toml
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,5 @@
+# Normalise line endings to LF in the repository
+* text=auto eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf

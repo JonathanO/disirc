@@ -1,0 +1,42 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# Deny any crate with a known security vulnerability
+ignore = [
+    # rustls-webpki 0.102.8 is pinned by serenity's transitive dep tokio-tungstenite 0.21 → rustls 0.22.
+    # We cannot upgrade without a serenity release. Limited impact (requires compromised CA).
+    { id = "RUSTSEC-2026-0049", reason = "transitive dep pinned by serenity; awaiting upstream update" },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+# ring has a non-standard licence file structure
+[[licenses.clarify]]
+crate = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

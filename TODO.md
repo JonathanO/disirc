@@ -20,7 +20,7 @@ Specs are approved. Implement in order (each builds on the previous).
 - [x] Validation logic (SID regex, channel names, webhook URL, duplicate detection, at-least-one-bridge)
 - [x] Tests: unit tests + proptest for all validation rules
 - [x] SIGHUP handler (tokio signal, send reload event into mpsc channel)
-- [ ] Reload diff logic (compute added/removed entries, apply, log summary; validate before applying)
+- [x] Reload diff logic (compute added/removed entries, apply, log summary; validate before applying)
 
 ### `specs/05-formatting.md`
 - [ ] Discord→IRC: mention and emoji resolution (`<@id>`, `<#id>`, `<@&id>`, `<:name:id>`, `<a:name:id>`)

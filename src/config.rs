@@ -250,6 +250,132 @@ fn validate_no_duplicates(bridges: &[BridgeEntry]) -> Result<(), ConfigError> {
 }
 
 // ---------------------------------------------------------------------------
+// Reload diff
+// ---------------------------------------------------------------------------
+
+/// Describes the changes between two sets of bridge entries.
+#[derive(Debug, PartialEq)]
+pub struct BridgeDiff {
+    pub added: Vec<BridgeEntry>,
+    pub removed: Vec<BridgeEntry>,
+    pub webhook_changed: Vec<BridgeEntry>,
+}
+
+impl BridgeDiff {
+    /// Returns `true` when nothing changed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.webhook_changed.is_empty()
+    }
+}
+
+/// Compute the diff between `old` and `new` bridge entry slices.
+///
+/// Entries are keyed on `(discord_channel_id, irc_channel)`.  An entry
+/// present in `new` but not `old` is *added*; present in `old` but not `new`
+/// is *removed*.  If the key matches but `webhook_url` differs, the entry
+/// appears in `webhook_changed` (with the **new** value).
+#[must_use]
+pub fn diff_bridges(old: &[BridgeEntry], new: &[BridgeEntry]) -> BridgeDiff {
+    use std::collections::HashMap;
+
+    type Key<'a> = (&'a str, &'a str);
+
+    let old_map: HashMap<Key<'_>, &BridgeEntry> = old
+        .iter()
+        .map(|e| ((e.discord_channel_id.as_str(), e.irc_channel.as_str()), e))
+        .collect();
+
+    let new_map: HashMap<Key<'_>, &BridgeEntry> = new
+        .iter()
+        .map(|e| ((e.discord_channel_id.as_str(), e.irc_channel.as_str()), e))
+        .collect();
+
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut webhook_changed = Vec::new();
+
+    for (key, new_entry) in &new_map {
+        match old_map.get(key) {
+            None => added.push((*new_entry).clone()),
+            Some(old_entry) if old_entry.webhook_url != new_entry.webhook_url => {
+                webhook_changed.push((*new_entry).clone());
+            }
+            Some(_) => {} // unchanged
+        }
+    }
+
+    for (key, old_entry) in &old_map {
+        if !new_map.contains_key(key) {
+            removed.push((*old_entry).clone());
+        }
+    }
+
+    BridgeDiff {
+        added,
+        removed,
+        webhook_changed,
+    }
+}
+
+/// Check whether any non-reloadable fields differ between two configs.
+///
+/// Returns a list of human-readable field names that changed.  The caller
+/// should log these at `WARN` level.
+#[must_use]
+pub fn non_reloadable_changes(old: &Config, new: &Config) -> Vec<&'static str> {
+    let mut changed = Vec::new();
+
+    if old.discord.token != new.discord.token {
+        changed.push("discord.token");
+    }
+    if old.irc.uplink != new.irc.uplink {
+        changed.push("irc.uplink");
+    }
+    if old.irc.port != new.irc.port {
+        changed.push("irc.port");
+    }
+    if old.irc.tls != new.irc.tls {
+        changed.push("irc.tls");
+    }
+    if old.irc.link_name != new.irc.link_name {
+        changed.push("irc.link_name");
+    }
+    if old.irc.link_password != new.irc.link_password {
+        changed.push("irc.link_password");
+    }
+    if old.irc.sid != new.irc.sid {
+        changed.push("irc.sid");
+    }
+    if old.irc.description != new.irc.description {
+        changed.push("irc.description");
+    }
+    if old.pseudoclients.host_suffix != new.pseudoclients.host_suffix {
+        changed.push("pseudoclients.host_suffix");
+    }
+    if old.pseudoclients.ident != new.pseudoclients.ident {
+        changed.push("pseudoclients.ident");
+    }
+
+    changed
+}
+
+/// Attempt to reload config from `path`, validating before returning the diff.
+///
+/// On success returns `Ok((new_config, diff))`.  On failure returns an error;
+/// the caller should log it and keep the old config.
+pub fn reload(
+    path: impl AsRef<Path>,
+    current: &Config,
+) -> Result<(Config, BridgeDiff), ConfigError> {
+    let new = load(path)?;
+    new.validate()?;
+
+    let diff = diff_bridges(&current.bridges, &new.bridges);
+    Ok((new, diff))
+}
+
+// ---------------------------------------------------------------------------
 // Serde defaults
 // ---------------------------------------------------------------------------
 
@@ -591,6 +717,144 @@ mod tests {
         let mut cfg = valid_config();
         cfg.bridges.clear();
         assert!(cfg.validate().is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Reload diff tests
+    // -----------------------------------------------------------------------
+
+    fn bridge(discord_id: &str, irc: &str, webhook: Option<&str>) -> BridgeEntry {
+        BridgeEntry {
+            discord_channel_id: discord_id.to_string(),
+            irc_channel: irc.to_string(),
+            webhook_url: webhook.map(ToString::to_string),
+        }
+    }
+
+    #[test]
+    fn diff_identical_bridges_is_empty() {
+        let bridges = vec![bridge("111", "#a", None)];
+        let diff = diff_bridges(&bridges, &bridges);
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn diff_detects_added_entry() {
+        let old = vec![bridge("111", "#a", None)];
+        let new = vec![bridge("111", "#a", None), bridge("222", "#b", None)];
+        let diff = diff_bridges(&old, &new);
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.added[0].discord_channel_id, "222");
+        assert!(diff.removed.is_empty());
+        assert!(diff.webhook_changed.is_empty());
+    }
+
+    #[test]
+    fn diff_detects_removed_entry() {
+        let old = vec![bridge("111", "#a", None), bridge("222", "#b", None)];
+        let new = vec![bridge("111", "#a", None)];
+        let diff = diff_bridges(&old, &new);
+        assert!(diff.added.is_empty());
+        assert_eq!(diff.removed.len(), 1);
+        assert_eq!(diff.removed[0].discord_channel_id, "222");
+        assert!(diff.webhook_changed.is_empty());
+    }
+
+    #[test]
+    fn diff_detects_webhook_change() {
+        let old = vec![bridge("111", "#a", None)];
+        let new = vec![bridge(
+            "111",
+            "#a",
+            Some("https://discord.com/api/webhooks/1/x"),
+        )];
+        let diff = diff_bridges(&old, &new);
+        assert!(diff.added.is_empty());
+        assert!(diff.removed.is_empty());
+        assert_eq!(diff.webhook_changed.len(), 1);
+        assert_eq!(
+            diff.webhook_changed[0].webhook_url.as_deref(),
+            Some("https://discord.com/api/webhooks/1/x")
+        );
+    }
+
+    #[test]
+    fn diff_combined_add_remove_change() {
+        let old = vec![
+            bridge("111", "#a", None),
+            bridge("222", "#b", Some("https://discord.com/api/webhooks/old/o")),
+        ];
+        let new = vec![
+            bridge("222", "#b", Some("https://discord.com/api/webhooks/new/n")),
+            bridge("333", "#c", None),
+        ];
+        let diff = diff_bridges(&old, &new);
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.added[0].discord_channel_id, "333");
+        assert_eq!(diff.removed.len(), 1);
+        assert_eq!(diff.removed[0].discord_channel_id, "111");
+        assert_eq!(diff.webhook_changed.len(), 1);
+        assert_eq!(diff.webhook_changed[0].discord_channel_id, "222");
+    }
+
+    #[test]
+    fn diff_empty_to_entries() {
+        let diff = diff_bridges(&[], &[bridge("111", "#a", None)]);
+        assert_eq!(diff.added.len(), 1);
+        assert!(diff.removed.is_empty());
+    }
+
+    #[test]
+    fn diff_entries_to_empty() {
+        let diff = diff_bridges(&[bridge("111", "#a", None)], &[]);
+        assert!(diff.added.is_empty());
+        assert_eq!(diff.removed.len(), 1);
+    }
+
+    #[test]
+    fn non_reloadable_changes_none_when_identical() {
+        let cfg = valid_config();
+        let cfg2 = valid_config();
+        assert!(non_reloadable_changes(&cfg, &cfg2).is_empty());
+    }
+
+    #[test]
+    fn non_reloadable_changes_detects_all_fields() {
+        let cfg = valid_config();
+        let mut cfg2 = parse(FULL_TOML);
+        cfg2.discord.token = "different".to_string();
+        cfg2.irc.uplink = "other.example.net".to_string();
+        cfg2.irc.sid = "1AA".to_string();
+
+        let changes = non_reloadable_changes(&cfg, &cfg2);
+        assert!(changes.contains(&"discord.token"));
+        assert!(changes.contains(&"irc.uplink"));
+        assert!(changes.contains(&"irc.port"));
+        assert!(changes.contains(&"irc.tls"));
+        assert!(changes.contains(&"irc.description"));
+        assert!(changes.contains(&"irc.sid"));
+        assert!(changes.contains(&"pseudoclients.host_suffix"));
+        assert!(changes.contains(&"pseudoclients.ident"));
+    }
+
+    #[test]
+    fn non_reloadable_ignores_bridge_changes() {
+        let cfg = valid_config();
+        let mut cfg2 = valid_config();
+        cfg2.bridges = vec![bridge("999", "#different", None)];
+        // Bridge changes are reloadable, so they should NOT appear
+        assert!(non_reloadable_changes(&cfg, &cfg2).is_empty());
+
+        // But changing token should appear
+        cfg2.discord.token = "new-token".to_string();
+        let changes = non_reloadable_changes(&cfg, &cfg2);
+        assert_eq!(changes, vec!["discord.token"]);
+    }
+
+    #[test]
+    fn reload_returns_error_for_invalid_file() {
+        let result = reload("nonexistent.toml", &valid_config());
+        assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------

@@ -19,7 +19,7 @@ Specs are approved. Implement in order (each builds on the previous).
 - [x] Config loading from file (read TOML, deserialize, CLI `--config` flag)
 - [x] Validation logic (SID regex, channel names, webhook URL, duplicate detection, at-least-one-bridge)
 - [x] Tests: unit tests + proptest for all validation rules
-- [ ] SIGHUP handler (tokio signal, send reload event into mpsc channel)
+- [x] SIGHUP handler (tokio signal, send reload event into mpsc channel)
 - [ ] Reload diff logic (compute added/removed entries, apply, log summary; validate before applying)
 
 ### `specs/05-formatting.md`

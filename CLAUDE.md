@@ -6,7 +6,12 @@
 
 ## Session continuity
 
-At the **start** of every session, read `TODO.md` to understand what was in progress and what is pending. Sync the in-session `TodoWrite` task list with `TODO.md` at session start.
+At the **start** of every session:
+1. Re-read this file (`CLAUDE.md`) in full.
+2. Read `TODO.md` to understand what was in progress and what is pending.
+3. Sync the in-session `TodoWrite` task list with `TODO.md`.
+
+At the **start of each new implementation task** (new spec, new module, new bug fix), re-read the relevant spec and the **Spec-driven development workflow** and **Done means** sections of this file before writing any code.
 
 Update `TODO.md` **immediately** whenever:
 - A task is completed
@@ -19,7 +24,13 @@ Do not batch `TODO.md` updates to the end of a session — update it in place as
 
 1. **Specs live in `specs/`**. Before implementing any feature, read the relevant spec file(s).
 2. **No spec = no implementation**. If a feature has no spec, write or extend the spec first, get it reviewed, then implement.
-3. **Tests before code**. For each spec being implemented, write failing tests first, then write the minimum code to make them pass.
+3. **Tests before code — always, no exceptions**. This applies to **all** code changes without exception: new features, bug fixes, refactors, and spec updates that change behaviour. The sequence is rigid:
+   a. Write the test(s) that capture the expected behaviour or the bug being fixed.
+   b. Run them and confirm they **fail** (red) for the right reason.
+   c. Write the minimum implementation code to make them pass (green).
+   d. Refactor if needed, keeping tests green.
+
+   **Never write implementation code before the failing test exists.** If you catch yourself writing code before writing a test, stop, write the test first, confirm it fails, then continue.
 4. **Update `SPECS.md`** when a spec moves from Pending → In Progress → Implemented.
 
 ## Key dependencies

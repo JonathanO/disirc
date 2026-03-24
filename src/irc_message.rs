@@ -28,29 +28,52 @@ pub struct IrcMessage {
 /// Parameters for the `UID` command (user introduction burst).
 ///
 /// Corresponds to the 12-field `UID` command in the UnrealIRCd S2S protocol.
+/// Field order matches the wire format exactly.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UidParams {
+    /// IRC nickname.
     pub nick: String,
+    /// Hop count from the introducing server.  Always `1` for pseudoclients
+    /// we introduce ourselves.
     pub hop_count: u32,
+    /// UNIX timestamp at which the user was introduced (seconds).
     pub timestamp: u64,
+    /// Ident / username (the `~user` part of a hostmask).
     pub ident: String,
+    /// Real hostname of the user.
     pub host: String,
+    /// Globally unique user ID (SID prefix + 6 alphanumeric chars).
     pub uid: String,
+    /// Services account stamp.  `"0"` means the user is not logged in to
+    /// any services account.
     pub services_stamp: String,
+    /// User mode string (e.g. `"+i"`).
     pub umodes: String,
+    /// Displayed virtual hostname.  `"*"` means no vhost is set and the
+    /// real hostname is shown.
     pub vhost: String,
+    /// Cloaked hostname used for host-hiding.  `"*"` if not set.
     pub cloaked_host: String,
+    /// Real IP address, or `"*"` if hidden / not applicable.
     pub ip: String,
+    /// GECOS / realname field (the trailing parameter on the wire).
     pub realname: String,
 }
 
 /// Parameters for the `SJOIN` command (channel burst).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SjoinParams {
+    /// Channel creation / burst timestamp (seconds).
     pub timestamp: u64,
+    /// Channel name, including the `#` sigil.
     pub channel: String,
+    /// Channel mode string at burst time (e.g. `"+"` for no modes, `"+nt"`).
+    /// Does not include mode parameters; those are not preserved by this type.
     pub modes: String,
-    /// UIDs of members, each optionally prefixed with mode chars (`@`, `+`, etc.).
+    /// UIDs of members being introduced into the channel.  Each entry may be
+    /// prefixed with one or more status-mode characters (`@` for op, `+` for
+    /// voice, etc.).  Empty string means the channel is being created with no
+    /// initial members (mode-only SJOIN).
     pub members: Vec<String>,
 }
 
@@ -58,79 +81,128 @@ pub struct SjoinParams {
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrcCommand {
     // ---- Authentication / handshake ----
+    /// `PASS` — link password, sent before `SERVER`/`SID` during handshake.
     Pass {
+        /// The link password.
         password: String,
     },
+    /// `SERVER` — server announcement (used by leaf servers without a SID).
     Server {
+        /// Fully-qualified server name.
         name: String,
+        /// Number of hops from the origin.
         hop_count: u32,
+        /// Human-readable server description.
         description: String,
     },
+    /// `SID` — server announcement with a numeric SID (UnrealIRCd TS6).
     Sid {
+        /// Fully-qualified server name.
         name: String,
+        /// Number of hops from the origin.
         hop_count: u32,
+        /// Three-character numeric server ID.
         sid: String,
+        /// Human-readable server description.
         description: String,
     },
     // ---- Capability negotiation ----
+    /// `PROTOCTL` — capability tokens exchanged during the S2S handshake.
     Protoctl {
+        /// Space-separated capability tokens (e.g. `NOQUIT`, `EAUTH=…`, `SID`).
         tokens: Vec<String>,
     },
     // ---- User introduction ----
+    /// `UID` — introduce a user to the network.
     Uid(UidParams),
     // ---- Channel membership ----
+    /// `SJOIN` — burst channel state (members + modes).
     Sjoin(SjoinParams),
+    /// `PART` — leave a channel.
     Part {
+        /// Channel name.
         channel: String,
+        /// Optional part message.
         reason: Option<String>,
     },
+    /// `KICK` — forcibly remove a user from a channel.
     Kick {
+        /// Channel the kick applies to.
         channel: String,
+        /// Nick or UID of the user being kicked.
         target: String,
+        /// Optional kick message.
         reason: Option<String>,
     },
     // ---- Nick / presence ----
+    /// `NICK` — nick change for an existing user.
     Nick {
+        /// The new nick.
         new_nick: String,
+        /// Timestamp of the nick change (seconds).
         timestamp: u64,
     },
+    /// `QUIT` — user disconnected.
     Quit {
+        /// Quit message.
         reason: String,
     },
+    /// `AWAY` — set or unset away status.
     Away {
+        /// Away message, or `None` to unset away.
         reason: Option<String>,
     },
+    /// `SVSNICK` — services-forced nick change.
     Svsnick {
+        /// UID of the user whose nick is being changed.
         target_uid: String,
+        /// The new nick being forced.
         new_nick: String,
     },
     // ---- Messaging ----
+    /// `PRIVMSG` — message to a channel or user.
     Privmsg {
+        /// Channel name or target nick / UID.
         target: String,
+        /// Message body (the trailing parameter).
         text: String,
     },
+    /// `NOTICE` — notice to a channel or user.
     Notice {
+        /// Channel name or target nick / UID.
         target: String,
+        /// Notice body (the trailing parameter).
         text: String,
     },
     // ---- Keepalive ----
+    /// `PING` — keepalive request.
     Ping {
+        /// Token the peer should echo back in its `PONG`.
         token: String,
     },
+    /// `PONG` — keepalive reply.
     Pong {
+        /// Name of the server sending the pong.
         server: String,
+        /// Token echoed from the corresponding `PING`.
         token: String,
     },
     // ---- End of burst ----
+    /// `EOS` — signals the end of the server burst.
     Eos,
     // ---- Error ----
+    /// `ERROR` — fatal error from the remote server; connection will be closed.
     Error {
+        /// Human-readable error message.
         message: String,
     },
     // ---- Fallback ----
     /// Any command not listed above.  Preserved for logging and pass-through.
     Raw {
+        /// The command name as it appeared on the wire.
         command: String,
+        /// Parameters in order.  The last parameter is the trailing one (its
+        /// leading `:` has been stripped by the parser).
         params: Vec<String>,
     },
 }

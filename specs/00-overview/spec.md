@@ -81,7 +81,62 @@
 
 `echo-message`, `draft/chathistory`, `standard-replies`, `extended-join`, `multi-prefix`, `userhost-in-names`, `sts`, `sasl` — all have local-client-only code paths in UnrealIRCd.
 
+## Error handling
+
+`disirc` is a long-running daemon. Errors are categorised by their scope of
+impact; the response must match that scope.
+
+### Per-message failures — log and continue
+
+A single bad message must never affect other messages or connections. The
+daemon drops the message, logs at `WARN`, and continues.
+
+| Situation | Response |
+|-----------|----------|
+| `SerializeError` building an outgoing IRC message | Drop message, log `WARN` |
+| `ParseError` on an incoming IRC line | Skip line, log `WARN` |
+| Discord API error on a single send (4xx, rate limit) | Drop message, log `WARN` |
+
+### Per-link failures — reconnect, do not exit
+
+When a connection is lost the daemon tears it down, discards all associated
+in-memory state, and reconnects with exponential backoff. The other link
+continues operating normally during reconnection.
+
+| Situation | Response |
+|-----------|----------|
+| IRC socket error | Reconnect IRC link (see `specs/02-irc-connection/spec.md`) |
+| IRC ping timeout | Reconnect IRC link |
+| `ERROR` from UnrealIRCd after a successful handshake | Reconnect IRC link |
+| Discord gateway disconnect | Reconnect Discord gateway |
+
+### Fatal failures — exit the process
+
+Some failures indicate misconfiguration or an unrecoverable environment
+problem. Retrying will not help; the operator must intervene.
+
+| Situation | Response |
+|-----------|----------|
+| `ERROR` from UnrealIRCd **during** the handshake | Log `ERROR`, exit |
+| Config file unreadable or invalid at startup | Log `ERROR`, exit |
+
+### Panics
+
+Panics are reserved for programmer errors — violated invariants that
+"cannot happen" given correct code. They must never be triggered by runtime
+input (malformed messages, network data, user config). `.unwrap()` and
+`.expect()` on `Result`/`Option` values derived from external input are
+forbidden; use `?` or explicit match arms instead.
+
+### Error types and crates
+
+- **`thiserror`**: define typed error enums in each module (`ParseError`,
+  `SerializeError`, etc.) so callers can match on specific variants.
+- **`anyhow`**: use in the top-level application and connection layers where
+  errors are logged and recovered from rather than matched on. Provides
+  context chains (`context()`/`with_context()`) that make log output actionable.
+
 ## References
 
-- [research/unreal-ircd-s2s-protocol.md](../research/unreal-ircd-s2s-protocol.md)
-- [research/unrealircd-ircv3-s2s.md](../research/unrealircd-ircv3-s2s.md)
+- [research/unreal-ircd-s2s-protocol.md](../../research/unreal-ircd-s2s-protocol.md)
+- [research/unrealircd-ircv3-s2s.md](../../research/unrealircd-ircv3-s2s.md)

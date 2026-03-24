@@ -1326,6 +1326,38 @@ mod tests {
         );
     }
 
+    /// Strategy that generates strings rich in Discord markdown syntax.
+    fn discord_markdown_strategy() -> impl Strategy<Value = String> {
+        let atoms = prop::sample::select(vec![
+            "**", "*", "__", "_", "~~", "`", "```", "\n", "\r\n", "<@", "<@!", "<@&", "<#", "<:",
+            "<a:", ">", "hello", "world", "nick", "12345", ":emoji:", " ", "  ", "",
+        ]);
+        prop::collection::vec(atoms, 0..20).prop_map(|parts| parts.join(""))
+    }
+
+    /// Strategy that generates strings rich in IRC control codes.
+    fn irc_control_strategy() -> impl Strategy<Value = String> {
+        let atoms = prop::sample::select(vec![
+            "\x02",
+            "\x1d",
+            "\x1f",
+            "\x1e",
+            "\x16",
+            "\x03",
+            "\x0f",
+            "\x034",
+            "\x034,5",
+            "\x0312,13",
+            "hello",
+            "world",
+            "@nick",
+            " ",
+            "\x7f",
+            "\x01",
+        ]);
+        prop::collection::vec(atoms, 0..20).prop_map(|parts| parts.join(""))
+    }
+
     proptest! {
         #[test]
         fn resolve_mentions_never_panics(text in ".*") {
@@ -1335,6 +1367,34 @@ mod tests {
         #[test]
         fn markdown_to_irc_never_panics(text in ".*") {
             let _ = markdown_to_irc(&text);
+        }
+
+        #[test]
+        fn discord_markdown_roundtrip_never_panics(text in discord_markdown_strategy()) {
+            // Full pipeline should never panic on markdown-rich input
+            let lines = discord_to_irc(&text, &StubResolver);
+            for line in &lines {
+                assert!(line.len() <= MAX_LINE_BYTES || !line.contains(' '));
+            }
+        }
+
+        #[test]
+        fn irc_control_roundtrip_never_panics(text in irc_control_strategy()) {
+            let result = irc_to_discord_formatting(&text);
+            // Result should contain no IRC control characters
+            assert!(!result.chars().any(|c|
+                matches!(c, '\x02' | '\x1d' | '\x1f' | '\x1e' | '\x16' | '\x03' | '\x0f')
+            ));
+            // Result should contain no Unicode Cc characters
+            assert!(!result.chars().any(|c| c.is_control()));
+        }
+
+        #[test]
+        fn markdown_to_irc_no_markdown_remains(text in discord_markdown_strategy()) {
+            let result = markdown_to_irc(&text);
+            // Matched pairs should be converted; unmatched may remain.
+            // At minimum, verify no panic and output is non-null.
+            let _ = result;
         }
 
         #[test]

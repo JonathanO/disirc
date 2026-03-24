@@ -1,6 +1,6 @@
 # Rust
 /target/
-Cargo.lock
+
 
 # Config with real secrets — use config.example.toml instead
 config.toml

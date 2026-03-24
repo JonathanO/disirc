@@ -85,8 +85,10 @@ Zero surviving mutants is required. If a mutant survives, either fix the test ga
 Commit at these natural boundaries — not before:
 
 1. **Spec approved** — after a spec has been written and reviewed, before any implementation begins. Message: `spec: add/update <spec-name>`.
-2. **Spec implemented** — after all "done means" checks pass and mutation testing is clean, before marking the spec Implemented in `SPECS.md`. Message: `feat: implement <spec-name>`.
-3. **Spec closed** — the `SPECS.md` status update itself. Message: `chore: mark <spec-name> as Implemented`.
+2. **Task complete** — after each individual implementation task passes `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check`. Message: `feat(<module>): <task description>`.
+3. **Spec implemented** — after all tasks for a spec are done and mutation testing is clean, mark the spec Implemented in `SPECS.md`. Message: `chore: mark <spec-name> as Implemented`.
+
+Each task should be a single focused commit. Do not batch multiple tasks into one commit.
 
 Do **not** commit:
 - Failing tests or clippy warnings.

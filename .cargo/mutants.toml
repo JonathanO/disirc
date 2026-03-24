@@ -1,0 +1,9 @@
+# cargo-mutants configuration
+# https://mutants.rs/config.html
+
+exclude_re = [
+    # Trivial delegation to config_path_from_iter (which is thoroughly tested)
+    "config_path_from_args",
+    # Platform-specific; tested via SIGHUP integration test on Unix only
+    "unix_signal_loop",
+]

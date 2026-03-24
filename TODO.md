@@ -4,7 +4,7 @@ Tracks current and upcoming work. Updated by Claude at the start and end of each
 
 ## In progress
 
-- Spec review with user (all specs under review — no implementation begun)
+(none)
 
 ## Future specs (deferred from v1)
 
@@ -84,3 +84,4 @@ Specs are approved. Implement in order (each builds on the previous).
 - Updated `specs/01-configuration.md`: runtime config reload via SIGHUP, reloadable vs non-reloadable fields
 - Updated `specs/03-discord-connection.md`: webhook self-message filtering, reload procedure
 - Updated `specs/04-message-bridging.md`: channel map mutable at runtime, consult current map on every message
+- Implemented `specs/01-configuration.md`: all 6 tasks, 0 surviving mutants, merged to main

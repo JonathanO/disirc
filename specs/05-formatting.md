@@ -55,6 +55,8 @@ All raw IRC control characters must be stripped or converted before sending to D
 
 Processing order: parse all formatting as a sequence of styled spans, then emit Discord markdown. This handles nested and overlapping styles correctly.
 
+All IRC→Discord transformations assume the incoming text is valid UTF-8 (see [spec-02 §Character encoding](02-irc-connection.md#character-encoding) for how non-UTF-8 bytes are handled at the connection layer).
+
 ### Mention conversion (IRC → Discord)
 
 `@nick` in IRC text is compared case-insensitively against Discord members in the bridged channel. If a match is found, replace with `<@discord_user_id>`. If no match, leave as plain `@nick`.

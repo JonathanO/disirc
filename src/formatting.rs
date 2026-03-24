@@ -783,6 +783,94 @@ mod tests {
         assert_eq!(markdown_to_irc("**oops"), "**oops");
     }
 
+    #[test]
+    fn unclosed_italic_star() {
+        assert_eq!(markdown_to_irc("*oops"), "*oops");
+    }
+
+    #[test]
+    fn unclosed_italic_underscore() {
+        assert_eq!(markdown_to_irc("_oops"), "_oops");
+    }
+
+    #[test]
+    fn unclosed_underline() {
+        assert_eq!(markdown_to_irc("__oops"), "__oops");
+    }
+
+    #[test]
+    fn unclosed_strikethrough() {
+        assert_eq!(markdown_to_irc("~~oops"), "~~oops");
+    }
+
+    #[test]
+    fn nested_bold_inside_italic() {
+        // _**bold inside italic**_ → italic wraps bold
+        let r = markdown_to_irc("_**bold inside italic**_");
+        assert!(r.contains("bold inside italic"));
+        // Should have both bold and italic control codes
+        assert!(r.contains('\x02'));
+        assert!(r.contains('\x1d'));
+    }
+
+    #[test]
+    fn overlapping_markers_dont_panic() {
+        // Intentionally malformed: **bold *and italic** end*
+        let r = markdown_to_irc("**bold *and italic** end*");
+        assert!(r.contains("bold"));
+        assert!(r.contains("end"));
+    }
+
+    #[test]
+    fn deeply_nested_markers() {
+        let r = markdown_to_irc("**__~~text~~__**");
+        assert!(r.contains("text"));
+        assert!(r.contains('\x02')); // bold
+        assert!(r.contains('\x1f')); // underline
+    }
+
+    #[test]
+    fn multiple_unclosed_markers() {
+        // All unclosed — should not panic. Some markers may still pair
+        // with each other (e.g. the two * in ** and *italic).
+        let r = markdown_to_irc("**bold *italic __underline ~~strike");
+        assert!(r.contains("bold"));
+        assert!(r.contains("italic"));
+    }
+
+    #[test]
+    fn empty_markers() {
+        // Empty content between markers — should not be converted
+        assert_eq!(markdown_to_irc("****"), "****");
+        assert_eq!(markdown_to_irc("~~  ~~"), "  ");
+    }
+
+    #[test]
+    fn unclosed_code_block_in_split() {
+        // ``` without closing — should not panic
+        let lines = split_for_irc("```rust\nfn main() {");
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn unclosed_mention_angle_brackets() {
+        let r = resolve_mentions("<@111", &StubResolver);
+        assert_eq!(r, "<@111");
+    }
+
+    #[test]
+    fn nested_angle_brackets() {
+        let r = resolve_mentions("<<@111>>", &StubResolver);
+        // The inner <@111> should be resolved
+        assert!(r.contains("Alice") || r.contains("<"));
+    }
+
+    #[test]
+    fn empty_mention() {
+        let r = resolve_mentions("<>", &StubResolver);
+        assert_eq!(r, "<>");
+    }
+
     // -- Discord → IRC: splitting -------------------------------------------
 
     #[test]

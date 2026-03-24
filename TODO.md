@@ -23,12 +23,12 @@ Specs are approved. Implement in order (each builds on the previous).
 - [x] Reload diff logic (compute added/removed entries, apply, log summary; validate before applying)
 
 ### `specs/05-formatting.md`
-- [ ] Discord→IRC: mention and emoji resolution (`<@id>`, `<#id>`, `<@&id>`, `<:name:id>`, `<a:name:id>`)
-- [ ] Discord→IRC: markdown to IRC control codes (bold, italic, underline, strikethrough)
-- [ ] Discord→IRC: newline splitting, code block handling, length splitting at 400 bytes
-- [ ] IRC→Discord: control character stripping/conversion (all `\x01`–`\x1f`)
-- [ ] IRC→Discord: `@nick` mention conversion, ping-fix zero-width space, length truncation at 2000 chars
-- [ ] `server-time` ISO 8601 timestamp formatting + proptest suite across all transforms
+- [x] Discord→IRC: mention and emoji resolution (`<@id>`, `<#id>`, `<@&id>`, `<:name:id>`, `<a:name:id>`)
+- [x] Discord→IRC: markdown to IRC control codes (bold, italic, underline, strikethrough)
+- [x] Discord→IRC: newline splitting, code block handling, length splitting at 400 bytes
+- [x] IRC→Discord: control character stripping/conversion (Unicode Cc category)
+- [x] IRC→Discord: `@nick` mention conversion, ping-fix zero-width space, length truncation at 2000 chars
+- [x] `server-time` ISO 8601 timestamp formatting (chrono) + proptest suite across all transforms
 
 ### `specs/06-pseudoclients.md`
 - [ ] Nick sanitization (character replacement, digit prefix, truncation to 30 chars)
@@ -85,3 +85,4 @@ Specs are approved. Implement in order (each builds on the previous).
 - Updated `specs/03-discord-connection.md`: webhook self-message filtering, reload procedure
 - Updated `specs/04-message-bridging.md`: channel map mutable at runtime, consult current map on every message
 - Implemented `specs/01-configuration.md`: all 6 tasks, 0 surviving mutants, merged to main
+- Implemented `specs/05-formatting.md`: 111 tests, 0 surviving mutants, chrono for server-time, Unicode Cc stripping, UTF-8 encoding assumption documented

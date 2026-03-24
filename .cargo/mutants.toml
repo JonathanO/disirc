@@ -6,4 +6,7 @@ exclude_re = [
     "config_path_from_args",
     # Platform-specific; tested via SIGHUP integration test on Unix only
     "unix_signal_loop",
+    # split_long_line is only called when line.len() > max_bytes (guard in split_for_irc),
+    # so `remaining.len() > max_bytes` vs `>=` is equivalent — the >= case never occurs.
+    "replace > with >= in split_long_line",
 ]

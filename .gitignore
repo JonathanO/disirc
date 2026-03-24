@@ -10,6 +10,12 @@ config.toml
 .idea/
 *.iml
 
+# Generated test/mutation artifacts
+mutants.out/
+mutants.out.old/
+proptest-regressions/
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db

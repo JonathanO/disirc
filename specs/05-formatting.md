@@ -14,13 +14,29 @@ Because the Discord user is represented as an IRC pseudoclient, no sender prefix
 | Discord role mention `<@&123456>` | Replace with `@role-name` if resolvable, else `@deleted-role` |
 | Custom emoji `<:name:id>` | Reduce to `:name:` |
 | Animated emoji `<a:name:id>` | Reduce to `:name:` |
+| Backslash escape `\*`, `\_`, etc. | Remove the backslash; pass the escaped character through literally (do not treat it as a formatting marker) |
+| Inline code `` `code` `` | Pass through unchanged; no formatting is applied inside inline code spans |
+| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 `. No formatting is applied inside code blocks |
 | Bold `**text**` | Convert to IRC bold: `\x02text\x02` |
-| Italic `*text*` or `_text_` | Convert to IRC italic: `\x1dtext\x1d` |
+| Italic `*text*` | Convert to IRC italic: `\x1dtext\x1d` |
+| Italic `_text_` | Convert to IRC italic **only** when the underscores are at a word boundary (i.e. preceded/followed by whitespace or start/end of string). Intraword underscores (e.g. `some_variable_name`) are left unchanged. This matches Discord's actual rendering behaviour |
 | Underline `__text__` | Convert to IRC underline: `\x1ftext\x1f` |
-| Strikethrough `~~text~~` | Keep text, strip markers (no IRC equivalent) |
-| Inline code `` `code` `` | Pass through unchanged |
-| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 ` |
+| Strikethrough `~~text~~` | Pass through unchanged, including markers (no IRC equivalent; preserving markers conveys intent) |
 | Newlines (`\n`, `\r\n`, `\r`) | Normalise to `\n`, then split; each non-empty line is a separate `PRIVMSG` (max 5 lines; truncate remainder with `[+N more lines]`) |
+
+### Processing order (Discord → IRC)
+
+Transformations must be applied in a specific order to match Discord's own parsing priority:
+
+1. **Backslash escapes** — strip `\` before markdown characters to prevent them from triggering formatting.
+2. **Code blocks** (` ``` `) and **inline code** (`` ` ``) — extract and protect; no formatting applies inside code spans.
+3. **Mentions and emoji** — resolve `<@id>`, `<#id>`, `<@&id>`, `<:name:id>`, `<a:name:id>`.
+4. **Underline** `__text__` — before single `_` to avoid consuming double underscores as two italic markers.
+5. **Bold** `**text**` — before single `*` for the same reason.
+6. **Italic** `*text*` and word-boundary `_text_`.
+7. **Strikethrough** `~~text~~` — passed through unchanged.
+
+This order is derived from Discord's own parser (a fork of [simple-markdown](https://github.com/discord/simple-markdown)) which uses rule priority: code > underline > bold > italic > strikethrough.
 
 ### Length splitting
 
@@ -51,9 +67,11 @@ All raw IRC control characters must be stripped or converted before sending to D
 | IRC reverse `\x16` | Strip (treat as italic for best-effort rendering) |
 | IRC color codes `\x03[N[,M]]` | Strip color codes and any trailing reset; keep text content |
 | IRC reset `\x0f` | Strip |
-| Any remaining `\x01`–`\x1f` control characters | Strip |
+| Any remaining Unicode Cc (control) characters | Strip |
 
 Processing order: parse all formatting as a sequence of styled spans, then emit Discord markdown. This handles nested and overlapping styles correctly.
+
+All IRC→Discord transformations assume the incoming text is valid UTF-8 (see [spec-02 §Character encoding](02-irc-connection.md#character-encoding) for how non-UTF-8 bytes are handled at the connection layer).
 
 ### Mention conversion (IRC → Discord)
 
@@ -84,6 +102,8 @@ Timestamps are formatted as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
 ## References
 
 - [research/discord-irc-prior-art.md](../research/discord-irc-prior-art.md) — ping-fix zero-width space, IRC control character handling, webhook username constraints
+- [research/discord-markdown-parsing.md](../research/discord-markdown-parsing.md) — Discord's simple-markdown fork, parsing priority, intraword underscore behaviour, backslash escapes
+- [discord/simple-markdown](https://github.com/discord/simple-markdown) — Discord's markdown parser (fork of Khan Academy simple-markdown) — accessed 2026-03-24
 - [IRCv3 Message Tags specification](https://ircv3.net/specs/extensions/message-tags) — accessed 2026-03-22
 - [IRCv3 server-time specification](https://ircv3.net/specs/extensions/server-time) — accessed 2026-03-22
 - [IRC formatting reference (modern.ircdocs.horse)](https://modern.ircdocs.horse/formatting) — accessed 2026-03-22

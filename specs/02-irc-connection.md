@@ -4,6 +4,10 @@
 
 `disirc` connects to UnrealIRCd as a peer server using the UnrealIRCd S2S protocol. The link must be pre-configured on the UnrealIRCd side with a matching `link{}` block. All messages are line-oriented, `\r\n` terminated, max 512 bytes (or 4096 with MTAGS).
 
+### Character encoding
+
+IRC is historically byte-transparent with no mandated encoding. `disirc` assumes all text is **UTF-8**. Incoming bytes that are not valid UTF-8 are replaced with U+FFFD (REPLACEMENT CHARACTER) on read. This is a lossy conversion — the original bytes cannot be recovered. This is acceptable because Discord requires valid UTF-8, and modern IRC networks overwhelmingly use UTF-8.
+
 ## Handshake sequence
 
 ### 1. Outgoing authentication

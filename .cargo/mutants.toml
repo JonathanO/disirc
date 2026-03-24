@@ -6,23 +6,7 @@ exclude_re = [
     "config_path_from_args",
     # Platform-specific; tested via SIGHUP integration test on Unix only
     "unix_signal_loop",
+    # split_long_line is only called when line.len() > max_bytes (guard in split_for_irc),
+    # so `remaining.len() > max_bytes` vs `>=` is equivalent — the >= case never occurs.
+    "replace > with >= in split_long_line",
 ]
-
-# Equivalent mutants that cannot change observable behavior
-[[examine_re]]
-# split_long_line is only called when line.len() > max_bytes (guard in split_for_irc),
-# so `remaining.len() > max_bytes` vs `>=` is equivalent — the >= case never occurs.
-regex = "replace > with >= in split_long_line"
-replace = false
-
-# `(c as u32) < 0x20` vs `<= 0x20`: char 0x20 (space) is not is_control(),
-# so the `&&` guard makes < vs <= equivalent.
-[[examine_re]]
-regex = "replace < with <= in irc_to_discord_formatting"
-replace = false
-
-# `replace && with ||` in irc_to_discord_formatting: same reason — is_control()
-# already excludes non-control chars, making the combined predicate equivalent.
-[[examine_re]]
-regex = "replace && with \\|\\| in irc_to_discord_formatting"
-replace = false

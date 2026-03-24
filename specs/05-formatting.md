@@ -51,7 +51,7 @@ All raw IRC control characters must be stripped or converted before sending to D
 | IRC reverse `\x16` | Strip (treat as italic for best-effort rendering) |
 | IRC color codes `\x03[N[,M]]` | Strip color codes and any trailing reset; keep text content |
 | IRC reset `\x0f` | Strip |
-| Any remaining `\x01`–`\x1f` control characters | Strip |
+| Any remaining `\x01`–`\x1f` and `\x7f` control characters | Strip |
 
 Processing order: parse all formatting as a sequence of styled spans, then emit Discord markdown. This handles nested and overlapping styles correctly.
 

@@ -378,8 +378,8 @@ pub fn irc_to_discord_formatting(text: &str) -> String {
                 current_text.clear();
                 style = IrcStyle::default();
             }
-            c if c.is_control() && (c as u32) < 0x20 => {
-                // Strip remaining control characters \x01–\x1f
+            c if c.is_control() => {
+                // Strip remaining control characters \x01–\x1f and \x7f
             }
             _ => {
                 current_text.push(ch);
@@ -1268,12 +1268,10 @@ mod tests {
     }
 
     #[test]
-    fn irc_high_control_not_stripped() {
-        // \x7f (DEL) is >= 0x20 as u32 — verify it's not caught by the < 0x20 check
-        // Actually \x7f IS a control char but is_control() && < 0x20 won't catch it
-        // The `_ =>` branch would push it. This tests the && boundary.
+    fn irc_del_stripped() {
+        // \x7f (DEL) is a control character and should be stripped
         let result = irc_to_discord_formatting("a\x7fb");
-        assert_eq!(result, "a\x7fb");
+        assert_eq!(result, "ab");
     }
 
     #[test]

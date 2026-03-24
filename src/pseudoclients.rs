@@ -877,6 +877,25 @@ mod tests {
         assert!(!mgr.apply_svsnick("UNKNOWN", "newnick"));
     }
 
+    #[test]
+    fn unregister_external_nick_frees_for_reuse() {
+        let mut mgr = make_manager();
+        mgr.register_external_nick("bob");
+        // bob is taken — collision
+        let lines = mgr
+            .introduce(100, "bob", "Bob", &["#test".to_string()], 1000)
+            .unwrap();
+        assert!(lines[0].contains("UID bob_"));
+
+        // Unregister bob — now bob_ pseudoclient exists, but bob is free
+        mgr.unregister_external_nick("bob");
+        // Introduce another user named bob — should get "bob" this time
+        let lines2 = mgr
+            .introduce(200, "bob", "Bob2", &["#test".to_string()], 1001)
+            .unwrap();
+        assert!(lines2[0].contains("UID bob "));
+    }
+
     // -------------------------------------------------------------------
     // PseudoclientManager — lookups and reset
     // -------------------------------------------------------------------

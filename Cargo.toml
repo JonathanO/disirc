@@ -6,6 +6,7 @@ license = "MIT"
 
 [dev-dependencies]
 proptest = "1"
+tracing-test = "0.2"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -217,12 +217,13 @@ pub enum ParseError {
     /// Line is empty or contains only whitespace / CRLF.
     #[error("line is empty")]
     Empty,
-    /// A `UID` command did not have exactly 12 parameters.
-    #[error("UID requires 12 parameters, got {got}")]
-    UidParamCount { got: usize },
-    /// A `SJOIN` command did not have at least 4 parameters.
-    #[error("SJOIN requires at least 4 parameters, got {got}")]
-    SjoinParamCount { got: usize },
+    /// A known command did not have enough parameters to be fully parsed.
+    #[error("{command} requires at least {required} parameter(s), got {got}")]
+    MissingParams {
+        command: String,
+        required: usize,
+        got: usize,
+    },
 }
 
 /// Error returned by [`IrcMessage::to_wire`].
@@ -248,8 +249,7 @@ impl IrcMessage {
     /// # Errors
     ///
     /// - [`ParseError::Empty`] if the line is empty or whitespace-only.
-    /// - [`ParseError::UidParamCount`] if a `UID` command has ≠ 12 parameters.
-    /// - [`ParseError::SjoinParamCount`] if a `SJOIN` command has < 4 parameters.
+    /// - [`ParseError::MissingParams`] if a known command has fewer parameters than required.
     pub fn parse(line: &str) -> Result<Self, ParseError> {
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
         if line.trim_start().is_empty() {
@@ -419,28 +419,69 @@ fn parse_params(s: &str) -> Vec<String> {
     params
 }
 
+/// Returns `Err(ParseError::MissingParams)` when `params` has fewer than `required` entries.
+fn require_params(command: &str, params: &[String], required: usize) -> Result<(), ParseError> {
+    if params.len() < required {
+        Err(ParseError::MissingParams {
+            command: command.to_string(),
+            required,
+            got: params.len(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Emits a `WARN`-level log when `params` has more entries than `expected`.
+///
+/// Extra parameters are discarded; this is the forward-compatibility policy for
+/// protocol extensions that insert new non-trailing fields before the trailing one.
+fn warn_extra_params(command: &str, params: &[String], expected: usize) {
+    let got = params.len();
+    if got > expected {
+        tracing::warn!(
+            command,
+            expected,
+            got,
+            "ignoring {} unexpected extra parameter(s)",
+            got - expected
+        );
+    }
+}
+
 fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseError> {
     let upper = name.to_ascii_uppercase();
     match upper.as_str() {
-        "PASS" => Ok(IrcCommand::Pass {
-            password: params.into_iter().next().unwrap_or_default(),
-        }),
-        "SERVER" if params.len() >= 3 => Ok(IrcCommand::Server {
-            name: params[0].clone(),
-            hop_count: params[1].parse().unwrap_or(0),
-            description: params[2].clone(),
-        }),
-        "SID" if params.len() >= 4 => Ok(IrcCommand::Sid {
-            name: params[0].clone(),
-            hop_count: params[1].parse().unwrap_or(0),
-            sid: params[2].clone(),
-            description: params[3].clone(),
-        }),
+        "PASS" => {
+            require_params("PASS", &params, 1)?;
+            warn_extra_params("PASS", &params, 1);
+            Ok(IrcCommand::Pass {
+                password: params.last().unwrap().clone(),
+            })
+        }
+        "SERVER" => {
+            require_params("SERVER", &params, 3)?;
+            warn_extra_params("SERVER", &params, 3);
+            Ok(IrcCommand::Server {
+                name: params[0].clone(),
+                hop_count: params[1].parse().unwrap_or(0),
+                description: params.last().unwrap().clone(),
+            })
+        }
+        "SID" => {
+            require_params("SID", &params, 4)?;
+            warn_extra_params("SID", &params, 4);
+            Ok(IrcCommand::Sid {
+                name: params[0].clone(),
+                hop_count: params[1].parse().unwrap_or(0),
+                sid: params[2].clone(),
+                description: params.last().unwrap().clone(),
+            })
+        }
         "PROTOCTL" => Ok(IrcCommand::Protoctl { tokens: params }),
         "UID" => {
-            if params.len() != 12 {
-                return Err(ParseError::UidParamCount { got: params.len() });
-            }
+            require_params("UID", &params, 12)?;
+            warn_extra_params("UID", &params, 12);
             Ok(IrcCommand::Uid(UidParams {
                 nick: params[0].clone(),
                 hop_count: params[1].parse().unwrap_or(0),
@@ -453,13 +494,13 @@ fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseErr
                 vhost: params[8].clone(),
                 cloaked_host: params[9].clone(),
                 ip: params[10].clone(),
-                realname: params[11].clone(),
+                realname: params.last().unwrap().clone(),
             }))
         }
         "SJOIN" => {
-            if params.len() < 4 {
-                return Err(ParseError::SjoinParamCount { got: params.len() });
-            }
+            require_params("SJOIN", &params, 4)?;
+            // No warn_extra_params: extra params between modes and the member list are
+            // valid mode parameters (e.g. "+l 10 :@UID"), so excess is intentional.
             let members: Vec<String> = params
                 .last()
                 .unwrap()
@@ -473,48 +514,100 @@ fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseErr
                 members,
             }))
         }
-        "PART" if !params.is_empty() => Ok(IrcCommand::Part {
-            channel: params[0].clone(),
-            reason: params.into_iter().nth(1),
-        }),
-        "KICK" if params.len() >= 2 => Ok(IrcCommand::Kick {
-            channel: params[0].clone(),
-            target: params[1].clone(),
-            reason: params.into_iter().nth(2),
-        }),
-        "NICK" if params.len() >= 2 => Ok(IrcCommand::Nick {
-            new_nick: params[0].clone(),
-            timestamp: params[1].parse().unwrap_or(0),
-        }),
-        "QUIT" => Ok(IrcCommand::Quit {
-            reason: params.into_iter().next().unwrap_or_default(),
-        }),
-        "AWAY" => Ok(IrcCommand::Away {
-            reason: params.into_iter().next(),
-        }),
-        "SVSNICK" if params.len() >= 2 => Ok(IrcCommand::Svsnick {
-            target_uid: params[0].clone(),
-            new_nick: params[1].clone(),
-        }),
-        "PRIVMSG" if params.len() >= 2 => Ok(IrcCommand::Privmsg {
-            target: params[0].clone(),
-            text: params[1].clone(),
-        }),
-        "NOTICE" if params.len() >= 2 => Ok(IrcCommand::Notice {
-            target: params[0].clone(),
-            text: params[1].clone(),
-        }),
-        "PING" => Ok(IrcCommand::Ping {
-            token: params.into_iter().next().unwrap_or_default(),
-        }),
-        "PONG" if params.len() >= 2 => Ok(IrcCommand::Pong {
-            server: params[0].clone(),
-            token: params[1].clone(),
-        }),
-        "EOS" => Ok(IrcCommand::Eos),
-        "ERROR" => Ok(IrcCommand::Error {
-            message: params.into_iter().next().unwrap_or_default(),
-        }),
+        "PART" => {
+            require_params("PART", &params, 1)?;
+            warn_extra_params("PART", &params, 2);
+            Ok(IrcCommand::Part {
+                channel: params[0].clone(),
+                reason: if params.len() >= 2 {
+                    params.last().cloned()
+                } else {
+                    None
+                },
+            })
+        }
+        "KICK" => {
+            require_params("KICK", &params, 2)?;
+            warn_extra_params("KICK", &params, 3);
+            Ok(IrcCommand::Kick {
+                channel: params[0].clone(),
+                target: params[1].clone(),
+                reason: if params.len() >= 3 {
+                    params.last().cloned()
+                } else {
+                    None
+                },
+            })
+        }
+        "NICK" => {
+            require_params("NICK", &params, 2)?;
+            warn_extra_params("NICK", &params, 2);
+            Ok(IrcCommand::Nick {
+                new_nick: params[0].clone(),
+                timestamp: params[1].parse().unwrap_or(0),
+            })
+        }
+        "QUIT" => {
+            warn_extra_params("QUIT", &params, 1);
+            Ok(IrcCommand::Quit {
+                reason: params.last().cloned().unwrap_or_default(),
+            })
+        }
+        "AWAY" => {
+            warn_extra_params("AWAY", &params, 1);
+            Ok(IrcCommand::Away {
+                reason: params.last().cloned(),
+            })
+        }
+        "SVSNICK" => {
+            require_params("SVSNICK", &params, 2)?;
+            warn_extra_params("SVSNICK", &params, 2);
+            Ok(IrcCommand::Svsnick {
+                target_uid: params[0].clone(),
+                new_nick: params[1].clone(),
+            })
+        }
+        "PRIVMSG" => {
+            require_params("PRIVMSG", &params, 2)?;
+            warn_extra_params("PRIVMSG", &params, 2);
+            Ok(IrcCommand::Privmsg {
+                target: params[0].clone(),
+                text: params.last().unwrap().clone(),
+            })
+        }
+        "NOTICE" => {
+            require_params("NOTICE", &params, 2)?;
+            warn_extra_params("NOTICE", &params, 2);
+            Ok(IrcCommand::Notice {
+                target: params[0].clone(),
+                text: params.last().unwrap().clone(),
+            })
+        }
+        "PING" => {
+            require_params("PING", &params, 1)?;
+            warn_extra_params("PING", &params, 1);
+            Ok(IrcCommand::Ping {
+                token: params.last().unwrap().clone(),
+            })
+        }
+        "PONG" => {
+            require_params("PONG", &params, 2)?;
+            warn_extra_params("PONG", &params, 2);
+            Ok(IrcCommand::Pong {
+                server: params[0].clone(),
+                token: params.last().unwrap().clone(),
+            })
+        }
+        "EOS" => {
+            warn_extra_params("EOS", &params, 0);
+            Ok(IrcCommand::Eos)
+        }
+        "ERROR" => {
+            warn_extra_params("ERROR", &params, 1);
+            Ok(IrcCommand::Error {
+                message: params.last().cloned().unwrap_or_default(),
+            })
+        }
         _ => Ok(IrcCommand::Raw {
             command: name.to_string(),
             params,
@@ -767,21 +860,87 @@ mod tests {
     }
 
     #[test]
-    fn parse_uid_wrong_count_is_error() {
+    fn parse_uid_too_few_params_is_error() {
         let result = IrcMessage::parse("UID Alice 1 :only three params");
-        assert_eq!(result, Err(ParseError::UidParamCount { got: 3 }));
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "UID".to_string(),
+                required: 12,
+                got: 3
+            })
+        );
     }
 
     #[test]
     fn parse_uid_zero_params_is_error() {
         let result = IrcMessage::parse("UID");
-        assert_eq!(result, Err(ParseError::UidParamCount { got: 0 }));
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "UID".to_string(),
+                required: 12,
+                got: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_uid_extra_params_succeeds() {
+        // 13 params: a hypothetical future field inserted between ip and realname.
+        // Greedy parsing takes the first 11 positional fields and uses the trailing
+        // (last) param as realname, so the extra non-trailing param is ignored.
+        let line =
+            "UID Alice 1 1700000000 alice discord.invalid ABC000001 0 +i * * * future :Alice Smith";
+        let result = IrcMessage::parse(line).unwrap();
+        let IrcCommand::Uid(ref p) = result.command else {
+            panic!("expected Uid");
+        };
+        assert_eq!(p.nick, "Alice");
+        assert_eq!(p.ip, "*");
+        assert_eq!(p.realname, "Alice Smith"); // trailing is still the realname
+    }
+
+    #[test]
+    fn parse_server_extra_params_succeeds() {
+        // SERVER with 4 params (1 extra before the trailing description).
+        let result =
+            IrcMessage::parse("SERVER irc.example.net 1 future_field :IRC network").unwrap();
+        let IrcCommand::Server {
+            ref description, ..
+        } = result.command
+        else {
+            panic!("expected Server");
+        };
+        assert_eq!(description, "IRC network"); // trailing is still description
+    }
+
+    #[test]
+    fn parse_privmsg_extra_params_succeeds() {
+        // PRIVMSG with 3 params (1 extra between target and text).
+        let result = IrcMessage::parse("PRIVMSG #general future_field :hello").unwrap();
+        let IrcCommand::Privmsg {
+            ref target,
+            ref text,
+        } = result.command
+        else {
+            panic!("expected Privmsg");
+        };
+        assert_eq!(target, "#general");
+        assert_eq!(text, "hello"); // trailing is still the message text
     }
 
     #[test]
     fn parse_sjoin_too_few_params_is_error() {
         let result = IrcMessage::parse("SJOIN 12345 #test +");
-        assert_eq!(result, Err(ParseError::SjoinParamCount { got: 3 }));
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "SJOIN".to_string(),
+                required: 4,
+                got: 3
+            })
+        );
     }
 
     // ---- Parsing: CRLF stripping -------------------------------------------
@@ -1535,99 +1694,151 @@ mod tests {
         );
     }
 
-    // ---- Fallback to Raw when known commands have too few params -----------
-    //
-    // These tests also catch the match-guard mutations (e.g. `params.len() >= 2`
-    // replaced with `true`): if the guard is dropped the match arm body would
-    // try to index into params and panic, causing the mutant to be caught.
+    // ---- MissingParams errors when known commands have too few params ------
 
     #[test]
-    fn parse_server_too_few_params_becomes_raw() {
-        // SERVER needs ≥ 3 params; with 1 it should fall through to Raw.
-        let msg = IrcMessage::parse("SERVER irc.example.net").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "SERVER with 1 param should be Raw"
+    fn parse_server_too_few_params_is_error() {
+        let result = IrcMessage::parse("SERVER irc.example.net");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "SERVER".to_string(),
+                required: 3,
+                got: 1
+            })
         );
     }
 
     #[test]
-    fn parse_sid_too_few_params_becomes_raw() {
-        // SID needs ≥ 4 params; with 3 it should fall through to Raw.
-        let msg = IrcMessage::parse("SID irc.example.net 1 001").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "SID with 3 params should be Raw"
+    fn parse_sid_too_few_params_is_error() {
+        let result = IrcMessage::parse("SID irc.example.net 1 001");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "SID".to_string(),
+                required: 4,
+                got: 3
+            })
         );
     }
 
     #[test]
-    fn parse_part_no_params_becomes_raw() {
-        // PART needs ≥ 1 param; with 0 it should fall through to Raw.
-        let msg = IrcMessage::parse("PART").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "PART with 0 params should be Raw"
+    fn parse_part_no_params_is_error() {
+        let result = IrcMessage::parse("PART");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "PART".to_string(),
+                required: 1,
+                got: 0
+            })
         );
     }
 
     #[test]
-    fn parse_kick_too_few_params_becomes_raw() {
-        // KICK needs ≥ 2 params; with 1 it should fall through to Raw.
-        let msg = IrcMessage::parse("KICK #general").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "KICK with 1 param should be Raw"
+    fn parse_kick_too_few_params_is_error() {
+        let result = IrcMessage::parse("KICK #general");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "KICK".to_string(),
+                required: 2,
+                got: 1
+            })
         );
     }
 
     #[test]
-    fn parse_nick_too_few_params_becomes_raw() {
-        // NICK needs ≥ 2 params; with 1 it should fall through to Raw.
-        let msg = IrcMessage::parse("NICK Alice2").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "NICK with 1 param should be Raw"
+    fn parse_nick_too_few_params_is_error() {
+        let result = IrcMessage::parse("NICK Alice2");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "NICK".to_string(),
+                required: 2,
+                got: 1
+            })
         );
     }
 
     #[test]
-    fn parse_svsnick_too_few_params_becomes_raw() {
-        // SVSNICK needs ≥ 2 params; with 1 it should fall through to Raw.
-        let msg = IrcMessage::parse("SVSNICK ABC000001").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "SVSNICK with 1 param should be Raw"
+    fn parse_svsnick_too_few_params_is_error() {
+        let result = IrcMessage::parse("SVSNICK ABC000001");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "SVSNICK".to_string(),
+                required: 2,
+                got: 1
+            })
         );
     }
 
     #[test]
-    fn parse_privmsg_too_few_params_becomes_raw() {
-        // PRIVMSG needs ≥ 2 params; with 1 it should fall through to Raw.
-        let msg = IrcMessage::parse("PRIVMSG #general").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "PRIVMSG with 1 param should be Raw"
+    fn parse_privmsg_too_few_params_is_error() {
+        let result = IrcMessage::parse("PRIVMSG #general");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "PRIVMSG".to_string(),
+                required: 2,
+                got: 1
+            })
         );
     }
 
     #[test]
-    fn parse_notice_too_few_params_becomes_raw() {
-        // NOTICE needs ≥ 2 params; with 1 it should fall through to Raw.
-        let msg = IrcMessage::parse("NOTICE Alice").unwrap();
+    fn parse_notice_too_few_params_is_error() {
+        let result = IrcMessage::parse("NOTICE Alice");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "NOTICE".to_string(),
+                required: 2,
+                got: 1
+            })
+        );
+    }
+
+    // ---- warn_extra_params behaviour ---------------------------------------
+
+    /// Parsing with *more* params than expected must emit a tracing WARN.
+    ///
+    /// This test (and the companion below) are the only tests that need
+    /// `tracing-test`; they kill the four `warn_extra_params` mutations that
+    /// otherwise survive (the function only produces a log side-effect).
+    #[test]
+    #[tracing_test::traced_test]
+    fn parse_extra_params_logs_warn() {
+        // SERVER normally takes 3 params; supply 4 (one extra before trailing).
+        IrcMessage::parse("SERVER irc.example.net 1 future_field :IRC network").unwrap();
         assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "NOTICE with 1 param should be Raw"
+            logs_contain("ignoring"),
+            "expected a WARN about extra params"
+        );
+    }
+
+    /// Parsing with *exactly* the expected param count must NOT emit a WARN.
+    #[test]
+    #[tracing_test::traced_test]
+    fn parse_exact_params_no_warn() {
+        IrcMessage::parse("SERVER irc.example.net 1 :IRC network").unwrap();
+        assert!(
+            !logs_contain("ignoring"),
+            "unexpected WARN for exact param count"
         );
     }
 
     #[test]
-    fn parse_pong_too_few_params_becomes_raw() {
-        // PONG needs ≥ 2 params; with 1 it should fall through to Raw.
-        let msg = IrcMessage::parse("PONG discord.invalid").unwrap();
-        assert!(
-            matches!(msg.command, IrcCommand::Raw { .. }),
-            "PONG with 1 param should be Raw"
+    fn parse_pong_too_few_params_is_error() {
+        let result = IrcMessage::parse("PONG discord.invalid");
+        assert_eq!(
+            result,
+            Err(ParseError::MissingParams {
+                command: "PONG".to_string(),
+                required: 2,
+                got: 1
+            })
         );
     }
 }

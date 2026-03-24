@@ -10,7 +10,7 @@ Tracks implementation status for each spec file.
 | [`specs/03-discord-connection/spec.md`](specs/03-discord-connection/spec.md) | Discord bot & gateway | Pending |
 | [`specs/04-message-bridging/spec.md`](specs/04-message-bridging/spec.md) | Relay rules & routing | Pending |
 | [`specs/05-formatting/spec.md`](specs/05-formatting/spec.md) | Message formatting & transforms | Implemented |
-| [`specs/06-pseudoclients/spec.md`](specs/06-pseudoclients/spec.md) | Pseudoclient lifecycle & identity | Pending |
+| [`specs/06-pseudoclients/spec.md`](specs/06-pseudoclients/spec.md) | Pseudoclient lifecycle & identity | Implemented |
 | [`specs/07-irc-message-types/spec.md`](specs/07-irc-message-types/spec.md) | Typed IRC message representation | Implemented |
 
 ## Statuses

@@ -18,7 +18,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 | [specs/03-discord-connection](specs/03-discord-connection/TODO.md) | ⏳ Pending | 7 tasks |
 | [specs/04-message-bridging](specs/04-message-bridging/TODO.md) | ⏳ Pending | 6 tasks |
 | [specs/05-formatting](specs/05-formatting/TODO.md) | ✅ Implemented | — |
-| [specs/06-pseudoclients](specs/06-pseudoclients/TODO.md) | ⏳ Pending | 8 tasks |
+| [specs/06-pseudoclients](specs/06-pseudoclients/TODO.md) | ✅ Implemented | — |
 | [specs/07-irc-message-types](specs/07-irc-message-types/TODO.md) | ✅ Implemented | — |
 
 ## Future specs (deferred from v1)
@@ -30,4 +30,5 @@ Updated by Claude at the start and end of each session, and whenever task status
 - Rewrote all specs for UnrealIRCd S2S architecture (pseudoclient model, S2S handshake, webhooks)
 - Implemented `specs/01-configuration`: all 6 tasks, 0 surviving mutants
 - Implemented `specs/05-formatting`: 111 tests, 0 surviving mutants, chrono for server-time
+- Implemented `specs/06-pseudoclients`: 103 tests, 0 surviving mutants, nick sanitization + collision chain + UID gen + state management
 - Implemented `specs/07-irc-message-types`: 82 tests, 0 surviving mutants, `IrcMessage`/`IrcCommand`/`UidParams`/`SjoinParams`

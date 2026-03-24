@@ -1218,6 +1218,130 @@ mod tests {
         assert_eq!(r, "****");
     }
 
+    #[test]
+    fn code_block_closing_not_emitted() {
+        // The closing ``` should not appear in output; only content inside block
+        let text = "before\n```\nline1\nline2\n```\nafter";
+        let lines = split_for_irc(text);
+        assert_eq!(lines[0], "before");
+        assert_eq!(lines[1], "line1");
+        assert_eq!(lines[2], "\x02>\x02 line2");
+        assert_eq!(lines[3], "after");
+        assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn split_long_line_with_spaces_splits_correctly() {
+        // Build a line with words separated by spaces, totaling > 400 bytes
+        // Each word is 50 chars, so 9 words = 450 chars + 8 spaces = 458
+        let word = "a".repeat(50);
+        let line = vec![word.as_str(); 9].join(" ");
+        let parts = split_long_line(&line, MAX_LINE_BYTES);
+        assert!(parts.len() >= 2);
+        // First part should end at a word boundary (space)
+        assert!(parts[0].len() <= MAX_LINE_BYTES);
+        // Verify no content is lost
+        let rejoined: String = parts.join(" ");
+        assert_eq!(rejoined, line);
+    }
+
+    #[test]
+    fn split_long_line_no_spaces_hard_splits() {
+        let line = "x".repeat(MAX_LINE_BYTES * 2 + 50);
+        let parts = split_long_line(&line, MAX_LINE_BYTES);
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].len(), MAX_LINE_BYTES);
+        assert_eq!(parts[1].len(), MAX_LINE_BYTES);
+        assert_eq!(parts[2].len(), 50);
+    }
+
+    #[test]
+    fn split_long_line_boundary_search_decrements() {
+        // boundary > 0 && !is_char_boundary → boundary -= 1
+        // Use a multi-byte char right at the boundary
+        let mut line = "a".repeat(MAX_LINE_BYTES - 2);
+        line.push('é'); // 2 bytes, puts us at exactly MAX_LINE_BYTES
+        line.push_str(&"b".repeat(10)); // push past the limit
+        let parts = split_long_line(&line, MAX_LINE_BYTES);
+        assert!(parts.len() >= 2);
+        // Ensure we didn't panic on char boundaries
+        for part in &parts {
+            assert!(part.is_char_boundary(part.len()));
+        }
+    }
+
+    #[test]
+    fn irc_control_char_0x1f_boundary() {
+        // \x1f is underline (handled), \x20 is space (not control)
+        // Test that chars at exactly 0x20 are NOT stripped
+        assert_eq!(irc_to_discord_formatting(" hello"), " hello");
+        // But \x1f is underline toggle
+        assert_eq!(irc_to_discord_formatting("\x1fhi\x1f"), "__hi__");
+    }
+
+    #[test]
+    fn irc_high_control_not_stripped() {
+        // \x7f (DEL) is >= 0x20 as u32 — verify it's not caught by the < 0x20 check
+        // Actually \x7f IS a control char but is_control() && < 0x20 won't catch it
+        // The `_ =>` branch would push it. This tests the && boundary.
+        let result = irc_to_discord_formatting("a\x7fb");
+        assert_eq!(result, "a\x7fb");
+    }
+
+    #[test]
+    fn truncate_suffix_length_matters() {
+        // If we replaced - with / in `DISCORD_MAX_CHARS - suffix_len`,
+        // the target would be wrong. Verify that the truncated output
+        // plus the suffix fits exactly within 2000 chars.
+        let msg = "word ".repeat(500); // 2500 chars
+        let result = truncate_for_discord(&msg);
+        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
+        assert!(result.ends_with(TRUNCATION_SUFFIX));
+        // Also verify we used as much space as possible
+        let body_chars = result.chars().count() - TRUNCATION_SUFFIX.chars().count();
+        // Body should be close to 2000 - suffix_len, not wildly off
+        assert!(body_chars > 1900);
+    }
+
+    #[test]
+    fn truncate_count_comparison() {
+        // Tests the `count >= target` vs `count < target` boundary
+        // Message with exactly target+suffix chars should not be truncated
+        // but target+suffix+1 should be
+        let suffix_len = TRUNCATION_SUFFIX.chars().count();
+        let exact = "a".repeat(DISCORD_MAX_CHARS);
+        let result = truncate_for_discord(&exact);
+        assert!(matches!(result, Cow::Borrowed(_)));
+
+        let over = "a".repeat(DISCORD_MAX_CHARS + 1);
+        let result = truncate_for_discord(&over);
+        assert!(result.ends_with(TRUNCATION_SUFFIX));
+        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
+    }
+
+    #[test]
+    fn truncate_byte_pos_advances_correctly() {
+        // `byte_pos = i + ch.len_utf8()` — if replaced with `i * ch.len_utf8()`
+        // this would break. Use multi-byte chars to expose this.
+        let msg: String = "é".repeat(1100); // each 'é' is 2 bytes, 1100 chars
+        let result = truncate_for_discord(&msg);
+        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
+    }
+
+    #[test]
+    fn server_time_century_correction() {
+        // The yoe formula: (doe - doe/1460 + doe/36524 - doe/146096) / 365
+        // The `+ doe/36524` term is the century correction.
+        // Test a date far from epoch to exercise this.
+        // 2100-01-01 00:00:00 UTC
+        assert_eq!(
+            format_server_time(4_102_444_800, 0),
+            "2100-01-01T00:00:00.000Z"
+        );
+        // 1970-01-02 (day 1) to verify the + in days += 719468
+        assert_eq!(format_server_time(86400, 0), "1970-01-02T00:00:00.000Z");
+    }
+
     proptest! {
         #[test]
         fn resolve_mentions_never_panics(text in ".*") {

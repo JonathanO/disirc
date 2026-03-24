@@ -252,11 +252,7 @@ fn split_code_blocks(text: &str) -> Vec<String> {
         if line.starts_with("```") {
             in_code_block = !in_code_block;
             first_line_of_block = true;
-            if !in_code_block {
-                // Closing ``` — skip the marker line
-                continue;
-            }
-            // Opening ``` — skip the marker line (it's just ```lang)
+            // Skip the ``` marker line itself (both opening and closing)
             continue;
         }
 
@@ -1219,6 +1215,32 @@ mod tests {
         assert_eq!(parts[0].len(), MAX_LINE_BYTES);
         assert_eq!(parts[1].len(), MAX_LINE_BYTES);
         assert_eq!(parts[2].len(), 50);
+        // Verify content is preserved
+        let rejoined: String = parts.join("");
+        assert_eq!(rejoined, line);
+    }
+
+    #[test]
+    fn split_long_line_exactly_max_bytes() {
+        // Call split_long_line directly with exactly max_bytes — should not split
+        let line = "x".repeat(MAX_LINE_BYTES);
+        let parts = split_long_line(&line, MAX_LINE_BYTES);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], line);
+    }
+
+    #[test]
+    fn split_long_line_multibyte_boundary_search() {
+        // Put a 3-byte char right where the boundary would land
+        // so that boundary -= 1 is exercised
+        let mut line = "a".repeat(MAX_LINE_BYTES - 1);
+        line.push('€'); // 3 bytes: total = MAX_LINE_BYTES + 2
+        line.push('b');
+        let parts = split_long_line(&line, MAX_LINE_BYTES);
+        assert!(parts.len() >= 2);
+        // First part should be valid UTF-8 and <= max_bytes
+        assert!(parts[0].len() <= MAX_LINE_BYTES);
+        assert!(parts[0].is_char_boundary(parts[0].len()));
     }
 
     #[test]
@@ -1288,10 +1310,14 @@ mod tests {
     #[test]
     fn truncate_byte_pos_advances_correctly() {
         // `byte_pos = i + ch.len_utf8()` — if replaced with `i * ch.len_utf8()`
-        // this would break. Use multi-byte chars to expose this.
-        let msg: String = "é".repeat(1100); // each 'é' is 2 bytes, 1100 chars
+        // this would break when i != ch.len_utf8().
+        // Use ASCII (1 byte) followed by 2-byte chars so i diverges from len_utf8.
+        let mut msg = "a".repeat(100); // 100 ASCII chars, byte_pos=100
+        msg.push_str(&"é".repeat(2000)); // 2-byte chars, with * bug: 100*2=200 not 102
         let result = truncate_for_discord(&msg);
         assert!(result.chars().count() <= DISCORD_MAX_CHARS);
+        // The result must contain the ASCII prefix
+        assert!(result.starts_with("aaaa"));
     }
 
     #[test]

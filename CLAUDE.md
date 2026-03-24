@@ -13,16 +13,16 @@ At the **start** of every session:
 
 At the **start of each new implementation task** (new spec, new module, new bug fix), re-read the relevant spec and the **Spec-driven development workflow** and **Done means** sections of this file before writing any code.
 
-Update `TODO.md` **immediately** whenever:
+Update `TODO.md` and the relevant `specs/<spec>/TODO.md` **immediately** whenever:
 - A task is completed
 - A new task is identified
 - A task's status changes (blocked, deferred, etc.)
 
-Do not batch `TODO.md` updates to the end of a session — update it in place as work happens so the file always reflects reality.
+Do not batch `TODO.md` updates to the end of a session — update them in place as work happens so the files always reflect reality.
 
 ## Spec-driven development workflow
 
-1. **Specs live in `specs/`**. Before implementing any feature, read the relevant spec file(s).
+1. **Specs live in `specs/<name>/spec.md`**. Before implementing any feature, read the relevant spec file(s). Each spec directory also contains a `TODO.md` tracking tasks for that spec.
 2. **No spec = no implementation**. If a feature has no spec, write or extend the spec first, get it reviewed, then implement.
 3. **Tests before code — always, no exceptions**. This applies to **all** code changes without exception: new features, bug fixes, refactors, and spec updates that change behaviour. The sequence is rigid:
    a. Write the test(s) that capture the expected behaviour or the bug being fixed.
@@ -48,13 +48,16 @@ Do not batch `TODO.md` updates to the end of a session — update it in place as
 ## Project structure
 
 ```
-src/          — implementation (added as specs are approved)
-specs/        — behavioral specs (source of truth)
-research/     — research notes, protocol analysis, prior art (source material for specs)
-tests/        — integration tests
-config.toml   — example/local config (never commit real tokens)
-SPECS.md      — spec implementation status tracker
-deny.toml     — cargo-deny configuration
+src/                    — implementation (added as specs are approved)
+specs/                  — behavioral specs (source of truth)
+  <name>/spec.md        — the spec itself
+  <name>/TODO.md        — per-spec task list
+research/               — research notes, protocol analysis, prior art (source material for specs)
+tests/                  — integration tests
+config.toml             — example/local config (never commit real tokens)
+SPECS.md                — spec implementation status tracker (links to per-spec dirs)
+TODO.md                 — high-level status index (links to per-spec TODOs)
+deny.toml               — cargo-deny configuration
 ```
 
 ## Code style
@@ -144,7 +147,7 @@ Detailed notes, relevant quotes, code snippets, gotchas.
 ### References in specs
 
 Every spec that draws on external sources must include a `## References` section at the bottom. Cite either:
-- A `research/` file: `[research/topic.md](../research/topic.md)`
+- A `research/` file: `[research/topic.md](../../research/topic.md)` (two levels up from `specs/<name>/spec.md`)
 - A primary source directly if no research file exists: `[Title](URL) — accessed YYYY-MM-DD`
 
 Do not write spec behaviour from memory alone when a primary source exists and is fetchable.

@@ -1057,6 +1057,167 @@ mod tests {
 
     use proptest::prelude::*;
 
+    // -- Mutant-killing tests ------------------------------------------------
+
+    /// A resolver that matches any nick it's given (returns "42" as user ID).
+    struct MatchAllIrcResolver;
+
+    impl IrcMentionResolver for MatchAllIrcResolver {
+        fn resolve_nick(&self, _nick: &str) -> Option<String> {
+            Some("42".to_string())
+        }
+    }
+
+    #[test]
+    fn irc_mention_nick_with_underscore() {
+        let r = convert_irc_mentions("@foo_bar end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_nick_with_hyphen() {
+        let r = convert_irc_mentions("@foo-bar end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_nick_with_brackets() {
+        let r = convert_irc_mentions("@foo[bar] end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_nick_with_backslash() {
+        let r = convert_irc_mentions("@foo\\bar end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_nick_with_backtick() {
+        let r = convert_irc_mentions("@foo`bar end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_nick_with_caret() {
+        let r = convert_irc_mentions("@foo^bar end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_nick_with_braces() {
+        let r = convert_irc_mentions("@foo{bar} end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_at_end() {
+        // @ at the very end with no following character
+        let r = convert_irc_mentions("test @", &MatchAllIrcResolver);
+        assert_eq!(r, "test @");
+    }
+
+    #[test]
+    fn irc_mention_at_followed_by_space() {
+        let r = convert_irc_mentions("@ space", &MatchAllIrcResolver);
+        assert_eq!(r, "@ space");
+    }
+
+    #[test]
+    fn irc_control_char_below_0x20_stripped() {
+        // \x05 (ENQ) and \x07 (BEL) should be stripped
+        assert_eq!(irc_to_discord_formatting("\x05hello\x07"), "hello");
+    }
+
+    #[test]
+    fn split_exactly_max_lines() {
+        // Exactly 5 non-empty lines should not trigger truncation
+        let text = "1\n2\n3\n4\n5";
+        let lines = split_for_irc(text);
+        assert_eq!(lines.len(), 5);
+        assert!(!lines.last().unwrap().starts_with("[+"));
+    }
+
+    #[test]
+    fn split_six_lines_truncates() {
+        let text = "1\n2\n3\n4\n5\n6";
+        let lines = split_for_irc(text);
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines[5], "[+1 more lines]");
+    }
+
+    #[test]
+    fn split_long_line_boundary_minus_one() {
+        // Line exactly at max_bytes should not be split
+        let line = "a".repeat(MAX_LINE_BYTES);
+        let lines = split_for_irc(&line);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn split_long_line_boundary_plus_one() {
+        // Line at max_bytes + 1 should be split
+        let line = "a".repeat(MAX_LINE_BYTES + 1);
+        let lines = split_for_irc(&line);
+        assert!(lines.len() > 1);
+    }
+
+    #[test]
+    fn code_block_not_in_block_skips_closing() {
+        // ``` as closing when not in code block should still be skipped
+        // (it toggles in_code_block on, but the line itself is skipped)
+        let text = "```\nhello\n```";
+        let lines = split_for_irc(text);
+        assert_eq!(lines, vec!["hello"]);
+    }
+
+    #[test]
+    fn truncate_exactly_2000_chars() {
+        let msg: String = "a".repeat(2000);
+        let result = truncate_for_discord(&msg);
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn truncate_2001_chars() {
+        let msg: String = "a".repeat(2001);
+        let result = truncate_for_discord(&msg);
+        assert!(result.ends_with(TRUNCATION_SUFFIX));
+        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
+    }
+
+    #[test]
+    fn server_time_arithmetic_coverage() {
+        // Test a date that exercises the era/day-of-era calculations differently.
+        // 2000-03-01 00:00:00 UTC — the pivot date for the algorithm
+        assert_eq!(
+            format_server_time(951_868_800, 0),
+            "2000-03-01T00:00:00.000Z"
+        );
+        // 1999-12-31 23:59:59 UTC — exercises year adjustment (m <= 2)
+        assert_eq!(
+            format_server_time(946_684_799, 0),
+            "1999-12-31T23:59:59.000Z"
+        );
+        // 2000-01-01 00:00:00 UTC — m=1, triggers y+1
+        assert_eq!(
+            format_server_time(946_684_800, 0),
+            "2000-01-01T00:00:00.000Z"
+        );
+        // 2000-02-29 — leap day in year 2000
+        assert_eq!(
+            format_server_time(951_782_400, 0),
+            "2000-02-29T00:00:00.000Z"
+        );
+    }
+
+    #[test]
+    fn replace_paired_marker_empty_inner() {
+        // **** → should not produce empty styled spans, markers left as-is
+        let r = replace_paired_marker("****", "**", "[", "]");
+        assert_eq!(r, "****");
+    }
+
     proptest! {
         #[test]
         fn resolve_mentions_never_panics(text in ".*") {

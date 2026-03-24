@@ -1421,7 +1421,7 @@ mod tests {
     fn discord_markdown_strategy() -> impl Strategy<Value = String> {
         let atoms = prop::sample::select(vec![
             "**", "*", "__", "_", "~~", "`", "```", "\n", "\r\n", "<@", "<@!", "<@&", "<#", "<:",
-            "<a:", ">", "hello", "world", "nick", "12345", ":emoji:", " ", "  ", "",
+            "<a:", ">", "<", ":", "hello", "world", "nick", "12345", ":emoji:", " ", "  ", "",
         ]);
         prop::collection::vec(atoms, 0..20).prop_map(|parts| parts.join(""))
     }
@@ -1481,10 +1481,9 @@ mod tests {
         }
 
         #[test]
-        fn markdown_to_irc_no_markdown_remains(text in discord_markdown_strategy()) {
+        fn markdown_to_irc_rich_syntax_never_panics(text in discord_markdown_strategy()) {
             let result = markdown_to_irc(&text);
-            // Matched pairs should be converted; unmatched may remain.
-            // At minimum, verify no panic and output is non-null.
+            // Verify no panic and output is a valid string.
             let _ = result;
         }
 

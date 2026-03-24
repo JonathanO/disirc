@@ -123,6 +123,25 @@ Corresponds to the `SJOIN` command used to introduce users to channels.
 | `modes` | Channel mode string (may be empty `+`) |
 | `members` | List of UID strings, optionally prefixed with mode chars (`@`, `+`, etc.) |
 
+## Validation strategy
+
+All struct fields are `pub`. Rust can enforce construction-time invariants
+through private fields and fallible constructors (or builders), but that
+pattern is most valuable for public library types. `IrcMessage` and its
+sub-types are internal — the serializer is the natural single validation
+checkpoint, and adding private fields with getters throughout would be
+significant machinery for limited benefit at this stage.
+
+The 4096-byte line-length constraint cannot be checked at construction time
+regardless: it depends on the fully assembled line, not any individual field.
+Field-level constraints (no spaces in non-trailing params, no NUL/CR/LF)
+could in principle be pushed earlier, but the serializer already catches them
+via `SerializeError::InvalidParam`.
+
+If construction-time validation becomes valuable (e.g., if these types are
+ever exposed as a public API), add private fields and `try_new()` constructors
+at that point.
+
 ## Serialization
 
 `IrcMessage` implements `Display` (and a `to_wire()` convenience method) that

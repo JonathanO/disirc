@@ -379,7 +379,7 @@ pub fn irc_to_discord_formatting(text: &str) -> String {
                 style = IrcStyle::default();
             }
             c if c.is_control() => {
-                // Strip remaining control characters \x01–\x1f and \x7f
+                // Strip remaining Unicode Cc (control) characters
             }
             _ => {
                 current_text.push(ch);

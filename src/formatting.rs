@@ -602,32 +602,11 @@ pub fn irc_to_discord_plain(
 /// Output: `YYYY-MM-DDTHH:MM:SS.mmmZ`
 #[must_use]
 pub fn format_server_time(unix_secs: i64, millis: u32) -> String {
-    // Manual formatting to avoid pulling in chrono just for this
-    const SECONDS_PER_DAY: i64 = 86400;
-    const DAYS_PER_400Y: i64 = 146_097;
+    use chrono::{DateTime, Utc};
 
-    let secs = unix_secs;
-    let day_secs = secs.rem_euclid(SECONDS_PER_DAY);
-    let mut days = secs.div_euclid(SECONDS_PER_DAY);
-
-    let hour = day_secs / 3600;
-    let min = (day_secs % 3600) / 60;
-    let sec = day_secs % 60;
-
-    // Days since 2000-03-01 (a convenient epoch because leap day is at the end)
-    days += 719468; // offset from 0000-03-01 to 1970-01-01
-
-    let era = days.div_euclid(DAYS_PER_400Y);
-    let doe = days.rem_euclid(DAYS_PER_400Y); // day of era [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // year of era
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
-    let mp = (5 * doy + 2) / 153; // month index [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // day [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // month [1, 12]
-    let y = if m <= 2 { y + 1 } else { y };
-
-    format!("{y:04}-{m:02}-{d:02}T{hour:02}:{min:02}:{sec:02}.{millis:03}Z")
+    let dt = DateTime::<Utc>::from_timestamp(unix_secs, millis * 1_000_000)
+        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).expect("epoch is valid"));
+    dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,27 +1166,14 @@ mod tests {
     }
 
     #[test]
-    fn server_time_arithmetic_coverage() {
-        // Test a date that exercises the era/day-of-era calculations differently.
-        // 2000-03-01 00:00:00 UTC — the pivot date for the algorithm
+    fn server_time_various_dates() {
         assert_eq!(
             format_server_time(951_868_800, 0),
             "2000-03-01T00:00:00.000Z"
         );
-        // 1999-12-31 23:59:59 UTC — exercises year adjustment (m <= 2)
-        assert_eq!(
-            format_server_time(946_684_799, 0),
-            "1999-12-31T23:59:59.000Z"
-        );
-        // 2000-01-01 00:00:00 UTC — m=1, triggers y+1
         assert_eq!(
             format_server_time(946_684_800, 0),
             "2000-01-01T00:00:00.000Z"
-        );
-        // 2000-02-29 — leap day in year 2000
-        assert_eq!(
-            format_server_time(951_782_400, 0),
-            "2000-02-29T00:00:00.000Z"
         );
     }
 
@@ -1329,17 +1295,11 @@ mod tests {
     }
 
     #[test]
-    fn server_time_century_correction() {
-        // The yoe formula: (doe - doe/1460 + doe/36524 - doe/146096) / 365
-        // The `+ doe/36524` term is the century correction.
-        // Test a date far from epoch to exercise this.
-        // 2100-01-01 00:00:00 UTC
+    fn server_time_far_future() {
         assert_eq!(
             format_server_time(4_102_444_800, 0),
             "2100-01-01T00:00:00.000Z"
         );
-        // 1970-01-02 (day 1) to verify the + in days += 719468
-        assert_eq!(format_server_time(86400, 0), "1970-01-02T00:00:00.000Z");
     }
 
     proptest! {

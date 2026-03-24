@@ -137,7 +137,10 @@ produces a complete wire-format line including `\r\n`. Rules:
 - The `UidParams` realname and `SjoinParams` members list are always the
   trailing parameter.
 - The whole line (excluding `\r\n`) must not exceed 4096 bytes. If it does,
-  the trailing parameter is truncated to fit.
+  serialization returns `SerializeError::LineTooLong`. Callers are responsible
+  for keeping values within the limit before constructing an `IrcMessage` —
+  the formatting layer handles PRIVMSG splitting; UID realnames and SJOIN
+  members lists must be validated at their construction sites.
 
 ## Parsing
 
@@ -175,6 +178,8 @@ pub enum ParseError {
 pub enum SerializeError {
     /// A non-trailing parameter contained a space or was empty.
     InvalidParam { index: usize, value: String },
+    /// The serialized line exceeded 4096 bytes (excluding `\r\n`).
+    LineTooLong { len: usize },
 }
 ```
 

@@ -42,6 +42,8 @@ Do not batch `TODO.md` updates to the end of a session — update them in place 
 | `serenity` | Discord Gateway + REST client |
 | `serde` + `toml` | Config deserialization |
 | `tracing` + `tracing-subscriber` | Structured logging |
+| `thiserror` | Derive macros for typed error enums in each module |
+| `anyhow` | Error propagation with context chains in the application/connection layer |
 | `proptest` | Property-based testing (dev) |
 | `cargo-deny` | Dependency audit — CVEs, licences, duplicates (CI) |
 

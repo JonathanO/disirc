@@ -317,10 +317,12 @@ dependencies = [
 name = "disirc"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "proptest",
  "serde",
  "serenity",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-rustls 0.26.4",
  "toml",

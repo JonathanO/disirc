@@ -6,31 +6,14 @@ use serde::Deserialize;
 // Error type
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    Io(std::io::Error),
-    Parse(toml::de::Error),
+    #[error("could not read config file: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("config file is not valid TOML: {0}")]
+    Parse(#[from] toml::de::Error),
+    #[error("invalid config: {0}")]
     Validation(String),
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "could not read config file: {e}"),
-            Self::Parse(e) => write!(f, "config file is not valid TOML: {e}"),
-            Self::Validation(msg) => write!(f, "invalid config: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(e) => Some(e),
-            Self::Parse(e) => Some(e),
-            Self::Validation(_) => None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

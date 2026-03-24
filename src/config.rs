@@ -858,6 +858,102 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Mutant-killing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_error_display_io() {
+        let err = ConfigError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        let msg = err.to_string();
+        assert!(msg.contains("could not read config file"), "got: {msg}");
+    }
+
+    #[test]
+    fn config_error_display_parse() {
+        let err: Result<Config, _> = toml::from_str("not valid {{{");
+        let parse_err = err.unwrap_err();
+        let err = ConfigError::Parse(parse_err);
+        let msg = err.to_string();
+        assert!(msg.contains("config file is not valid TOML"), "got: {msg}");
+    }
+
+    #[test]
+    fn config_error_display_validation() {
+        let err = ConfigError::Validation("bad sid".into());
+        let msg = err.to_string();
+        assert!(msg.contains("invalid config: bad sid"), "got: {msg}");
+    }
+
+    #[test]
+    fn config_error_source_io() {
+        use std::error::Error;
+        let err = ConfigError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn config_error_source_parse() {
+        use std::error::Error;
+        let parse_err: Result<Config, _> = toml::from_str("not valid {{{");
+        let err = ConfigError::Parse(parse_err.unwrap_err());
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn config_error_source_validation() {
+        use std::error::Error;
+        let err = ConfigError::Validation("test".into());
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn link_name_with_special_chars_is_invalid() {
+        let mut cfg = valid_config();
+        cfg.irc.link_name = "foo.b@r.com".to_string();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn bridge_diff_is_empty_false_when_added() {
+        let diff = BridgeDiff {
+            added: vec![bridge("1", "#a", None)],
+            removed: vec![],
+            webhook_changed: vec![],
+        };
+        assert!(!diff.is_empty());
+    }
+
+    #[test]
+    fn bridge_diff_is_empty_false_when_removed() {
+        let diff = BridgeDiff {
+            added: vec![],
+            removed: vec![bridge("1", "#a", None)],
+            webhook_changed: vec![],
+        };
+        assert!(!diff.is_empty());
+    }
+
+    #[test]
+    fn bridge_diff_is_empty_false_when_webhook_changed() {
+        let diff = BridgeDiff {
+            added: vec![],
+            removed: vec![],
+            webhook_changed: vec![bridge("1", "#a", None)],
+        };
+        assert!(!diff.is_empty());
+    }
+
+    #[test]
+    fn bridge_diff_is_empty_true_when_all_empty() {
+        let diff = BridgeDiff {
+            added: vec![],
+            removed: vec![],
+            webhook_changed: vec![],
+        };
+        assert!(diff.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
     // Proptest
     // -----------------------------------------------------------------------
 

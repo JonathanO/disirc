@@ -3,4 +3,5 @@
 pub mod config;
 pub mod formatting;
 pub mod irc_message;
+pub mod pseudoclients;
 pub mod signal;

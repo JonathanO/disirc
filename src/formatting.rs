@@ -114,21 +114,33 @@ fn resolve_one(inner: &str, resolver: &dyn DiscordResolver) -> Option<String> {
 // Discord → IRC: markdown to IRC control codes
 // ---------------------------------------------------------------------------
 
+/// Characters that can be backslash-escaped in Discord markdown.
+const ESCAPABLE: &[char] = &['*', '_', '~', '`', '>', '#', '-', '\\', '|'];
+
+/// Sentinel range for escaped characters. Each escapable char gets its own
+/// unique PUA codepoint so `str::find()` never confuses it with real markers.
+/// `ESCAPABLE[i]` maps to `char::from_u32(ESCAPE_BASE + i)`.
+const ESCAPE_BASE: u32 = 0xF_0000;
+
 /// Convert Discord markdown formatting to IRC control codes.
 ///
-/// Processing order matters: underline `__` before italic `_`, bold `**`
-/// before italic `*`, strikethrough `~~`.
+/// Processing order matches Discord's simple-markdown parser:
+/// 1. Backslash escapes
+/// 2. Code blocks / inline code (protected from further formatting)
+/// 3. Underline `__` (before single `_`)
+/// 4. Bold `**` (before single `*`)
+/// 5. Italic `*` and word-boundary `_`
+/// 6. Strikethrough `~~` — passed through unchanged
 #[must_use]
 pub fn markdown_to_irc(text: &str) -> String {
-    let mut result = text.to_string();
+    // Step 1: Replace backslash escapes with sentinels
+    let mut result = replace_backslash_escapes(text);
 
-    // Strikethrough ~~text~~ → pass through unchanged (no IRC equivalent;
-    // preserving markers conveys intent)
+    // Step 2: Protect code spans (they suppress all formatting)
+    let (protected, code_spans) = protect_code_spans(&result);
+    result = protected;
 
-    // Bold **text** → \x02text\x02
-    result = replace_paired_marker(&result, "**", &IRC_BOLD.to_string(), &IRC_BOLD.to_string());
-
-    // Underline __text__ → \x1ftext\x1f (before single _)
+    // Step 3: Underline __text__ → \x1ftext\x1f (before single _)
     result = replace_paired_marker(
         &result,
         "__",
@@ -136,7 +148,10 @@ pub fn markdown_to_irc(text: &str) -> String {
         &IRC_UNDERLINE.to_string(),
     );
 
-    // Italic *text* → \x1dtext\x1d
+    // Step 4: Bold **text** → \x02text\x02
+    result = replace_paired_marker(&result, "**", &IRC_BOLD.to_string(), &IRC_BOLD.to_string());
+
+    // Step 5a: Italic *text* → \x1dtext\x1d
     result = replace_paired_marker(
         &result,
         "*",
@@ -144,15 +159,175 @@ pub fn markdown_to_irc(text: &str) -> String {
         &IRC_ITALIC.to_string(),
     );
 
-    // Italic _text_ → \x1dtext\x1d
-    result = replace_paired_marker(
-        &result,
-        "_",
-        &IRC_ITALIC.to_string(),
-        &IRC_ITALIC.to_string(),
-    );
+    // Step 5b: Italic _text_ → \x1dtext\x1d (word boundary only)
+    result = replace_word_boundary_underscores(&result);
+
+    // Step 6: Strikethrough ~~text~~ → pass through unchanged
+
+    // Restore code spans and escaped characters
+    result = restore_code_spans(&result, &code_spans);
+    result = restore_escaped_chars(&result);
 
     result
+}
+
+/// Map an escapable character to its unique PUA sentinel.
+fn escape_to_sentinel(ch: char) -> Option<char> {
+    ESCAPABLE
+        .iter()
+        .position(|&c| c == ch)
+        .and_then(|i| char::from_u32(ESCAPE_BASE + i as u32))
+}
+
+/// Map a PUA sentinel back to the original character.
+fn sentinel_to_char(ch: char) -> Option<char> {
+    let code = ch as u32;
+    if code >= ESCAPE_BASE && (code - ESCAPE_BASE) < ESCAPABLE.len() as u32 {
+        Some(ESCAPABLE[(code - ESCAPE_BASE) as usize])
+    } else {
+        None
+    }
+}
+
+/// Replace `\X` with a unique sentinel for each escapable character.
+fn replace_backslash_escapes(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\'
+            && let Some(&next) = chars.peek()
+            && let Some(sentinel) = escape_to_sentinel(next)
+        {
+            chars.next();
+            result.push(sentinel);
+            continue;
+        }
+        result.push(ch);
+    }
+
+    result
+}
+
+/// Restore sentinel characters to their literal form.
+fn restore_escaped_chars(text: &str) -> String {
+    text.chars()
+        .map(|ch| sentinel_to_char(ch).unwrap_or(ch))
+        .collect()
+}
+
+/// Sentinel marking the start and end of a code placeholder.
+/// Uses a PUA codepoint well above the escape sentinel range.
+const CODE_SENTINEL: char = '\u{F_0100}';
+
+/// Extract code blocks and inline code, replacing them with placeholders.
+///
+/// Returns the modified text and a vec of the extracted code spans.
+fn protect_code_spans(text: &str) -> (String, Vec<String>) {
+    let mut result = String::with_capacity(text.len());
+    let mut spans: Vec<String> = Vec::new();
+    let mut remaining = text;
+
+    loop {
+        // Look for ``` (code block) or ` (inline code)
+        let triple = remaining.find("```");
+        let single = remaining.find('`');
+
+        let next_code = match (triple, single) {
+            (Some(t), Some(s)) if t <= s => Some((t, true)),
+            (_, Some(s)) => Some((s, false)),
+            (Some(t), None) => Some((t, true)),
+            (None, None) => None,
+        };
+
+        let Some((pos, is_block)) = next_code else {
+            result.push_str(remaining);
+            break;
+        };
+
+        let delimiter = if is_block { "```" } else { "`" };
+        let after_open = pos + delimiter.len();
+
+        // Look for closing delimiter
+        let Some(close) = remaining[after_open..].find(delimiter) else {
+            result.push_str(remaining);
+            break;
+        };
+
+        let full_span_end = after_open + close + delimiter.len();
+        let span = &remaining[pos..full_span_end];
+
+        result.push_str(&remaining[..pos]);
+        result.push(CODE_SENTINEL);
+        let idx = spans.len();
+        result.push_str(&idx.to_string());
+        result.push(CODE_SENTINEL);
+        spans.push(span.to_string());
+
+        remaining = &remaining[full_span_end..];
+    }
+
+    (result, spans)
+}
+
+/// Restore protected code spans from their placeholders.
+fn restore_code_spans(text: &str, spans: &[String]) -> String {
+    let mut result = text.to_string();
+    for (i, span) in spans.iter().enumerate() {
+        let placeholder = format!("{CODE_SENTINEL}{i}{CODE_SENTINEL}");
+        result = result.replacen(&placeholder, span, 1);
+    }
+    result
+}
+
+/// Replace `_text_` with italic only when underscores are at word boundaries.
+///
+/// Discord does not treat intraword underscores as italic markers.
+/// E.g. `some_variable_name` is NOT rendered as italic.
+fn replace_word_boundary_underscores(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '_' {
+            // Check if this _ is at a word boundary (start of string or preceded by whitespace)
+            let at_word_start = i == 0 || chars[i - 1].is_whitespace();
+
+            if at_word_start {
+                // Look for closing _ at a word boundary
+                if let Some(close) = find_word_boundary_close(&chars, i + 1) {
+                    let inner: String = chars[i + 1..close].iter().collect();
+                    if !inner.is_empty() {
+                        result.push(IRC_ITALIC);
+                        result.push_str(&inner);
+                        result.push(IRC_ITALIC);
+                        i = close + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+/// Find the position of a closing `_` that is at a word boundary
+/// (followed by whitespace or end of string).
+fn find_word_boundary_close(chars: &[char], start: usize) -> Option<usize> {
+    for j in start..chars.len() {
+        if chars[j] == '_' {
+            let at_word_end = j + 1 >= chars.len() || chars[j + 1].is_whitespace();
+            if at_word_end {
+                return Some(j);
+            }
+        }
+    }
+    None
 }
 
 /// Replace paired markers like `**text**` with `open + text + close`.
@@ -841,6 +1016,97 @@ mod tests {
         // Empty content between markers — should not be converted
         assert_eq!(markdown_to_irc("****"), "****");
         assert_eq!(markdown_to_irc("~~  ~~"), "~~  ~~");
+    }
+
+    // -------------------------------------------------------------------
+    // Backslash escapes
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn backslash_escape_both_bold_markers() {
+        // Escape both opening stars: no bold conversion
+        assert_eq!(markdown_to_irc("\\*\\*not bold\\*\\*"), "**not bold**");
+    }
+
+    #[test]
+    fn backslash_escape_italic_star() {
+        // Escape both stars: no italic conversion
+        assert_eq!(markdown_to_irc("\\*not italic\\*"), "*not italic*");
+    }
+
+    #[test]
+    fn backslash_escape_underscore() {
+        assert_eq!(markdown_to_irc("\\_not italic\\_"), "_not italic_");
+    }
+
+    #[test]
+    fn backslash_escape_tilde_both() {
+        assert_eq!(markdown_to_irc("\\~\\~not strike\\~\\~"), "~~not strike~~");
+    }
+
+    #[test]
+    fn backslash_escape_backslash() {
+        assert_eq!(markdown_to_irc("\\\\literal"), "\\literal");
+    }
+
+    #[test]
+    fn backslash_before_non_escapable() {
+        // Backslash before a normal character is kept as-is
+        assert_eq!(markdown_to_irc("\\hello"), "\\hello");
+    }
+
+    // -------------------------------------------------------------------
+    // Intraword underscores
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn intraword_underscores_preserved() {
+        assert_eq!(markdown_to_irc("some_variable_name"), "some_variable_name");
+    }
+
+    #[test]
+    fn intraword_double_underscores_converted() {
+        // Discord DOES treat __ as underline even intraword (unlike single _)
+        assert_eq!(markdown_to_irc("foo__init__bar"), "foo\x1finit\x1fbar");
+    }
+
+    #[test]
+    fn word_boundary_underscore_italic() {
+        // _text_ at start/end of string = word boundary
+        assert_eq!(markdown_to_irc("_hello_"), "\x1dhello\x1d");
+    }
+
+    #[test]
+    fn word_boundary_underscore_after_space() {
+        assert_eq!(markdown_to_irc("hello _world_"), "hello \x1dworld\x1d");
+    }
+
+    #[test]
+    fn underscore_not_at_word_boundary_end() {
+        // Opening _ at word boundary, closing _ NOT at word boundary
+        assert_eq!(markdown_to_irc("_foo_bar"), "_foo_bar");
+    }
+
+    // -------------------------------------------------------------------
+    // Code span protection
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn inline_code_suppresses_formatting() {
+        assert_eq!(markdown_to_irc("`**bold**`"), "`**bold**`");
+    }
+
+    #[test]
+    fn code_block_suppresses_formatting() {
+        assert_eq!(markdown_to_irc("```\n**bold**\n```"), "```\n**bold**\n```");
+    }
+
+    #[test]
+    fn formatting_outside_code_still_works() {
+        assert_eq!(
+            markdown_to_irc("**bold** `code` **also bold**"),
+            "\x02bold\x02 `code` \x02also bold\x02"
+        );
     }
 
     #[test]

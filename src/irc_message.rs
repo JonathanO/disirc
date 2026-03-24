@@ -1434,4 +1434,128 @@ mod tests {
             prop_assert_eq!(parsed, original);
         }
     }
+
+    // ---- Boundary: 4096-byte line limit ------------------------------------
+
+    /// Exactly 4096 bytes (excluding \r\n) must succeed — the limit is exclusive.
+    #[test]
+    fn serialize_exactly_4096_bytes_succeeds() {
+        // "PRIVMSG #ch :" = 13 bytes; pad text to reach exactly 4096.
+        let text = "x".repeat(4096 - 13);
+        let m = msg(IrcCommand::Privmsg {
+            target: "#ch".to_string(),
+            text,
+        });
+        assert!(m.to_wire().is_ok(), "4096-byte line should succeed");
+    }
+
+    /// 4097 bytes must fail.
+    #[test]
+    fn serialize_4097_bytes_fails() {
+        let text = "x".repeat(4096 - 13 + 1);
+        let m = msg(IrcCommand::Privmsg {
+            target: "#ch".to_string(),
+            text,
+        });
+        assert!(
+            matches!(m.to_wire(), Err(SerializeError::LineTooLong { .. })),
+            "4097-byte line should fail"
+        );
+    }
+
+    // ---- Fallback to Raw when known commands have too few params -----------
+    //
+    // These tests also catch the match-guard mutations (e.g. `params.len() >= 2`
+    // replaced with `true`): if the guard is dropped the match arm body would
+    // try to index into params and panic, causing the mutant to be caught.
+
+    #[test]
+    fn parse_server_too_few_params_becomes_raw() {
+        // SERVER needs ≥ 3 params; with 1 it should fall through to Raw.
+        let msg = IrcMessage::parse("SERVER irc.example.net").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "SERVER with 1 param should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_sid_too_few_params_becomes_raw() {
+        // SID needs ≥ 4 params; with 3 it should fall through to Raw.
+        let msg = IrcMessage::parse("SID irc.example.net 1 001").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "SID with 3 params should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_part_no_params_becomes_raw() {
+        // PART needs ≥ 1 param; with 0 it should fall through to Raw.
+        let msg = IrcMessage::parse("PART").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "PART with 0 params should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_kick_too_few_params_becomes_raw() {
+        // KICK needs ≥ 2 params; with 1 it should fall through to Raw.
+        let msg = IrcMessage::parse("KICK #general").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "KICK with 1 param should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_nick_too_few_params_becomes_raw() {
+        // NICK needs ≥ 2 params; with 1 it should fall through to Raw.
+        let msg = IrcMessage::parse("NICK Alice2").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "NICK with 1 param should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_svsnick_too_few_params_becomes_raw() {
+        // SVSNICK needs ≥ 2 params; with 1 it should fall through to Raw.
+        let msg = IrcMessage::parse("SVSNICK ABC000001").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "SVSNICK with 1 param should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_privmsg_too_few_params_becomes_raw() {
+        // PRIVMSG needs ≥ 2 params; with 1 it should fall through to Raw.
+        let msg = IrcMessage::parse("PRIVMSG #general").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "PRIVMSG with 1 param should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_notice_too_few_params_becomes_raw() {
+        // NOTICE needs ≥ 2 params; with 1 it should fall through to Raw.
+        let msg = IrcMessage::parse("NOTICE Alice").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "NOTICE with 1 param should be Raw"
+        );
+    }
+
+    #[test]
+    fn parse_pong_too_few_params_becomes_raw() {
+        // PONG needs ≥ 2 params; with 1 it should fall through to Raw.
+        let msg = IrcMessage::parse("PONG discord.invalid").unwrap();
+        assert!(
+            matches!(msg.command, IrcCommand::Raw { .. }),
+            "PONG with 1 param should be Raw"
+        );
+    }
 }

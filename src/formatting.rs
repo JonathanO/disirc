@@ -1308,14 +1308,19 @@ mod tests {
     #[test]
     fn truncate_byte_pos_advances_correctly() {
         // `byte_pos = i + ch.len_utf8()` — if replaced with `i * ch.len_utf8()`
-        // this would break when i != ch.len_utf8().
-        // Use ASCII (1 byte) followed by 2-byte chars so i diverges from len_utf8.
-        let mut msg = "a".repeat(100); // 100 ASCII chars, byte_pos=100
-        msg.push_str(&"é".repeat(2000)); // 2-byte chars, with * bug: 100*2=200 not 102
+        // this would compute wildly wrong byte positions for multi-byte strings.
+        //
+        // With 2100 × 'é' (2 bytes each), at the last iteration before break:
+        //   i ≈ 3974 (byte offset), ch.len_utf8() = 2
+        //   correct: byte_pos = 3974 + 2 = 3976
+        //   mutant:  byte_pos = 3974 * 2 = 7948 → out of bounds panic
+        let msg: String = "é".repeat(2100);
         let result = truncate_for_discord(&msg);
         assert!(result.chars().count() <= DISCORD_MAX_CHARS);
-        // The result must contain the ASCII prefix
-        assert!(result.starts_with("aaaa"));
+        assert!(result.ends_with(TRUNCATION_SUFFIX));
+        // Verify the truncated body is approximately the right length
+        let body_len = result.chars().count() - TRUNCATION_SUFFIX.chars().count();
+        assert!(body_len > 1900, "body too short: {body_len}");
     }
 
     #[test]

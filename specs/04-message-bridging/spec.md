@@ -88,5 +88,5 @@ When sending an IRC user's nick to Discord (as the webhook username or in the fo
 
 ## References
 
-- [research/discord-irc-prior-art.md](../research/discord-irc-prior-art.md) — attachment handling, loop prevention, @everyone suppression, webhook fallback pattern
+- [research/discord-irc-prior-art.md](../../research/discord-irc-prior-art.md) — attachment handling, loop prevention, @everyone suppression, webhook fallback pattern
 - [Discord Message Object](https://discord.com/developers/docs/resources/message) — accessed 2026-03-22

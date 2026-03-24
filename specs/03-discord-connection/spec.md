@@ -115,6 +115,6 @@ Discord presence is mapped to IRC away status for pseudoclients:
 
 ## References
 
-- [research/discord-irc-prior-art.md](../research/discord-irc-prior-art.md) — webhook lifecycle, loop prevention, username constraints, @everyone suppression bug
+- [research/discord-irc-prior-art.md](../../research/discord-irc-prior-art.md) — webhook lifecycle, loop prevention, username constraints, @everyone suppression bug
 - [Discord Webhooks documentation](https://discord.com/developers/docs/resources/webhook) — accessed 2026-03-22
 - [Discord Gateway Intents](https://discord.com/developers/docs/topics/gateway#gateway-intents) — accessed 2026-03-22

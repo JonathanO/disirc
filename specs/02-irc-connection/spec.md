@@ -171,7 +171,7 @@ While the link is down, incoming Discord messages are dropped (not buffered).
 
 ## References
 
-- [research/unreal-ircd-s2s-protocol.md](../research/unreal-ircd-s2s-protocol.md) — handshake sequence, UID/SJOIN syntax, PROTOCTL capabilities, NOQUIT behaviour
+- [research/unreal-ircd-s2s-protocol.md](../../research/unreal-ircd-s2s-protocol.md) — handshake sequence, UID/SJOIN syntax, PROTOCTL capabilities, NOQUIT behaviour
 - [UnrealIRCd Server Protocol — Introduction](https://www.unrealircd.org/docs/Server_protocol:Introduction) — accessed 2026-03-22
 - [UnrealIRCd Server Protocol — UID command](https://www.unrealircd.org/docs/Server_protocol:UID_command) — accessed 2026-03-22
 - [UnrealIRCd Server Protocol — SJOIN command](https://www.unrealircd.org/docs/Server_protocol:SJOIN_command) — accessed 2026-03-22

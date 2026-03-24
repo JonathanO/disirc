@@ -101,8 +101,8 @@ Timestamps are formatted as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
 
 ## References
 
-- [research/discord-irc-prior-art.md](../research/discord-irc-prior-art.md) — ping-fix zero-width space, IRC control character handling, webhook username constraints
-- [research/discord-markdown-parsing.md](../research/discord-markdown-parsing.md) — Discord's simple-markdown fork, parsing priority, intraword underscore behaviour, backslash escapes
+- [research/discord-irc-prior-art.md](../../research/discord-irc-prior-art.md) — ping-fix zero-width space, IRC control character handling, webhook username constraints
+- [research/discord-markdown-parsing.md](../../research/discord-markdown-parsing.md) — Discord's simple-markdown fork, parsing priority, intraword underscore behaviour, backslash escapes
 - [discord/simple-markdown](https://github.com/discord/simple-markdown) — Discord's markdown parser (fork of Khan Academy simple-markdown) — accessed 2026-03-24
 - [IRCv3 Message Tags specification](https://ircv3.net/specs/extensions/message-tags) — accessed 2026-03-22
 - [IRCv3 server-time specification](https://ircv3.net/specs/extensions/server-time) — accessed 2026-03-22

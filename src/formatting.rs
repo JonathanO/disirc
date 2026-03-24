@@ -534,15 +534,13 @@ pub fn truncate_for_discord(text: &str) -> Cow<'_, str> {
     let suffix_len = TRUNCATION_SUFFIX.chars().count();
     let target = DISCORD_MAX_CHARS - suffix_len;
 
-    // Find the char boundary at `target` chars
-    let mut byte_pos = 0;
-    for (count, (i, ch)) in text.char_indices().enumerate() {
-        if count >= target {
-            byte_pos = i;
-            break;
-        }
-        byte_pos = i + ch.len_utf8();
-    }
+    // Find the byte offset of the `target`-th char.
+    // We know text has > DISCORD_MAX_CHARS chars and target < DISCORD_MAX_CHARS,
+    // so the loop always breaks.
+    let byte_pos = text
+        .char_indices()
+        .nth(target)
+        .map_or(text.len(), |(i, _)| i);
 
     // Try to split at the last space before the limit
     let truncated = &text[..byte_pos];

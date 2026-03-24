@@ -122,8 +122,8 @@ fn resolve_one(inner: &str, resolver: &dyn DiscordResolver) -> Option<String> {
 pub fn markdown_to_irc(text: &str) -> String {
     let mut result = text.to_string();
 
-    // Strikethrough ~~text~~ → just text (no IRC equivalent)
-    result = replace_paired_marker(&result, "~~", "", "");
+    // Strikethrough ~~text~~ → pass through unchanged (no IRC equivalent;
+    // preserving markers conveys intent)
 
     // Bold **text** → \x02text\x02
     result = replace_paired_marker(&result, "**", &IRC_BOLD.to_string(), &IRC_BOLD.to_string());
@@ -747,8 +747,8 @@ mod tests {
     }
 
     #[test]
-    fn strikethrough_stripped() {
-        assert_eq!(markdown_to_irc("~~gone~~"), "gone");
+    fn strikethrough_preserved() {
+        assert_eq!(markdown_to_irc("~~gone~~"), "~~gone~~");
     }
 
     #[test]
@@ -840,7 +840,7 @@ mod tests {
     fn empty_markers() {
         // Empty content between markers — should not be converted
         assert_eq!(markdown_to_irc("****"), "****");
-        assert_eq!(markdown_to_irc("~~  ~~"), "  ");
+        assert_eq!(markdown_to_irc("~~  ~~"), "~~  ~~");
     }
 
     #[test]

@@ -17,7 +17,7 @@ Because the Discord user is represented as an IRC pseudoclient, no sender prefix
 | Bold `**text**` | Convert to IRC bold: `\x02text\x02` |
 | Italic `*text*` or `_text_` | Convert to IRC italic: `\x1dtext\x1d` |
 | Underline `__text__` | Convert to IRC underline: `\x1ftext\x1f` |
-| Strikethrough `~~text~~` | Keep text, strip markers (no IRC equivalent) |
+| Strikethrough `~~text~~` | Pass through unchanged, including markers (no IRC equivalent; preserving markers conveys intent) |
 | Inline code `` `code` `` | Pass through unchanged |
 | Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 ` |
 | Newlines (`\n`, `\r\n`, `\r`) | Normalise to `\n`, then split; each non-empty line is a separate `PRIVMSG` (max 5 lines; truncate remainder with `[+N more lines]`) |

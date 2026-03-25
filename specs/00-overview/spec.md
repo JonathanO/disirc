@@ -30,6 +30,8 @@
 
 ## Architecture
 
+### Network topology
+
 ```
 ┌─────────────────────────────────┐
 │         UnrealIRCd network      │
@@ -58,6 +60,36 @@
 - Messages from Discord are sent as `PRIVMSG` from the pseudoclient's UID.
 - Messages from IRC are forwarded to the corresponding Discord channel via the REST API.
 - A single async Tokio runtime manages both connections concurrently.
+
+### Internal concurrency model
+
+All mutable application state (pseudoclients, channel mappings, nick tables) is
+owned by a single **processing task**. The two I/O tasks — IRC reader and
+Discord gateway — communicate with it exclusively through
+`tokio::sync::mpsc` channels.
+
+```
+┌──────────────────┐     IrcMessage      ┌─────────────────────────────────┐
+│  IRC reader task │ ──────────────────► │                                 │
+└──────────────────┘                     │      processing task            │
+                                         │                                 │
+┌──────────────────┐     DiscordEvent    │  owns: PseudoclientManager      │
+│  Discord gateway │ ──────────────────► │         channel map             │
+│  task            │                     │         routing state           │
+└──────────────────┘                     └───────────────┬─────────────────┘
+                                                         │
+                                    IrcMessage (outbound)│  REST calls
+                                                         ▼
+                                               IRC writer task / reqwest
+```
+
+This is the **actor model**: the processing task is the actor; the channels
+are its mailbox. Because only one task ever touches the shared state, no
+`Mutex` or `RwLock` is needed on the application types. Concurrency bugs
+(races, deadlocks) are structurally prevented rather than guarded against.
+
+**Rule**: I/O tasks (IRC reader, Discord gateway, IRC writer) must not hold
+references to application state. They communicate only through channels.
 
 ## IRCv3 features
 
@@ -135,6 +167,38 @@ forbidden; use `?` or explicit match arms instead.
 - **`anyhow`**: use in the top-level application and connection layers where
   errors are logged and recovered from rather than matched on. Provides
   context chains (`context()`/`with_context()`) that make log output actionable.
+
+## Protocol layering and future S2S dialects
+
+`irc_message.rs` is explicitly an **UnrealIRCd S2S wire layer**. Commands such
+as `UID`, `SJOIN`, `SID`, `PROTOCTL`, and `EOS` are UnrealIRCd-specific; they
+are named and structured after the UnrealIRCd wire format and make no attempt
+to be generic.
+
+Supporting a second S2S dialect (InspIRCd, TS6/Charybdis, etc.) in a future
+version would require a translation layer sitting between the wire and the
+application logic. The intended shape of that layer is:
+
+```
+pseudoclients / application logic
+         │  protocol-agnostic events
+         │  (UserIntroduction, ChannelBurst, …)
+         ▼
+   S2S translation layer   ◄─── one impl per dialect
+         │  IrcMessage (wire types)
+         ▼
+   TCP / TLS socket
+```
+
+**Constraint for spec-02 (IRC connection)**: the connection layer must not
+allow UnrealIRCd wire types (`IrcCommand::Uid`, `IrcCommand::Sjoin`, etc.) to
+be referenced outside of the translation layer itself. Application code —
+pseudoclients, message bridging, routing — must speak the protocol-agnostic
+event types and remain ignorant of the wire dialect.
+
+In v1 both layers will be implemented for UnrealIRCd only; the split exists so
+that a second dialect can be added later by providing a new translation layer
+implementation without touching application logic.
 
 ## References
 

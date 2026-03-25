@@ -136,6 +136,38 @@ forbidden; use `?` or explicit match arms instead.
   errors are logged and recovered from rather than matched on. Provides
   context chains (`context()`/`with_context()`) that make log output actionable.
 
+## Protocol layering and future S2S dialects
+
+`irc_message.rs` is explicitly an **UnrealIRCd S2S wire layer**. Commands such
+as `UID`, `SJOIN`, `SID`, `PROTOCTL`, and `EOS` are UnrealIRCd-specific; they
+are named and structured after the UnrealIRCd wire format and make no attempt
+to be generic.
+
+Supporting a second S2S dialect (InspIRCd, TS6/Charybdis, etc.) in a future
+version would require a translation layer sitting between the wire and the
+application logic. The intended shape of that layer is:
+
+```
+pseudoclients / application logic
+         │  protocol-agnostic events
+         │  (UserIntroduction, ChannelBurst, …)
+         ▼
+   S2S translation layer   ◄─── one impl per dialect
+         │  IrcMessage (wire types)
+         ▼
+   TCP / TLS socket
+```
+
+**Constraint for spec-02 (IRC connection)**: the connection layer must not
+allow UnrealIRCd wire types (`IrcCommand::Uid`, `IrcCommand::Sjoin`, etc.) to
+be referenced outside of the translation layer itself. Application code —
+pseudoclients, message bridging, routing — must speak the protocol-agnostic
+event types and remain ignorant of the wire dialect.
+
+In v1 both layers will be implemented for UnrealIRCd only; the split exists so
+that a second dialect can be added later by providing a new translation layer
+implementation without touching application logic.
+
 ## References
 
 - [research/unreal-ircd-s2s-protocol.md](../../research/unreal-ircd-s2s-protocol.md)

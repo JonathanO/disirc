@@ -131,6 +131,17 @@ mod tests {
     // with no branch logic to test. The only meaningful unit test here checks
     // that a refused connection surfaces as an error.
 
+    /// AcceptAnyCert must declare at least one signature scheme so that TLS
+    /// negotiation can succeed (an empty list prevents any cipher suite agreement).
+    #[test]
+    fn accept_any_cert_supports_at_least_one_scheme() {
+        let v = AcceptAnyCert;
+        assert!(
+            !v.supported_verify_schemes().is_empty(),
+            "supported_verify_schemes must not be empty"
+        );
+    }
+
     /// Bind a listener on an ephemeral port, drop it, then attempt to connect —
     /// the connection must be refused and surfaced as Err.
     #[tokio::test]

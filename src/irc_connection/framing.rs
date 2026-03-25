@@ -48,6 +48,8 @@ impl<R: tokio::io::AsyncRead + Unpin> LineReader<R> {
             }
 
             // Strip trailing \r\n or bare \n.
+            // The `> 0` guards are always true here (n > 0 guarantees raw.len() ≥ 1)
+            // so `>= 0` is mutation-equivalent. The guards are kept for clarity.
             let end = raw.len();
             let end = if end > 0 && raw[end - 1] == b'\n' {
                 end - 1
@@ -241,6 +243,15 @@ mod tests {
         use tokio::io::AsyncReadExt;
         let n = b.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"PONG :token\r\n");
+    }
+
+    #[tokio::test]
+    async fn partial_line_at_eof_returned_without_stripping() {
+        // Input has no \r\n terminator; EOF is reached mid-line.
+        // The partial line should be returned as-is, with no trailing byte stripped.
+        let mut r = reader_from_bytes(b"PING :server");
+        let line = r.next_line().await.unwrap().unwrap();
+        assert_eq!(line, "PING :server");
     }
 
     #[tokio::test]

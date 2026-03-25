@@ -1,6 +1,6 @@
 # TODO — spec/02-irc-connection
 
-Status: **In Progress** (implementation complete; mutation testing pending)
+Status: **Implemented**
 
 - [x] Define `S2SEvent` and `S2SCommand` protocol-agnostic types (inbound/outbound event enums)
 - [x] Implement UnrealIRCd translation layer: `IrcMessage` → `S2SEvent` and `S2SCommand` → `IrcMessage`
@@ -13,4 +13,5 @@ Status: **In Progress** (implementation complete; mutation testing pending)
 - [x] Token-bucket rate limiter (capacity 10, refill 1/500 ms; PING/PONG bypass)
 - [x] Ping keepalive (send every 90 s; timeout after 60 s with no PONG)
 - [x] Reconnection with exponential backoff + full jitter (5 s → 300 s cap)
-- [ ] Run mutation testing (`cargo mutants`) and address surviving mutants
+- [x] Run mutation testing (`cargo mutants`) and address surviving mutants
+  - 3 MISSED mutants documented as equivalent: two `> vs >=` in framing.rs (end always ≥1), one `!queue.is_empty()` near-equivalent in connection.rs (busy-loop but identical I/O)

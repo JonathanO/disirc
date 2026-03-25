@@ -384,6 +384,21 @@ mod tests {
         assert_eq!(server_sid, "XYZ");
     }
 
+    #[test]
+    fn inbound_uid_server_sid_is_first_three_chars_of_long_prefix() {
+        // A real UID prefix is 9 chars (e.g. "XYZ123ABC"). server_sid must be
+        // the 3-char SID portion only, not the full prefix.
+        let msg = IrcMessage {
+            tags: vec![],
+            prefix: Some("XYZ123ABC".into()),
+            command: IrcCommand::Uid(uid_params()),
+        };
+        let S2SEvent::UserIntroduced { server_sid, .. } = translate_inbound(&msg).unwrap() else {
+            panic!()
+        };
+        assert_eq!(server_sid, "XYZ");
+    }
+
     // -----------------------------------------------------------------------
     // translate_inbound — NICK
     // -----------------------------------------------------------------------

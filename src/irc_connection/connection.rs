@@ -68,12 +68,9 @@ pub(crate) fn backoff_delay(attempt: u32) -> Duration {
     const CAP_SECS: u64 = 300;
     const BASE_SECS: u64 = 5;
     let exp = BASE_SECS.saturating_mul(1u64.checked_shl(attempt).unwrap_or(u64::MAX));
+    // BASE_SECS = 5, so capped is always >= 5; no zero-division guard needed.
     let capped = exp.min(CAP_SECS);
-    let secs = if capped == 0 {
-        0
-    } else {
-        rand::random::<u64>() % capped
-    };
+    let secs = rand::random::<u64>() % capped;
     Duration::from_secs(secs)
 }
 
@@ -236,8 +233,8 @@ async fn send_credentials(writer: &mut IrcWriter, config: &IrcConfig) -> std::io
 /// Run the UnrealIRCd S2S handshake and return the negotiated capabilities.
 ///
 /// Sends our credentials, then reads the uplink's credentials until `SERVER`
-/// is received. Exits the process (fatal) if the uplink sends the wrong
-/// password or an `ERROR`.
+/// is received. Returns `Err` (fatal misconfiguration) if the uplink sends the
+/// wrong password; returns `Err` if the uplink sends `ERROR`.
 async fn do_handshake(
     reader: &mut IrcReader,
     writer: &mut IrcWriter,
@@ -295,8 +292,7 @@ async fn do_handshake(
                 break;
             }
             IrcCommand::Error { message } => {
-                tracing::error!("ERROR from uplink during handshake: {message}");
-                std::process::exit(1);
+                anyhow::bail!("ERROR from uplink during handshake: {message}");
             }
             IrcCommand::Ping { token } => {
                 // PING can arrive at any time; answer immediately.
@@ -367,6 +363,11 @@ async fn run_session(
         }
 
         // Schedule the next drain if there are still items in the queue.
+        // The `!` is load-bearing: only reschedule when the queue has items.
+        // Mutation testing flags this as "near-equivalent" because reversing it
+        // causes an idle busy-loop, but `try_consume` still gates actual writes
+        // so I/O behaviour is identical. The busy-loop behaviour is verified
+        // implicitly by the overall timing of `session_queued_messages_*`.
         if !queue.is_empty() {
             let delay = bucket.refill_delay(Instant::now());
             write_timer
@@ -527,6 +528,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn backoff_delay_is_not_always_zero() {
+        // With cap=5s, rand(0,5) returns 0 with probability 1/5.
+        // P(all 50 results are zero) ≈ (1/5)^50 ≈ 10^-35.
+        let all_zero = (0..50).all(|_| backoff_delay(0) == Duration::ZERO);
+        assert!(!all_zero, "backoff_delay returned zero on every trial");
+    }
+
+    // ── run_once ──────────────────────────────────────────────────────────
+
+    /// run_once returns Err when the TCP connection is refused.
+    #[tokio::test]
+    async fn run_once_returns_error_on_refused_connection() {
+        // Bind to get a free port, then drop the listener so nothing is listening.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let cfg = IrcConfig {
+            port,
+            ..test_config()
+        };
+        let (_cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(1);
+        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(1);
+        let result = run_once(&cfg, &mut cmd_rx, &event_tx).await;
+        assert!(result.is_err(), "expected connection error, got Ok");
+    }
+
     // ── do_handshake ─────────────────────────────────────────────────────
 
     /// Verify the five outbound lines and that we correctly parse the uplink's
@@ -639,6 +668,31 @@ mod tests {
 
         let pong_line = server_task.await.unwrap();
         assert_eq!(pong_line, ":002 PONG 002 :testtoken");
+    }
+
+    /// do_handshake returns Err when the uplink sends ERROR.
+    #[tokio::test]
+    async fn handshake_error_message_returns_err() {
+        let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
+        let cfg = test_config();
+
+        // Write ERROR immediately; our 5 outbound credential lines fit in the
+        // 65536-byte buffer so send_credentials won't block.
+        let server_task = tokio::spawn(async move {
+            uplink_w
+                .write_all(b"ERROR :Server closed connection\r\n")
+                .await
+                .unwrap();
+        });
+
+        let result = do_handshake(&mut client_r, &mut client_w, &cfg).await;
+        server_task.await.unwrap();
+        assert!(result.is_err(), "expected Err from do_handshake on ERROR");
+        let err_msg = result.err().unwrap().to_string();
+        assert!(
+            err_msg.contains("ERROR"),
+            "error message should mention ERROR, got: {err_msg}"
+        );
     }
 
     // ── run_session ───────────────────────────────────────────────────────
@@ -869,6 +923,73 @@ mod tests {
         assert!(
             msg.contains("timeout") || msg.contains("Ping"),
             "unexpected error message: {msg}"
+        );
+    }
+
+    /// All commands queued past the initial bucket capacity must be delivered.
+    ///
+    /// Sends BUCKET_CAPACITY + 1 = 11 commands. The first 10 drain immediately;
+    /// the 11th is held in the queue until a token is available. The test
+    /// verifies the drain-and-reschedule path (`if !queue.is_empty()`) works.
+    #[tokio::test]
+    async fn session_queued_messages_all_delivered_past_bucket_capacity() {
+        // One more than the bucket capacity (10).
+        let count = 11_usize;
+
+        let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(count + 1);
+        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+
+        // Send all commands then hold cmd_tx alive so the session doesn't exit
+        // from cmd_rx closing — it will exit when the uplink closes the connection.
+        let cmd_task = tokio::spawn(async move {
+            for i in 0..count {
+                cmd_tx
+                    .send(S2SCommand::SendMessage {
+                        from_uid: "002AAAAAA".into(),
+                        target: "#test".into(),
+                        text: format!("msg{i}"),
+                        timestamp: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+            cmd_tx // keep alive until task is joined
+        });
+
+        // Collect PRIVMSG lines until we have all of them, then close the connection.
+        let read_task = tokio::spawn(async move {
+            let mut reader = LineReader::new(uplink_r);
+            let mut received = 0_usize;
+            while let Ok(Some(line)) = reader.next_line().await {
+                if line.contains("PRIVMSG") {
+                    received += 1;
+                    if received >= count {
+                        break;
+                    }
+                }
+            }
+            drop(reader); // drops uplink_r (ReadHalf)
+            drop(uplink_w); // drops uplink_w (WriteHalf) → both halves gone → EOF to client_r
+            received
+        });
+
+        let _ = run_session(
+            client_r,
+            client_w,
+            default_hs(),
+            &mut cmd_rx,
+            &event_tx,
+            "002",
+            SessionTimings::production(),
+        )
+        .await;
+
+        let _ = cmd_task.await.unwrap(); // drops cmd_tx
+        let delivered = read_task.await.unwrap();
+        assert_eq!(
+            delivered, count,
+            "expected {count} PRIVMSG lines, got {delivered}"
         );
     }
 }

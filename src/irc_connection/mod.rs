@@ -1,5 +1,6 @@
 mod connect;
 mod framing;
+mod rate_limiter;
 mod translation;
 mod types;
 

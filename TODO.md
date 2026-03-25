@@ -6,7 +6,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-- **spec-02 (IRC connection)** — writing spec; S2SEvent/S2SCommand architecture decided, translation layer constraint added to spec-00
+- **spec-02 (IRC connection)** — implementation complete (11/11 tasks); mutation testing pending before marking Implemented
 
 ## Spec status
 

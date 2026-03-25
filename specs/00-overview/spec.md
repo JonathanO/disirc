@@ -69,18 +69,19 @@ Discord gateway — communicate with it exclusively through
 `tokio::sync::mpsc` channels.
 
 ```
-┌──────────────────┐     IrcMessage      ┌─────────────────────────────────┐
-│  IRC reader task │ ──────────────────► │                                 │
-└──────────────────┘                     │      processing task            │
-                                         │                                 │
-┌──────────────────┐     DiscordEvent    │  owns: PseudoclientManager      │
-│  Discord gateway │ ──────────────────► │         channel map             │
-│  task            │                     │         routing state           │
-└──────────────────┘                     └───────────────┬─────────────────┘
-                                                         │
-                                    IrcMessage (outbound)│  REST calls
-                                                         ▼
-                                               IRC writer task / reqwest
+┌────────────────────────┐     S2SEvent        ┌─────────────────────────────────┐
+│  IRC reader task       │ ──────────────────► │                                 │
+│  (parse + translate)   │                     │      processing task            │
+└────────────────────────┘                     │                                 │
+                                               │  owns: PseudoclientManager      │
+┌──────────────────┐         DiscordEvent      │         channel map             │
+│  Discord gateway │ ──────────────────────►   │         routing state           │
+│  task            │                           └───────────────┬─────────────────┘
+└──────────────────┘                                           │
+                                         S2SCommand (outbound) │  REST calls
+                                                               ▼
+                                                 IRC writer task / reqwest
+                                                 (translate + serialise)
 ```
 
 This is the **actor model**: the processing task is the actor; the channels
@@ -90,6 +91,12 @@ are its mailbox. Because only one task ever touches the shared state, no
 
 **Rule**: I/O tasks (IRC reader, Discord gateway, IRC writer) must not hold
 references to application state. They communicate only through channels.
+
+The IRC reader task parses raw lines into `IrcMessage` and then translates
+them into protocol-agnostic `S2SEvent` values before sending them to the
+processing task. The IRC writer task performs the reverse: it receives
+`S2SCommand` values and translates them into `IrcMessage` for serialisation.
+The processing task never sees dialect-specific wire types.
 
 ## IRCv3 features
 
@@ -200,7 +207,38 @@ In v1 both layers will be implemented for UnrealIRCd only; the split exists so
 that a second dialect can be added later by providing a new translation layer
 implementation without touching application logic.
 
+### Cross-protocol event comparison
+
+Research into three major S2S dialects (UnrealIRCd, TS6/Charybdis, InspIRCd
+SpanningTree) confirms that the following events exist in all three and map
+cleanly to protocol-agnostic types. These form the basis of `S2SEvent` and
+`S2SCommand`.
+
+| Event / Command | UnrealIRCd | TS6 | InspIRCd |
+|---|---|---|---|
+| Introduce user | `UID` (12 params) | `UID` (9 params, `EUID` ext) | `UID` (10–11 params) |
+| Channel burst | `SJOIN` (bans inline) | `SJOIN` + `BMASK` | `FJOIN` (prefix-letter,uuid:membid) |
+| Post-burst join | `JOIN :<uid>` | `JOIN <ts> <#chan> +` | `IJOIN` |
+| End of burst | `EOS` | Implicit (PING/PONG) | `ENDBURST` |
+| Nick change | `NICK` | `NICK` | `NICK` |
+| Quit | `QUIT` | `QUIT` | `QUIT` |
+| Part | `PART` | `PART` | `PART` |
+| Kick | `KICK` | `KICK` | `KICK` (+ membership ID) |
+| Message | `PRIVMSG` / `NOTICE` | `PRIVMSG` / `NOTICE` | `PRIVMSG` / `NOTICE` |
+| Away | `AWAY` (no timestamp) | `AWAY` (no timestamp) | `AWAY <time>` |
+| Server split | `SQUIT` | `SQUIT` | `SQUIT` |
+| Introduce server | `SID` | `SERVER` | `SERVER` |
+| Keepalive | `PING :<name>` (trailing) | `PING <name> <name>` (positional) | `PING <SID>` (positional) |
+
+Notable dialect-specific concepts that have no cross-protocol equivalent and
+will not appear in the v1 protocol-agnostic types:
+- **InspIRCd**: `METADATA`, `ENCAP`, `SAVE`, `LMODE`, membership IDs
+- **TS6**: `BMASK`, `TB` (topic burst), `TMODE`, `ENCAP`, `SAVE`
+- **UnrealIRCd**: `SVSNICK`, `PROTOCTL`, embedded ban sigils in `SJOIN`
+
 ## References
 
 - [research/unreal-ircd-s2s-protocol.md](../../research/unreal-ircd-s2s-protocol.md)
 - [research/unrealircd-ircv3-s2s.md](../../research/unrealircd-ircv3-s2s.md)
+- [research/ts6-s2s-protocol.md](../../research/ts6-s2s-protocol.md)
+- [research/inspircd-spanningtree-s2s.md](../../research/inspircd-spanningtree-s2s.md)

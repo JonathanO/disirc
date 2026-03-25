@@ -1,9 +1,9 @@
 # TODO — spec/07-irc-message-types
 
-Status: **Pending**
+Status: **Implemented**
 
-- [ ] Define `IrcCommand`, `UidParams`, `SjoinParams` types in `src/irc_message.rs`
-- [ ] Implement `IrcMessage::parse()` with `ParseError`
-- [ ] Implement `IrcMessage` serialization (`Display` / `to_wire()`) with `SerializeError`
-- [ ] Update `src/pseudoclients.rs` to return `IrcMessage`/`Vec<IrcMessage>`
-- [ ] Update `SPECS.md`
+- [x] Define `IrcCommand`, `UidParams`, `SjoinParams` types in `src/irc_message.rs`
+- [x] Implement `IrcMessage::parse()` with `ParseError`
+- [x] Implement `IrcMessage` serialization (`Display` / `to_wire()`) with `SerializeError`
+- [x] Update `src/pseudoclients.rs` to return `IrcMessage`/`Vec<IrcMessage>`
+- [x] Update `SPECS.md`

@@ -30,6 +30,8 @@
 
 ## Architecture
 
+### Network topology
+
 ```
 ┌─────────────────────────────────┐
 │         UnrealIRCd network      │
@@ -58,6 +60,36 @@
 - Messages from Discord are sent as `PRIVMSG` from the pseudoclient's UID.
 - Messages from IRC are forwarded to the corresponding Discord channel via the REST API.
 - A single async Tokio runtime manages both connections concurrently.
+
+### Internal concurrency model
+
+All mutable application state (pseudoclients, channel mappings, nick tables) is
+owned by a single **processing task**. The two I/O tasks — IRC reader and
+Discord gateway — communicate with it exclusively through
+`tokio::sync::mpsc` channels.
+
+```
+┌──────────────────┐     IrcMessage      ┌─────────────────────────────────┐
+│  IRC reader task │ ──────────────────► │                                 │
+└──────────────────┘                     │      processing task            │
+                                         │                                 │
+┌──────────────────┐     DiscordEvent    │  owns: PseudoclientManager      │
+│  Discord gateway │ ──────────────────► │         channel map             │
+│  task            │                     │         routing state           │
+└──────────────────┘                     └───────────────┬─────────────────┘
+                                                         │
+                                    IrcMessage (outbound)│  REST calls
+                                                         ▼
+                                               IRC writer task / reqwest
+```
+
+This is the **actor model**: the processing task is the actor; the channels
+are its mailbox. Because only one task ever touches the shared state, no
+`Mutex` or `RwLock` is needed on the application types. Concurrency bugs
+(races, deadlocks) are structurally prevented rather than guarded against.
+
+**Rule**: I/O tasks (IRC reader, Discord gateway, IRC writer) must not hold
+references to application state. They communicate only through channels.
 
 ## IRCv3 features
 

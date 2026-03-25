@@ -97,3 +97,33 @@ This state is rebuilt from scratch on every reconnect (IRC burst + Discord membe
 ## SVSNICK handling
 
 If the IRC network sends `SVSNICK` targeting one of our pseudoclients (e.g., a services bot forcing a nick change), `disirc` applies the new nick and updates its internal state. It does not attempt to restore the original nick.
+
+## Concurrency and ownership
+
+`PseudoclientManager` is **not thread-safe by design**. It uses plain
+`HashMap` fields and takes `&mut self` on every mutating operation. No
+`Arc`, `Mutex`, or `RwLock` is used or intended.
+
+Thread safety is provided at the architecture level rather than inside the
+type: all IRC and Discord events must be funnelled through
+`tokio::sync::mpsc` channels to a **single processing task** that owns the
+manager exclusively. No spawned subtask may hold a reference to the manager.
+
+```
+IRC reader task         Discord gateway task
+      │                        │
+      │ IrcMessage              │ DiscordEvent
+      ▼                        ▼
+ mpsc::Sender ────────► mpsc::Receiver
+                                │
+                      single processing task
+                      (sole owner of PseudoclientManager)
+```
+
+This is the actor model: `PseudoclientManager` is private state inside an
+actor; the channel is its mailbox. Events queue in the channel and are
+processed one at a time, so the manager never needs locking.
+
+**Constraint for spec-02 (IRC connection) and spec-03 (Discord connection)**:
+the reader/gateway tasks must communicate exclusively via the mpsc channel.
+They must not accept a shared reference to `PseudoclientManager`.

@@ -2,6 +2,6 @@
 
 pub mod config;
 pub mod formatting;
-pub mod irc_message;
+pub mod irc;
 pub mod pseudoclients;
 pub mod signal;

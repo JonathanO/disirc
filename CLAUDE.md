@@ -71,6 +71,20 @@ deny.toml               — cargo-deny configuration
 - **Async event serialization**: IRC and Discord events must be funnelled through `tokio::sync::mpsc` channels to a single processing task per direction. Do not `tokio::spawn` a new task per incoming event — concurrent handlers will race on shared state.
 - `#![deny(unsafe_code)]` must appear at the crate root. There is no justified use of `unsafe` in this project.
 
+### What to test
+
+**Test behaviour, not construction.** Do not write tests that merely construct a struct or enum variant and assert that the fields have the values you set — there is no logic there and the compiler already guarantees it. The rule of thumb: if removing the test would not catch any real bug, the test should not exist.
+
+Write tests for:
+- Functions with non-trivial logic (parsing, translation, transformation, routing).
+- Edge cases and error paths of those functions.
+- Any invariant that the compiler cannot enforce.
+
+Do **not** write tests for:
+- Constructing plain data types (`struct Foo { x: 1, y: 2 }` round-trips).
+- Enum variant existence or field names.
+- Trivial getters or `Clone`/`Debug` derives.
+
 ## Done means
 
 A task is not done until all of the following pass with no errors or warnings:

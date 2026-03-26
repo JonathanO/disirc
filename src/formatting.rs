@@ -1646,7 +1646,6 @@ mod tests {
         // Tests the `count >= target` vs `count < target` boundary
         // Message with exactly target+suffix chars should not be truncated
         // but target+suffix+1 should be
-        let suffix_len = TRUNCATION_SUFFIX.chars().count();
         let exact = "a".repeat(DISCORD_MAX_CHARS);
         let result = truncate_for_discord(&exact);
         assert!(matches!(result, Cow::Borrowed(_)));

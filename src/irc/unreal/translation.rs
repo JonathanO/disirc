@@ -147,16 +147,24 @@ pub fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
             }
         }
 
-        // Handled internally by the connection loop; do not surface as events.
+        // Handled internally by the connection loop before reaching here;
+        // silently return None without logging.
         IrcCommand::Ping { .. }
         | IrcCommand::Pong { .. }
         | IrcCommand::Pass { .. }
         | IrcCommand::Server { .. }
         | IrcCommand::Protoctl { .. }
-        // ERROR is handled specially by the connection loop (triggers LinkDown).
-        | IrcCommand::Error { .. }
-        // Everything else is unknown and safely ignored.
-        | IrcCommand::Raw { .. } => None,
+        // ERROR is handled by the connection loop and triggers LinkDown.
+        | IrcCommand::Error { .. } => None,
+
+        // Any command not covered above is unknown. Emit a trace log so it
+        // can be inspected when diagnosing unexpected uplink behaviour, but
+        // do not treat it as an error — live networks send many S2S commands
+        // (MODE, TOPIC, TKL, NETINFO, …) that don't map to an S2SEvent.
+        IrcCommand::Raw { command, .. } => {
+            tracing::trace!(command, "Unrecognised inbound command — ignored");
+            None
+        }
     }
 }
 

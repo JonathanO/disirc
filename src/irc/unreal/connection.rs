@@ -411,8 +411,6 @@ async fn run_session(
                     _ => {
                         if let Some(event) = translate_inbound(&msg) {
                             let _ = event_tx.send(event).await;
-                        } else {
-                            tracing::debug!(line = ?line, "Unhandled inbound command");
                         }
                     }
                 }

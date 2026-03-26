@@ -3,8 +3,8 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::irc_connection::types::{MemberPrefix, S2SCommand, S2SEvent};
-use crate::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
+use super::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
+use crate::irc::types::{MemberPrefix, S2SCommand, S2SEvent};
 
 /// Parse the `@time=` message tag value into a `DateTime<Utc>`.
 ///
@@ -321,7 +321,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
+    use crate::irc::unreal::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
 
     const SID: &str = "ABC";
     const UID: &str = "ABC000001";

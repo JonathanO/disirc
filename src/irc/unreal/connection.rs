@@ -13,13 +13,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::Context as _;
 use tokio::sync::mpsc;
 
+use super::irc_message::{IrcCommand, IrcMessage};
 use crate::config::IrcConfig;
-use crate::irc_message::{IrcCommand, IrcMessage};
 
+use super::super::types::{S2SCommand, S2SEvent};
 use super::connect::{IrcReader, IrcWriter, connect};
 use super::rate_limiter::TokenBucket;
 use super::translation::{translate_inbound, translate_outbound};
-use super::types::{S2SCommand, S2SEvent};
 
 // ── Timing constants (overridden in tests) ─────────────────────────────────
 
@@ -461,7 +461,7 @@ async fn run_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::irc_connection::framing::{LineReader, LineWriter};
+    use crate::irc::unreal::framing::{LineReader, LineWriter};
     use proptest::prelude::*;
     use tokio::io::AsyncWriteExt;
 

@@ -11,7 +11,7 @@ use std::io;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::irc_message::IrcMessage;
+use super::irc_message::IrcMessage;
 
 /// Maximum payload size (bytes, excluding `\r\n`) we will accept on inbound lines.
 const MAX_LINE_BYTES: usize = 4096;
@@ -116,7 +116,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> LineWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::irc_message::{IrcCommand, IrcMessage};
+    use crate::irc::unreal::irc_message::{IrcCommand, IrcMessage};
     use tokio::io::duplex;
 
     // Helper: wrap both halves of a duplex channel in LineReader / LineWriter.

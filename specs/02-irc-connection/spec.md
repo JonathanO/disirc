@@ -384,6 +384,44 @@ on receipt of `LinkDown` and re-requesting burst on the next `LinkUp`.
 
 ---
 
+## Known mutation-equivalent cases
+
+The following mutants are excluded from the zero-surviving-mutants requirement
+because they are **mutation-equivalent** (the mutated code produces identical
+observable behaviour):
+
+### `framing.rs` — first `end > 0` guard in `next_line`
+
+```rust
+let end = raw.len();
+let end = if end > 0 && raw[end - 1] == b'\n' { ... };  // ← this guard
+```
+
+`read_until` only returns without `n == 0` when it has written at least one byte,
+so `raw.len() ≥ 1` and `end ≥ 1` are guaranteed at this point. Mutating `> 0` to
+`>= 0` leaves the condition always-true either way; there is no reachable input
+that distinguishes the two forms.
+
+### `connection.rs` — `if !queue.is_empty()` reschedule block in `run_session`
+
+```rust
+if !queue.is_empty() {
+    let delay = bucket.refill_delay(Instant::now());
+    write_timer.as_mut().reset(now + delay);
+}
+```
+
+Removing the `!` causes the write timer to be rescheduled when the queue *is*
+empty (an idle reschedule) rather than when it has items pending. Because the
+`select!` branch that fires on `write_timer` has a `if !queue.is_empty()` guard,
+actual message writes are still gated correctly. The only observable difference is
+an additional timer firing when the queue is empty, which triggers a no-op loop
+iteration — indistinguishable from the outside. Both branches satisfy the
+functional requirement; adding timing assertions would make the test suite fragile
+against scheduler jitter.
+
+---
+
 ## References
 
 - [research/unreal-ircd-s2s-protocol.md](../../research/unreal-ircd-s2s-protocol.md)

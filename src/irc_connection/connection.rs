@@ -463,7 +463,7 @@ mod tests {
     use super::*;
     use crate::irc_connection::framing::{LineReader, LineWriter};
     use proptest::prelude::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -755,7 +755,7 @@ mod tests {
     /// An outbound S2SCommand is translated to an IRC wire line.
     #[tokio::test]
     async fn session_outbound_command_written_to_wire() {
-        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
         let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
@@ -847,7 +847,7 @@ mod tests {
     /// After `ping_interval`, the session sends a PING to the uplink.
     #[tokio::test]
     async fn session_sends_keepalive_ping() {
-        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
         let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);

@@ -48,8 +48,13 @@ impl<R: tokio::io::AsyncRead + Unpin> LineReader<R> {
             }
 
             // Strip trailing \r\n or bare \n.
-            // The `> 0` guards are always true here (n > 0 guarantees raw.len() ≥ 1)
-            // so `>= 0` is mutation-equivalent. The guards are kept for clarity.
+            // The *first* `end > 0` guard is always true because read_until returned
+            // n > 0 bytes (raw.len() ≥ 1). Mutating it to `>= 0` is therefore
+            // mutation-equivalent; the guard is kept for defensive clarity.
+            //
+            // The *second* `end > 0` guard is NOT equivalent: when the input is a
+            // bare `\n` (one byte), stripping the newline leaves end = 0, and the
+            // guard prevents a usize underflow/panic when checking `raw[end - 1]`.
             let end = raw.len();
             let end = if end > 0 && raw[end - 1] == b'\n' {
                 end - 1
@@ -243,6 +248,18 @@ mod tests {
         use tokio::io::AsyncReadExt;
         let n = b.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"PONG :token\r\n");
+    }
+
+    /// A lone `\n` (no content, no `\r`) should return an empty string, not panic.
+    ///
+    /// This catches the mutation `replace > with >=` in the second `end > 0` guard
+    /// inside `next_line`: when input is just `\n`, stripping the newline leaves
+    /// `end = 0`; the guard must be false to avoid a `usize` underflow on `raw[end - 1]`.
+    #[tokio::test]
+    async fn bare_newline_returns_empty_string() {
+        let mut r = reader_from_bytes(b"\n");
+        let line = r.next_line().await.unwrap().unwrap();
+        assert_eq!(line, "");
     }
 
     #[tokio::test]

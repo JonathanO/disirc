@@ -5,8 +5,9 @@ use serenity::async_trait;
 use serenity::client::{Context, EventHandler};
 use serenity::model::channel::Message;
 use serenity::model::gateway::{Presence, Ready};
-use serenity::model::guild::Guild;
-use serenity::model::user::OnlineStatus;
+use serenity::model::guild::{Guild, Member};
+use serenity::model::id::GuildId;
+use serenity::model::user::{OnlineStatus, User};
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info};
 
@@ -140,6 +141,53 @@ impl EventHandler for DiscordHandler {
                 author_name: msg.author.name.clone(),
                 content: msg.content.clone(),
                 attachments,
+            })
+            .await;
+    }
+
+    async fn presence_update(&self, _ctx: Context, new_data: Presence) {
+        let Some(guild_id) = new_data.guild_id else {
+            return; // ignore DM presences
+        };
+        let _ = self
+            .event_tx
+            .send(DiscordEvent::PresenceUpdated {
+                user_id: new_data.user.id.get(),
+                guild_id: guild_id.get(),
+                presence: map_online_status(new_data.status),
+            })
+            .await;
+    }
+
+    async fn guild_member_addition(&self, _ctx: Context, new_member: Member) {
+        let display_name = resolve_display_name(
+            new_member.nick.as_deref(),
+            new_member.user.global_name.as_deref(),
+            &new_member.user.name,
+        )
+        .to_owned();
+        let _ = self
+            .event_tx
+            .send(DiscordEvent::MemberAdded {
+                user_id: new_member.user.id.get(),
+                guild_id: new_member.guild_id.get(),
+                display_name,
+            })
+            .await;
+    }
+
+    async fn guild_member_removal(
+        &self,
+        _ctx: Context,
+        guild_id: GuildId,
+        user: User,
+        _member_data: Option<Member>,
+    ) {
+        let _ = self
+            .event_tx
+            .send(DiscordEvent::MemberRemoved {
+                user_id: user.id.get(),
+                guild_id: guild_id.get(),
             })
             .await;
     }

@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use serenity::client::Client;
 use serenity::model::gateway::GatewayIntents;
@@ -9,7 +8,8 @@ use tracing::error;
 
 use crate::config::{BridgeEntry, DiscordConfig};
 use crate::discord::handler::DiscordHandler;
-use crate::discord::types::{DiscordEvent, webhook_id_from_url};
+use crate::discord::send::process_discord_commands;
+use crate::discord::types::{DiscordCommand, DiscordEvent, webhook_id_from_url};
 
 /// Build the initial self-message filter set from bridge webhook URLs.
 ///
@@ -43,13 +43,17 @@ const INTENTS: GatewayIntents = GatewayIntents::from_bits_truncate(
 
 /// Connect to the Discord Gateway and run the event loop.
 ///
-/// Blocks indefinitely.  If the serenity client terminates with a fatal error,
-/// waits 5 seconds and restarts it.  Normal Gateway reconnects and session
-/// resumption are handled automatically by serenity.
+/// Serenity handles Gateway reconnection and session resumption automatically;
+/// `client.start()` only returns on a fatal error.  On such an error this
+/// function panics — there is no safe recovery path for a broken Discord
+/// connection in the initial version.
+///
+/// Spawns a separate task to drain `cmd_rx` and send outgoing messages.
 pub async fn run_discord(
     config: &DiscordConfig,
     bridges: &[BridgeEntry],
     event_tx: mpsc::Sender<DiscordEvent>,
+    cmd_rx: mpsc::Receiver<DiscordCommand>,
 ) -> ! {
     let self_filter = Arc::new(RwLock::new(webhook_ids_from_bridges(bridges)));
     let channel_ids = Arc::new(bridged_channel_ids(bridges));
@@ -60,22 +64,19 @@ pub async fn run_discord(
         bridged_channel_ids: channel_ids,
     };
 
-    loop {
-        match Client::builder(&config.token, INTENTS)
-            .event_handler(handler.clone())
-            .await
-        {
-            Ok(mut client) => {
-                if let Err(e) = client.start().await {
-                    error!(error = %e, "Discord client error; reconnecting in 5 s");
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to build Discord client; retrying in 5 s");
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(5)).await;
+    let mut client = Client::builder(&config.token, INTENTS)
+        .event_handler(handler)
+        .await
+        .expect("Failed to create Discord client");
+
+    // Spawn the outgoing command processor before starting the Gateway loop.
+    // client.http is available immediately after Client::builder completes.
+    tokio::spawn(process_discord_commands(client.http.clone(), cmd_rx));
+
+    if let Err(e) = client.start().await {
+        error!(error = %e, "Discord client fatal error");
     }
+    panic!("Discord client terminated unexpectedly");
 }
 
 #[cfg(test)]

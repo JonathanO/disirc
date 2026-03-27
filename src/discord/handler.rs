@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use serenity::async_trait;
 use serenity::client::{Context, EventHandler};
+use serenity::model::channel::Message;
 use serenity::model::gateway::{Presence, Ready};
 use serenity::model::guild::Guild;
 use serenity::model::user::OnlineStatus;
 use tokio::sync::{RwLock, mpsc};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::discord::types::{DiscordEvent, DiscordPresence, MemberInfo};
 
@@ -21,8 +22,7 @@ pub(crate) struct DiscordHandler {
     pub(crate) event_tx: mpsc::Sender<DiscordEvent>,
     /// IDs to suppress on `MESSAGE_CREATE` (bot user ID + webhook user IDs).
     pub(crate) self_filter: Arc<RwLock<HashSet<u64>>>,
-    /// Discord channel IDs that have an active bridge entry (used in task 4).
-    #[allow(dead_code)]
+    /// Discord channel IDs that have an active bridge entry.
     pub(crate) bridged_channel_ids: Arc<HashSet<u64>>,
 }
 
@@ -49,6 +49,19 @@ pub(crate) fn map_online_status(status: OnlineStatus) -> DiscordPresence {
         OnlineStatus::Offline | OnlineStatus::Invisible => DiscordPresence::Offline,
         _ => DiscordPresence::Offline,
     }
+}
+
+/// Decide whether a `MESSAGE_CREATE` event should be relayed to IRC.
+///
+/// Returns `true` iff the message is in a bridged channel **and** the author
+/// is not in the self-message filter set (bot user ID or owned webhook ID).
+pub(crate) fn should_relay_message(
+    channel_id: u64,
+    author_id: u64,
+    bridged_channel_ids: &HashSet<u64>,
+    self_filter: &HashSet<u64>,
+) -> bool {
+    bridged_channel_ids.contains(&channel_id) && !self_filter.contains(&author_id)
 }
 
 /// Build a [`MemberInfo`] from a presence snapshot, defaulting to offline when
@@ -102,11 +115,86 @@ impl EventHandler for DiscordHandler {
             .send(DiscordEvent::MemberSnapshot { guild_id, members })
             .await;
     }
+
+    async fn message(&self, _ctx: Context, msg: Message) {
+        let channel_id = msg.channel_id.get();
+        let author_id = msg.author.id.get();
+
+        let filter = self.self_filter.read().await;
+        if !should_relay_message(channel_id, author_id, &self.bridged_channel_ids, &filter) {
+            debug!(
+                channel_id,
+                author_id, "dropping non-bridged or self message"
+            );
+            return;
+        }
+        drop(filter);
+
+        let attachments = msg.attachments.iter().map(|a| a.url.clone()).collect();
+
+        let _ = self
+            .event_tx
+            .send(DiscordEvent::MessageReceived {
+                channel_id,
+                author_id,
+                author_name: msg.author.name.clone(),
+                content: msg.content.clone(),
+                attachments,
+            })
+            .await;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    // --- should_relay_message ---
+
+    fn ids(vals: &[u64]) -> HashSet<u64> {
+        vals.iter().copied().collect()
+    }
+
+    #[test]
+    fn relayed_when_bridged_and_not_self() {
+        assert!(should_relay_message(10, 99, &ids(&[10]), &ids(&[])));
+    }
+
+    #[test]
+    fn not_relayed_when_channel_not_bridged() {
+        assert!(!should_relay_message(99, 1, &ids(&[10]), &ids(&[])));
+    }
+
+    #[test]
+    fn not_relayed_when_author_is_self() {
+        assert!(!should_relay_message(10, 1, &ids(&[10]), &ids(&[1])));
+    }
+
+    #[test]
+    fn not_relayed_when_neither_bridged_nor_self_passes() {
+        assert!(!should_relay_message(99, 1, &ids(&[10]), &ids(&[1])));
+    }
+
+    proptest! {
+        /// For any combination of channel/author IDs and set membership, the
+        /// relay decision equals the logical conjunction.
+        #[test]
+        fn relay_matches_logical_conjunction(
+            channel_id in 1u64..100,
+            author_id in 1u64..100,
+            bridged in proptest::bool::ANY,
+            is_self in proptest::bool::ANY,
+        ) {
+            let bridged_ids: HashSet<u64> = if bridged { ids(&[channel_id]) } else { ids(&[]) };
+            let self_ids: HashSet<u64> = if is_self { ids(&[author_id]) } else { ids(&[]) };
+            let expected = bridged && !is_self;
+            prop_assert_eq!(
+                should_relay_message(channel_id, author_id, &bridged_ids, &self_ids),
+                expected
+            );
+        }
+    }
 
     // --- resolve_display_name ---
 

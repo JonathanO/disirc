@@ -15,7 +15,7 @@ _(none)_
 | [specs/00-overview](specs/00-overview/TODO.md) | n/a — architecture doc | — |
 | [specs/01-configuration](specs/01-configuration/TODO.md) | ✅ Implemented | — |
 | [specs/02-irc-connection](specs/02-irc-connection/TODO.md) | ✅ Implemented | — |
-| [specs/03-discord-connection](specs/03-discord-connection/TODO.md) | ⏳ Pending | 7 tasks |
+| [specs/03-discord-connection](specs/03-discord-connection/TODO.md) | 🔨 In Progress | task 1/8 |
 | [specs/04-message-bridging](specs/04-message-bridging/TODO.md) | ⏳ Pending | 6 tasks |
 | [specs/05-formatting](specs/05-formatting/TODO.md) | ✅ Implemented | — |
 | [specs/06-pseudoclients](specs/06-pseudoclients/TODO.md) | ✅ Implemented | — |

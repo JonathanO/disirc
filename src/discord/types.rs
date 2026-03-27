@@ -84,6 +84,21 @@ pub enum DiscordCommand {
         sender_nick: String,
         text: String,
     },
+    /// Notify the Discord module that the bridge configuration has changed.
+    ///
+    /// The Discord module will update its routing tables and self-message
+    /// filter, and will fetch a member snapshot for any newly added channels.
+    ReloadBridges {
+        /// Channel IDs to begin routing `MESSAGE_CREATE` events for.
+        added_channel_ids: Vec<u64>,
+        /// Channel IDs to stop routing `MESSAGE_CREATE` events for.
+        removed_channel_ids: Vec<u64>,
+        /// Webhook user IDs to add to the self-message filter.
+        added_webhook_ids: Vec<u64>,
+        /// Webhook user IDs to remove from the self-message filter.
+        /// Only removed if no remaining bridge still uses the same webhook ID.
+        removed_webhook_ids: Vec<u64>,
+    },
 }
 
 /// Extract the numeric webhook ID from a Discord webhook URL.

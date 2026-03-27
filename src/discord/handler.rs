@@ -24,7 +24,8 @@ pub(crate) struct DiscordHandler {
     /// IDs to suppress on `MESSAGE_CREATE` (bot user ID + webhook user IDs).
     pub(crate) self_filter: Arc<RwLock<HashSet<u64>>>,
     /// Discord channel IDs that have an active bridge entry.
-    pub(crate) bridged_channel_ids: Arc<HashSet<u64>>,
+    /// Wrapped in `RwLock` so config reload can add/remove channels at runtime.
+    pub(crate) bridged_channel_ids: Arc<RwLock<HashSet<u64>>>,
 }
 
 /// Resolve the display name for a guild member.
@@ -121,8 +122,9 @@ impl EventHandler for DiscordHandler {
         let channel_id = msg.channel_id.get();
         let author_id = msg.author.id.get();
 
+        let channels = self.bridged_channel_ids.read().await;
         let filter = self.self_filter.read().await;
-        if !should_relay_message(channel_id, author_id, &self.bridged_channel_ids, &filter) {
+        if !should_relay_message(channel_id, author_id, &channels, &filter) {
             debug!(
                 channel_id,
                 author_id, "dropping non-bridged or self message"
@@ -130,6 +132,7 @@ impl EventHandler for DiscordHandler {
             return;
         }
         drop(filter);
+        drop(channels);
 
         let attachments = msg.attachments.iter().map(|a| a.url.clone()).collect();
 

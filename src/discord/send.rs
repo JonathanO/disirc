@@ -1,13 +1,16 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serenity::builder::{CreateAllowedMentions, CreateMessage, ExecuteWebhook};
 use serenity::http::Http;
-use serenity::model::id::ChannelId;
+use serenity::model::channel::Channel;
+use serenity::model::id::{ChannelId, GuildId};
 use serenity::model::webhook::Webhook;
-use tokio::sync::mpsc;
-use tracing::warn;
+use tokio::sync::{RwLock, mpsc};
+use tracing::{debug, warn};
 
-use crate::discord::types::DiscordCommand;
+use crate::discord::handler::resolve_display_name;
+use crate::discord::types::{DiscordCommand, DiscordEvent, DiscordPresence, MemberInfo};
 
 /// Enforce the Discord webhook username constraint of 2–32 Unicode scalar values.
 ///
@@ -82,12 +85,111 @@ pub(crate) async fn send_discord_message(
     }
 }
 
+/// Apply a `ReloadBridges` command to the live routing tables.
+///
+/// - Adds/removes channel IDs from `channel_ids`.
+/// - Adds/removes webhook IDs from `self_filter`.
+pub(crate) fn apply_reload(
+    channel_ids: &mut HashSet<u64>,
+    self_filter: &mut HashSet<u64>,
+    added_channel_ids: &[u64],
+    removed_channel_ids: &[u64],
+    added_webhook_ids: &[u64],
+    removed_webhook_ids: &[u64],
+) {
+    for &id in added_channel_ids {
+        channel_ids.insert(id);
+    }
+    for &id in removed_channel_ids {
+        channel_ids.remove(&id);
+    }
+    for &id in added_webhook_ids {
+        self_filter.insert(id);
+    }
+    for &id in removed_webhook_ids {
+        self_filter.remove(&id);
+    }
+}
+
+/// Fetch the guild ID that owns `channel_id` via REST.
+///
+/// Returns `None` and logs a warning if the channel cannot be resolved or is
+/// not a guild channel.
+async fn guild_id_for_channel(http: &Http, channel_id: u64) -> Option<GuildId> {
+    match ChannelId::new(channel_id).to_channel(http).await {
+        Ok(Channel::Guild(gc)) => Some(gc.guild_id),
+        Ok(_) => {
+            warn!(
+                channel_id,
+                "channel is not a guild channel; skipping member fetch"
+            );
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, channel_id, "failed to resolve channel; skipping member fetch");
+            None
+        }
+    }
+}
+
+/// Fetch all guild members for `guild_id` via the REST API and build a
+/// [`MemberSnapshot`] event.
+///
+/// Presences are not available via REST; all members are marked as offline.
+/// Correct presence will arrive through subsequent `PRESENCE_UPDATE` events.
+async fn fetch_member_snapshot(
+    http: &Http,
+    channel_id: u64,
+    guild_id: GuildId,
+    event_tx: &mpsc::Sender<DiscordEvent>,
+) {
+    let members_result = guild_id.members(http, None, None).await;
+    match members_result {
+        Err(e) => {
+            warn!(error = %e, guild_id = guild_id.get(), "failed to fetch members for new channel");
+        }
+        Ok(members) => {
+            let infos: Vec<MemberInfo> = members
+                .iter()
+                .map(|m| MemberInfo {
+                    user_id: m.user.id.get(),
+                    display_name: resolve_display_name(
+                        m.nick.as_deref(),
+                        m.user.global_name.as_deref(),
+                        &m.user.name,
+                    )
+                    .to_owned(),
+                    presence: DiscordPresence::Offline, // REST has no presence data
+                })
+                .collect();
+            debug!(
+                guild_id = guild_id.get(),
+                count = infos.len(),
+                "fetched member snapshot for new bridge channel"
+            );
+            let _ = event_tx
+                .send(DiscordEvent::MemberSnapshot {
+                    guild_id: guild_id.get(),
+                    members: infos,
+                })
+                .await;
+        }
+    }
+    let _ = channel_id; // channel_id is used for logging context by the caller
+}
+
 /// Drain [`DiscordCommand`]s from the bridging layer and dispatch them.
+///
+/// `event_tx` is used to emit [`DiscordEvent::MemberSnapshot`] events when a
+/// new bridge channel is added via [`DiscordCommand::ReloadBridges`].
 ///
 /// Runs until the sender side of `rx` is dropped.
 pub(crate) async fn process_discord_commands(
     http: Arc<Http>,
     mut rx: mpsc::Receiver<DiscordCommand>,
+    event_tx: mpsc::Sender<DiscordEvent>,
+    self_filter: Arc<RwLock<HashSet<u64>>>,
+    channel_ids: Arc<RwLock<HashSet<u64>>>,
 ) {
     while let Some(cmd) = rx.recv().await {
         match cmd {
@@ -106,6 +208,32 @@ pub(crate) async fn process_discord_commands(
                 )
                 .await;
             }
+            DiscordCommand::ReloadBridges {
+                added_channel_ids,
+                removed_channel_ids,
+                added_webhook_ids,
+                removed_webhook_ids,
+            } => {
+                // Update routing tables under lock.
+                {
+                    let mut cids = channel_ids.write().await;
+                    let mut sf = self_filter.write().await;
+                    apply_reload(
+                        &mut cids,
+                        &mut sf,
+                        &added_channel_ids,
+                        &removed_channel_ids,
+                        &added_webhook_ids,
+                        &removed_webhook_ids,
+                    );
+                }
+                // Fetch and emit member snapshots for each newly added channel.
+                for channel_id in added_channel_ids {
+                    if let Some(guild_id) = guild_id_for_channel(&http, channel_id).await {
+                        fetch_member_snapshot(&http, channel_id, guild_id, &event_tx).await;
+                    }
+                }
+            }
         }
     }
 }
@@ -114,6 +242,57 @@ pub(crate) async fn process_discord_commands(
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    // --- apply_reload ---
+
+    fn hset(ids: &[u64]) -> HashSet<u64> {
+        ids.iter().copied().collect()
+    }
+
+    #[test]
+    fn added_channel_ids_inserted() {
+        let mut cids = hset(&[]);
+        let mut sf = hset(&[]);
+        apply_reload(&mut cids, &mut sf, &[10, 20], &[], &[], &[]);
+        assert!(cids.contains(&10));
+        assert!(cids.contains(&20));
+    }
+
+    #[test]
+    fn removed_channel_ids_deleted() {
+        let mut cids = hset(&[10, 20, 30]);
+        let mut sf = hset(&[]);
+        apply_reload(&mut cids, &mut sf, &[], &[20], &[], &[]);
+        assert!(!cids.contains(&20));
+        assert!(cids.contains(&10));
+        assert!(cids.contains(&30));
+    }
+
+    #[test]
+    fn added_webhook_ids_inserted_into_filter() {
+        let mut cids = hset(&[]);
+        let mut sf = hset(&[]);
+        apply_reload(&mut cids, &mut sf, &[], &[], &[999], &[]);
+        assert!(sf.contains(&999));
+    }
+
+    #[test]
+    fn removed_webhook_ids_deleted_from_filter() {
+        let mut cids = hset(&[]);
+        let mut sf = hset(&[111, 222]);
+        apply_reload(&mut cids, &mut sf, &[], &[], &[], &[111]);
+        assert!(!sf.contains(&111));
+        assert!(sf.contains(&222));
+    }
+
+    #[test]
+    fn removing_nonexistent_id_is_noop() {
+        let mut cids = hset(&[10]);
+        let mut sf = hset(&[]);
+        // Neither 99 (channel) nor 888 (webhook) exist — must not panic
+        apply_reload(&mut cids, &mut sf, &[], &[99], &[], &[888]);
+        assert!(cids.contains(&10));
+    }
 
     // --- sanitize_webhook_username ---
 

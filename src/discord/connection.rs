@@ -11,6 +11,8 @@ use crate::discord::handler::DiscordHandler;
 use crate::discord::send::process_discord_commands;
 use crate::discord::types::{DiscordCommand, DiscordEvent, webhook_id_from_url};
 
+pub(crate) type ChannelIdSet = Arc<RwLock<HashSet<u64>>>;
+
 /// Build the initial self-message filter set from bridge webhook URLs.
 ///
 /// Each `webhook_url` in the bridge entries is parsed for its numeric webhook
@@ -55,13 +57,14 @@ pub async fn run_discord(
     event_tx: mpsc::Sender<DiscordEvent>,
     cmd_rx: mpsc::Receiver<DiscordCommand>,
 ) -> ! {
-    let self_filter = Arc::new(RwLock::new(webhook_ids_from_bridges(bridges)));
-    let channel_ids = Arc::new(bridged_channel_ids(bridges));
+    let self_filter: Arc<RwLock<HashSet<u64>>> =
+        Arc::new(RwLock::new(webhook_ids_from_bridges(bridges)));
+    let channel_ids: ChannelIdSet = Arc::new(RwLock::new(bridged_channel_ids(bridges)));
 
     let handler = DiscordHandler {
-        event_tx,
-        self_filter,
-        bridged_channel_ids: channel_ids,
+        event_tx: event_tx.clone(),
+        self_filter: Arc::clone(&self_filter),
+        bridged_channel_ids: Arc::clone(&channel_ids),
     };
 
     let mut client = Client::builder(&config.token, INTENTS)
@@ -69,9 +72,15 @@ pub async fn run_discord(
         .await
         .expect("Failed to create Discord client");
 
-    // Spawn the outgoing command processor before starting the Gateway loop.
-    // client.http is available immediately after Client::builder completes.
-    tokio::spawn(process_discord_commands(client.http.clone(), cmd_rx));
+    // Spawn the outgoing command + reload processor before starting the Gateway
+    // loop.  client.http is available immediately after Client::builder.
+    tokio::spawn(process_discord_commands(
+        client.http.clone(),
+        cmd_rx,
+        event_tx,
+        self_filter,
+        channel_ids,
+    ));
 
     if let Err(e) = client.start().await {
         error!(error = %e, "Discord client fatal error");

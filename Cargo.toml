@@ -11,7 +11,7 @@ tracing-test = "0.2"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
-serenity = { version = "0.12", features = ["client", "gateway", "model"] }
+serenity = { version = "0.12", features = ["cache", "client", "gateway", "model"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"

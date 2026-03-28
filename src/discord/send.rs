@@ -1,15 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serenity::builder::{CreateAllowedMentions, CreateMessage, ExecuteWebhook};
+use serenity::cache::Cache;
 use serenity::http::Http;
-use serenity::model::channel::Channel;
-use serenity::model::id::{ChannelId, GuildId};
+use serenity::model::id::ChannelId;
 use serenity::model::webhook::Webhook;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, warn};
 
-use crate::discord::handler::resolve_display_name;
+use crate::discord::handler::{map_online_status, resolve_display_name};
 use crate::discord::types::{DiscordCommand, DiscordEvent, DiscordPresence, MemberInfo};
 
 /// Enforce the Discord webhook username constraint of 2–32 Unicode scalar values.
@@ -111,71 +111,62 @@ pub(crate) fn apply_reload(
     }
 }
 
-/// Fetch the guild ID that owns `channel_id` via REST.
+/// Build a [`DiscordEvent::MemberSnapshot`] for `channel_id` from the serenity
+/// cache.
 ///
-/// Returns `None` and logs a warning if the channel cannot be resolved or is
-/// not a guild channel.
-async fn guild_id_for_channel(http: &Http, channel_id: u64) -> Option<GuildId> {
-    match ChannelId::new(channel_id).to_channel(http).await {
-        Ok(Channel::Guild(gc)) => Some(gc.guild_id),
-        Ok(_) => {
-            warn!(
-                channel_id,
-                "channel is not a guild channel; skipping member fetch"
-            );
-            None
-        }
-        Err(e) => {
-            warn!(error = %e, channel_id, "failed to resolve channel; skipping member fetch");
-            None
-        }
-    }
-}
+/// Looks up the channel's owning guild in the cache, then reads the guild's
+/// `members` and `presences` maps — both already populated by `GUILD_CREATE`
+/// and `GUILD_MEMBERS_CHUNK` / `PRESENCE_UPDATE` events.  No REST call is made.
+///
+/// Returns `None` if the channel or its guild is not present in the cache
+/// (should not happen in normal operation after startup).
+pub(crate) fn snapshot_from_cache(cache: &Cache, channel_id: u64) -> Option<DiscordEvent> {
+    // Find the owning guild by checking each guild's channel map.
+    // disirc connects to a small number of guilds so this iteration is cheap.
+    let target = ChannelId::new(channel_id);
+    let guild_id = cache.guilds().into_iter().find(|&gid| {
+        cache
+            .guild(gid)
+            .map(|g| g.channels.contains_key(&target))
+            .unwrap_or(false)
+    })?;
 
-/// Fetch all guild members for `guild_id` via the REST API and build a
-/// [`MemberSnapshot`] event.
-///
-/// Presences are not available via REST; all members are marked as offline.
-/// Correct presence will arrive through subsequent `PRESENCE_UPDATE` events.
-async fn fetch_member_snapshot(
-    http: &Http,
-    channel_id: u64,
-    guild_id: GuildId,
-    event_tx: &mpsc::Sender<DiscordEvent>,
-) {
-    let members_result = guild_id.members(http, None, None).await;
-    match members_result {
-        Err(e) => {
-            warn!(error = %e, guild_id = guild_id.get(), "failed to fetch members for new channel");
-        }
-        Ok(members) => {
-            let infos: Vec<MemberInfo> = members
-                .iter()
-                .map(|m| MemberInfo {
-                    user_id: m.user.id.get(),
-                    display_name: resolve_display_name(
-                        m.nick.as_deref(),
-                        m.user.global_name.as_deref(),
-                        &m.user.name,
-                    )
-                    .to_owned(),
-                    presence: DiscordPresence::Offline, // REST has no presence data
-                })
-                .collect();
-            debug!(
-                guild_id = guild_id.get(),
-                count = infos.len(),
-                "fetched member snapshot for new bridge channel"
-            );
-            let _ = event_tx
-                .send(DiscordEvent::MemberSnapshot {
-                    guild_id: guild_id.get(),
-                    members: infos,
-                })
-                .await;
-        }
-    }
-    let _ = channel_id; // channel_id is used for logging context by the caller
+    let guild = cache.guild(guild_id)?;
+
+    let presences: HashMap<u64, DiscordPresence> = guild
+        .presences
+        .iter()
+        .map(|(uid, p)| (uid.get(), map_online_status(p.status)))
+        .collect();
+
+    let members: Vec<MemberInfo> = guild
+        .members
+        .values()
+        .map(|m| MemberInfo {
+            user_id: m.user.id.get(),
+            display_name: resolve_display_name(
+                m.nick.as_deref(),
+                m.user.global_name.as_deref(),
+                &m.user.name,
+            )
+            .to_owned(),
+            presence: presences
+                .get(&m.user.id.get())
+                .copied()
+                .unwrap_or(DiscordPresence::Offline),
+        })
+        .collect();
+
+    debug!(
+        guild_id = guild_id.get(),
+        count = members.len(),
+        "built member snapshot from cache for new bridge channel"
+    );
+
+    Some(DiscordEvent::MemberSnapshot {
+        guild_id: guild_id.get(),
+        members,
+    })
 }
 
 /// Drain [`DiscordCommand`]s from the bridging layer and dispatch them.
@@ -186,6 +177,7 @@ async fn fetch_member_snapshot(
 /// Runs until the sender side of `rx` is dropped.
 pub(crate) async fn process_discord_commands(
     http: Arc<Http>,
+    cache: Arc<Cache>,
     mut rx: mpsc::Receiver<DiscordCommand>,
     event_tx: mpsc::Sender<DiscordEvent>,
     self_filter: Arc<RwLock<HashSet<u64>>>,
@@ -227,10 +219,19 @@ pub(crate) async fn process_discord_commands(
                         &removed_webhook_ids,
                     );
                 }
-                // Fetch and emit member snapshots for each newly added channel.
+                // Emit member snapshots for each newly added channel from cache.
                 for channel_id in added_channel_ids {
-                    if let Some(guild_id) = guild_id_for_channel(&http, channel_id).await {
-                        fetch_member_snapshot(&http, channel_id, guild_id, &event_tx).await;
+                    match snapshot_from_cache(&cache, channel_id) {
+                        Some(event) => {
+                            let _ = event_tx.send(event).await;
+                        }
+                        None => {
+                            warn!(
+                                channel_id,
+                                "channel or guild not found in cache; \
+                                 skipping member snapshot for new bridge"
+                            );
+                        }
                     }
                 }
             }
@@ -399,5 +400,13 @@ mod tests {
         ) {
             prop_assert_eq!(suppress_mentions(&s), s);
         }
+    }
+
+    // --- snapshot_from_cache ---
+
+    #[test]
+    fn snapshot_from_cache_returns_none_for_unknown_channel() {
+        let cache = Cache::new();
+        assert!(snapshot_from_cache(&cache, 99_999).is_none());
     }
 }

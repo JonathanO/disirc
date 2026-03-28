@@ -58,7 +58,7 @@ On the fallback path, replace `@everyone` and `@here` (case-insensitively) with 
 
 1. On startup, establish a Gateway connection using the bot token. Parse all configured webhook URLs and record the numeric webhook ID from each URL in the self-message filter set.
 2. Wait for the `READY` event. Record the bot's own user ID in the self-message filter set.
-3. The Gateway delivers a `GUILD_CREATE` event for each guild the bot is in. Each `GUILD_CREATE` (with both `GUILD_MEMBERS` and `GUILD_PRESENCES` intents active) includes `members` and `presences` maps that form the initial snapshot. For large guilds (member count above Discord's large-guild threshold), the `GUILD_CREATE` contains online and role-bearing members only; the remaining members arrive in subsequent `GUILD_MEMBERS_CHUNK` events that serenity merges into the cache automatically.
+3. The Gateway delivers a `GUILD_CREATE` event for each guild the bot is in. Each `GUILD_CREATE` (with both `GUILD_MEMBERS` and `GUILD_PRESENCES` intents active) includes `members` and `presences` maps that form the initial snapshot. For large guilds (member count above Discord's large-guild threshold), the `GUILD_CREATE` contains online and role-bearing members only; the remaining members arrive in subsequent `GUILD_MEMBERS_CHUNK` events that serenity merges into the cache automatically. `disirc` does not emit a `MemberSnapshot` for `GUILD_MEMBERS_CHUNK` events — those offline members are introduced lazily on first message (see `06-pseudoclients.md`).
 4. This membership snapshot is used to populate the IRC burst (see `02-irc-connection.md`).
 5. Enter the event loop dispatching events.
 
@@ -66,7 +66,11 @@ On the fallback path, replace `@everyone` and `@here` (case-insensitively) with 
 
 When a config reload adds a new `[[bridge]]` entry (see `01-configuration.md`):
 
-1. Fetch the current member list and presence data for the new Discord channel via the REST API.
+1. Read the current member list and presence data for the new Discord channel from the
+   serenity cache. The cache is already fully populated by `GUILD_CREATE` and
+   `GUILD_MEMBERS_CHUNK` events at startup, and kept current by `PRESENCE_UPDATE` events
+   thereafter — no REST call is needed. The cache is searched by iterating guild entries
+   and checking each guild's channel map for the target channel ID.
 2. Register the webhook user ID for the new channel's webhook (if configured) with the self-message filter.
 3. Hand the member and presence snapshot to the pseudoclient layer to introduce new pseudoclients and SJOIN them to the IRC channel (see `06-pseudoclients.md`).
 4. Begin routing `MESSAGE_CREATE` events for the new channel.

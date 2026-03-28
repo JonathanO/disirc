@@ -52,9 +52,8 @@ functions with full coverage.
 | Location | Mutation |
 |---|---|
 | `send.rs:61` | `send_discord_message` → `()` |
-| `send.rs:119` | `guild_id_for_channel` → `None` / `Some(Default::default())` |
-| `send.rs:146` | `fetch_member_snapshot` → `()` |
-| `send.rs:194` | `process_discord_commands` → `()` |
+| `send.rs` | `snapshot_from_cache` → `None` | Requires a populated serenity `Cache`; the guild-iteration and member-building logic inside calls helpers already unit-tested elsewhere. |
+| `send.rs` | `process_discord_commands` → `()` | Requires live Discord HTTP and channel pairs. |
 
 ### TIMEOUT = caught
 

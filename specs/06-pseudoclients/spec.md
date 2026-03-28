@@ -45,6 +45,24 @@ Introduction sequence:
 
 Multiple bridged channels: one `SJOIN` per channel.
 
+### Unknown user events (large-guild chunking)
+
+For large Discord guilds, `GUILD_CREATE` delivers only online and role-bearing members;
+the remaining (offline) members arrive via `GUILD_MEMBERS_CHUNK` events that serenity
+merges into its cache. `disirc` does not process `GUILD_MEMBERS_CHUNK` directly, so
+these offline members have no pseudoclient at startup.
+
+Events received for a user with no existing pseudoclient are handled as follows:
+
+| Event | Behaviour |
+|---|---|
+| `DiscordEvent::MessageReceived` | Introduce pseudoclient on demand (see Introduction above), then relay the message. |
+| `DiscordEvent::PresenceUpdated` | Silently drop. No pseudoclient exists to update; when the user next sends a message they will be introduced and subsequent presence updates will apply normally. |
+| `DiscordEvent::MemberRemoved` | Silently drop. No pseudoclient exists to quit. |
+
+This lazy introduction strategy avoids introducing pseudoclients for offline members who
+may never become active in a bridged channel.
+
 ### Quit
 
 A pseudoclient is quit when:

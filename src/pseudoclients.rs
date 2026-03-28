@@ -492,6 +492,18 @@ impl PseudoclientManager {
     pub fn count(&self) -> usize {
         self.by_discord_id.len()
     }
+
+    /// Return the ident used for all pseudoclients.
+    #[must_use]
+    pub fn ident(&self) -> &str {
+        &self.ident
+    }
+
+    /// Return the host suffix used to build pseudoclient hostnames.
+    #[must_use]
+    pub fn host_suffix(&self) -> &str {
+        &self.host_suffix
+    }
 }
 
 /// Result of `part_channel`.

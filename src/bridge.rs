@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 
 use crate::config::BridgeEntry;
-use crate::discord::DiscordCommand;
+use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence};
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::{S2SCommand, S2SEvent};
-use crate::pseudoclients::PseudoclientManager;
+use crate::pseudoclients::{PseudoclientManager, sanitize_nick};
 
 // ---------------------------------------------------------------------------
 // BridgeMap
@@ -310,6 +310,196 @@ pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event
 }
 
 // ---------------------------------------------------------------------------
+// Discord lifecycle state
+// ---------------------------------------------------------------------------
+
+/// Mutable Discord-side state maintained by the bridge processing task.
+///
+/// - `display_names`: populated from `MemberSnapshot` and `MemberAdded` so the
+///   bridge can look up a user's display name when a `PresenceUpdated` event
+///   (which carries no display name) needs to introduce a pseudoclient.
+/// - `guild_irc_channels`: populated by the bridge loop from `BridgeMap` and
+///   the Discord module's guild↔channel associations.  Maps a Discord guild ID
+///   to the IRC channel names the bridge serves for that guild.
+#[derive(Debug, Default)]
+pub struct DiscordState {
+    /// Discord user ID → current display name.
+    pub display_names: std::collections::HashMap<u64, String>,
+    /// Discord guild ID → IRC channel names served by this guild.
+    pub guild_irc_channels: std::collections::HashMap<u64, Vec<String>>,
+}
+
+/// Apply one `DiscordEvent` to the bridge's Discord-side state.
+///
+/// Returns the `S2SCommand`s that must be forwarded to the IRC connection
+/// module.  Caller supplies `now_ts` (Unix seconds) for UID/SJOIN timestamps
+/// when no stored channel timestamp is available.
+pub fn apply_discord_event(
+    discord_state: &mut DiscordState,
+    pm: &mut PseudoclientManager,
+    irc_state: &IrcState,
+    event: &DiscordEvent,
+    now_ts: u64,
+) -> Vec<S2SCommand> {
+    match event {
+        DiscordEvent::MemberSnapshot { guild_id, members } => {
+            let channels = discord_state
+                .guild_irc_channels
+                .get(guild_id)
+                .cloned()
+                .unwrap_or_default();
+            let mut cmds = Vec::new();
+            for member in members {
+                // Option B: only introduce non-offline members.
+                if !member.presence.is_non_offline() {
+                    continue;
+                }
+                discord_state
+                    .display_names
+                    .insert(member.user_id, member.display_name.clone());
+                cmds.extend(introduce_pseudoclient(
+                    pm,
+                    irc_state,
+                    member.user_id,
+                    &member.display_name,
+                    &channels,
+                    member.presence,
+                    now_ts,
+                ));
+            }
+            cmds
+        }
+
+        DiscordEvent::MemberAdded {
+            user_id,
+            guild_id: _,
+            display_name,
+        } => {
+            // Cache the display name; introduction is deferred to PresenceUpdated.
+            discord_state
+                .display_names
+                .insert(*user_id, display_name.clone());
+            vec![]
+        }
+
+        DiscordEvent::MemberRemoved {
+            user_id,
+            guild_id: _,
+        } => {
+            discord_state.display_names.remove(user_id);
+            if let Some(msg) = pm.quit(*user_id, "Left Discord") {
+                // msg is an IrcMessage but we need to emit an S2SCommand;
+                // extract the UID from the message prefix.
+                if let Some(uid) = msg.prefix {
+                    return vec![S2SCommand::QuitUser {
+                        uid,
+                        reason: "Left Discord".to_string(),
+                    }];
+                }
+            }
+            vec![]
+        }
+
+        DiscordEvent::PresenceUpdated {
+            user_id,
+            guild_id,
+            presence,
+        } => {
+            if !presence.is_non_offline() {
+                return vec![];
+            }
+            let channels = discord_state
+                .guild_irc_channels
+                .get(guild_id)
+                .cloned()
+                .unwrap_or_default();
+            let display_name = discord_state
+                .display_names
+                .get(user_id)
+                .cloned()
+                .unwrap_or_default();
+            introduce_pseudoclient(
+                pm,
+                irc_state,
+                *user_id,
+                &display_name,
+                &channels,
+                *presence,
+                now_ts,
+            )
+        }
+
+        // MessageReceived is handled by the message relay paths, not here.
+        DiscordEvent::MessageReceived { .. } => vec![],
+    }
+}
+
+/// Introduce a pseudoclient if not already present, then apply away state.
+///
+/// Returns the `S2SCommand`s needed to introduce the user and set their
+/// initial presence.  Returns only away/back commands if already introduced.
+fn introduce_pseudoclient(
+    pm: &mut PseudoclientManager,
+    irc_state: &IrcState,
+    user_id: u64,
+    display_name: &str,
+    channels: &[String],
+    presence: DiscordPresence,
+    now_ts: u64,
+) -> Vec<S2SCommand> {
+    let mut cmds = Vec::new();
+
+    if pm.get_by_discord_id(user_id).is_none() {
+        // Not yet introduced — call pm.introduce() to allocate uid/nick.
+        if pm
+            .introduce(user_id, display_name, display_name, channels, now_ts)
+            .is_some()
+        {
+            // Read back the allocated state.
+            let (uid, nick, chans) = {
+                let s = pm.get_by_discord_id(user_id).expect("just introduced");
+                (s.uid.clone(), s.nick.clone(), s.channels.clone())
+            };
+            let host = format!("{}.{}", sanitize_nick(display_name), pm.host_suffix());
+            cmds.push(S2SCommand::IntroduceUser {
+                uid: uid.clone(),
+                nick,
+                ident: pm.ident().to_string(),
+                host,
+                realname: display_name.to_string(),
+            });
+            for channel in &chans {
+                let ts = irc_state.ts_for_channel(channel).unwrap_or(now_ts);
+                cmds.push(S2SCommand::JoinChannel {
+                    uid: uid.clone(),
+                    channel: channel.clone(),
+                    ts,
+                });
+            }
+        }
+    }
+
+    // Apply the presence as away / back.
+    if let Some(s) = pm.get_by_discord_id(user_id) {
+        let uid = s.uid.clone();
+        match presence {
+            DiscordPresence::Online => cmds.push(S2SCommand::ClearAway { uid }),
+            DiscordPresence::Idle => cmds.push(S2SCommand::SetAway {
+                uid,
+                reason: "Idle".to_string(),
+            }),
+            DiscordPresence::DoNotDisturb => cmds.push(S2SCommand::SetAway {
+                uid,
+                reason: "Do Not Disturb".to_string(),
+            }),
+            DiscordPresence::Offline => {}
+        }
+    }
+
+    cmds
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -320,7 +510,7 @@ mod tests {
     use crate::formatting::DiscordResolver;
     use crate::irc::S2SCommand;
 
-    use crate::discord::DiscordCommand;
+    use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence, MemberInfo};
     use crate::formatting::IrcMentionResolver;
     use crate::irc::S2SEvent;
     use crate::pseudoclients::PseudoclientManager;
@@ -995,5 +1185,352 @@ mod tests {
             pm.get_by_discord_id(55).is_none(),
             "PseudoclientManager should be reset"
         );
+    }
+
+    // --- apply_discord_event / DiscordState ---
+
+    fn make_discord_state_with_channels(guild_id: u64, channels: &[&str]) -> DiscordState {
+        let mut ds = DiscordState::default();
+        ds.guild_irc_channels
+            .insert(guild_id, channels.iter().map(|s| s.to_string()).collect());
+        ds
+    }
+
+    fn member(user_id: u64, name: &str, presence: DiscordPresence) -> MemberInfo {
+        MemberInfo {
+            user_id,
+            display_name: name.to_string(),
+            presence,
+        }
+    }
+
+    #[test]
+    fn member_snapshot_introduces_non_offline_members() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let mut irc = IrcState::default();
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![
+                    member(10, "alice", DiscordPresence::Online),
+                    member(20, "bob", DiscordPresence::Offline),
+                ],
+            },
+            1000,
+        );
+
+        assert!(
+            pm.get_by_discord_id(10).is_some(),
+            "alice should be introduced"
+        );
+        assert!(
+            pm.get_by_discord_id(20).is_none(),
+            "bob is offline, not introduced"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "should produce IntroduceUser"
+        );
+    }
+
+    #[test]
+    fn member_snapshot_online_member_gets_clear_away() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![member(10, "alice", DiscordPresence::Online)],
+            },
+            1000,
+        );
+
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::ClearAway { .. })),
+            "online member should get ClearAway"
+        );
+    }
+
+    #[test]
+    fn member_snapshot_idle_member_gets_set_away() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![member(10, "alice", DiscordPresence::Idle)],
+            },
+            1000,
+        );
+
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Idle")),
+            "idle member should get SetAway Idle"
+        );
+    }
+
+    #[test]
+    fn member_snapshot_caches_display_names() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![member(10, "alice", DiscordPresence::Online)],
+            },
+            1000,
+        );
+
+        assert_eq!(ds.display_names.get(&10).map(|s| s.as_str()), Some("alice"));
+    }
+
+    #[test]
+    fn member_added_caches_display_name_without_introducing() {
+        let mut ds = DiscordState::default();
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberAdded {
+                user_id: 42,
+                guild_id: 1,
+                display_name: "charlie".to_string(),
+            },
+            1000,
+        );
+
+        assert!(cmds.is_empty(), "MemberAdded should not introduce");
+        assert_eq!(
+            ds.display_names.get(&42).map(|s| s.as_str()),
+            Some("charlie")
+        );
+        assert!(pm.get_by_discord_id(42).is_none());
+    }
+
+    #[test]
+    fn member_removed_quits_introduced_pseudoclient() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        // Introduce first
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![member(10, "alice", DiscordPresence::Online)],
+            },
+            1000,
+        );
+        assert!(pm.get_by_discord_id(10).is_some());
+
+        // Now remove
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberRemoved {
+                user_id: 10,
+                guild_id: 1,
+            },
+            1000,
+        );
+
+        assert!(
+            pm.get_by_discord_id(10).is_none(),
+            "pseudoclient should be quit"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::QuitUser { .. })),
+            "should produce QuitUser"
+        );
+    }
+
+    #[test]
+    fn member_removed_non_introduced_is_noop() {
+        let mut ds = DiscordState::default();
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberRemoved {
+                user_id: 99,
+                guild_id: 1,
+            },
+            1000,
+        );
+
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn presence_updated_offline_is_silently_dropped() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, "dave".to_string());
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Offline,
+            },
+            1000,
+        );
+
+        assert!(
+            cmds.is_empty(),
+            "offline presence should produce no commands"
+        );
+        assert!(
+            pm.get_by_discord_id(50).is_none(),
+            "should not be introduced"
+        );
+    }
+
+    #[test]
+    fn presence_updated_non_offline_introduces_unknown_user() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, "eve".to_string());
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+            },
+            1000,
+        );
+
+        assert!(pm.get_by_discord_id(50).is_some(), "should be introduced");
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. }))
+        );
+    }
+
+    #[test]
+    fn presence_updated_already_introduced_only_updates_away() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, "eve".to_string());
+
+        // First introduce
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+            },
+            1000,
+        );
+
+        // Now presence update with Idle — should NOT produce a second IntroduceUser
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Idle,
+            },
+            1000,
+        );
+
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "should not re-introduce"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Idle")),
+            "should set away"
+        );
+    }
+
+    #[test]
+    fn member_snapshot_join_channel_uses_irc_state_ts() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let mut irc = IrcState::default();
+
+        // Simulate a ChannelBurst so irc_state has a ts for #general
+        apply_irc_event(
+            &mut irc,
+            &mut pm,
+            &S2SEvent::ChannelBurst {
+                channel: "#general".to_string(),
+                ts: 5_000,
+                members: vec![],
+            },
+        );
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![member(10, "alice", DiscordPresence::Online)],
+            },
+            9_999,
+        );
+
+        let join_ts = cmds.iter().find_map(|c| {
+            if let S2SCommand::JoinChannel { ts, .. } = c {
+                Some(*ts)
+            } else {
+                None
+            }
+        });
+        assert_eq!(join_ts, Some(5_000), "should use channel ts from IrcState");
     }
 }

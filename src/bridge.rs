@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use crate::config::BridgeEntry;
 use crate::discord::DiscordCommand;
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
-use crate::irc::S2SCommand;
+use crate::irc::{S2SCommand, S2SEvent};
+use crate::pseudoclients::PseudoclientManager;
 
 // ---------------------------------------------------------------------------
 // BridgeMap
@@ -201,6 +202,114 @@ pub fn irc_to_discord_command(
 }
 
 // ---------------------------------------------------------------------------
+// IRC lifecycle state
+// ---------------------------------------------------------------------------
+
+/// Mutable IRC-side state maintained by the bridge processing task.
+///
+/// Tracks the uid→nick map for all external IRC users and the creation
+/// timestamp of every channel we have seen in a `ChannelBurst`.  Both tables
+/// are cleared on `LinkDown` / `PseudoclientManager::reset`.
+#[derive(Debug, Default)]
+pub struct IrcState {
+    /// uid → current nick for every non-pseudoclient IRC user.
+    nicks: std::collections::HashMap<String, String>,
+    /// channel name (lowercased) → creation timestamp.
+    channel_ts: std::collections::HashMap<String, u64>,
+}
+
+impl IrcState {
+    /// Look up the current nick for a UID.
+    #[must_use]
+    pub fn nick_of(&self, uid: &str) -> Option<&str> {
+        self.nicks.get(uid).map(String::as_str)
+    }
+
+    /// Look up the stored creation timestamp for a channel.
+    #[must_use]
+    pub fn ts_for_channel(&self, channel: &str) -> Option<u64> {
+        self.channel_ts.get(&channel.to_lowercase()).copied()
+    }
+
+    /// Reset all tracked state (call on link loss).
+    pub fn reset(&mut self) {
+        self.nicks.clear();
+        self.channel_ts.clear();
+    }
+}
+
+/// Apply one `S2SEvent` to the bridge's IRC-side state.
+///
+/// Updates `state` and `pm` in place; never fails.  Events that carry no
+/// meaningful state update (e.g. `LinkUp`, `BurstComplete`, message events)
+/// are accepted and silently ignored so the caller can forward every event
+/// here without filtering.
+pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event: &S2SEvent) {
+    match event {
+        S2SEvent::LinkDown { .. } => {
+            state.reset();
+            pm.reset();
+        }
+
+        S2SEvent::UserIntroduced { uid, nick, .. } => {
+            state.nicks.insert(uid.clone(), nick.clone());
+        }
+
+        S2SEvent::UserNickChanged { uid, new_nick } => {
+            if let Some(entry) = state.nicks.get_mut(uid) {
+                entry.clone_from(new_nick);
+            }
+        }
+
+        S2SEvent::UserQuit { uid, .. } => {
+            state.nicks.remove(uid);
+        }
+
+        S2SEvent::ChannelBurst { channel, ts, .. } => {
+            state
+                .channel_ts
+                .entry(channel.to_lowercase())
+                .or_insert(*ts);
+        }
+
+        S2SEvent::NickForced { uid, new_nick } => {
+            // Update our nick map for external users.
+            if let Some(entry) = state.nicks.get_mut(uid) {
+                entry.clone_from(new_nick);
+            }
+            // If the target is one of our pseudoclients, update its internal state.
+            pm.apply_svsnick(uid, new_nick);
+        }
+
+        S2SEvent::UserParted { uid, channel, .. } => {
+            // If one of our pseudoclients was parted, update its channel list.
+            let did = pm.get_by_uid(uid).map(|s| s.discord_user_id);
+            if let Some(did) = did {
+                pm.part_channel(did, channel, "");
+            }
+        }
+
+        S2SEvent::UserKicked { uid, channel, .. } => {
+            // If one of our pseudoclients was kicked, update its channel list.
+            let did = pm.get_by_uid(uid).map(|s| s.discord_user_id);
+            if let Some(did) = did {
+                pm.part_channel(did, channel, "");
+            }
+        }
+
+        // These events require no IrcState / PseudoclientManager update.
+        S2SEvent::LinkUp
+        | S2SEvent::BurstComplete
+        | S2SEvent::ServerIntroduced { .. }
+        | S2SEvent::ServerQuit { .. }
+        | S2SEvent::MessageReceived { .. }
+        | S2SEvent::NoticeReceived { .. }
+        | S2SEvent::AwaySet { .. }
+        | S2SEvent::AwayCleared { .. } => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -213,6 +322,8 @@ mod tests {
 
     use crate::discord::DiscordCommand;
     use crate::formatting::IrcMentionResolver;
+    use crate::irc::S2SEvent;
+    use crate::pseudoclients::PseudoclientManager;
 
     struct NullResolver;
     impl DiscordResolver for NullResolver {
@@ -583,5 +694,306 @@ mod tests {
             &cmd,
             DiscordCommand::SendMessage { text, .. } if text.contains("**bold**")
         ));
+    }
+
+    // --- IrcState / apply_irc_event ---
+
+    fn make_pm() -> PseudoclientManager {
+        PseudoclientManager::new("001", "bridge", "users.example.com")
+    }
+
+    fn introduced(uid: &str, nick: &str) -> S2SEvent {
+        S2SEvent::UserIntroduced {
+            uid: uid.to_string(),
+            nick: nick.to_string(),
+            ident: "~u".to_string(),
+            host: "host".to_string(),
+            server_sid: "002".to_string(),
+            realname: "Real Name".to_string(),
+        }
+    }
+
+    #[test]
+    fn user_introduced_adds_to_nick_map() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001AAAAAA", "alice"));
+        assert_eq!(state.nick_of("001AAAAAA"), Some("alice"));
+    }
+
+    #[test]
+    fn user_nick_changed_updates_nick() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001AAAAAA", "alice"));
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserNickChanged {
+                uid: "001AAAAAA".to_string(),
+                new_nick: "alice_".to_string(),
+            },
+        );
+        assert_eq!(state.nick_of("001AAAAAA"), Some("alice_"));
+    }
+
+    #[test]
+    fn user_quit_removes_from_nick_map() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001AAAAAA", "alice"));
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserQuit {
+                uid: "001AAAAAA".to_string(),
+                reason: "Quit".to_string(),
+            },
+        );
+        assert_eq!(state.nick_of("001AAAAAA"), None);
+    }
+
+    #[test]
+    fn link_down_clears_nick_map() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001AAAAAA", "alice"));
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::LinkDown {
+                reason: "gone".to_string(),
+            },
+        );
+        assert_eq!(state.nick_of("001AAAAAA"), None);
+    }
+
+    #[test]
+    fn link_down_clears_channel_ts() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::ChannelBurst {
+                channel: "#general".to_string(),
+                ts: 1_000,
+                members: vec![],
+            },
+        );
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::LinkDown {
+                reason: "gone".to_string(),
+            },
+        );
+        assert_eq!(state.ts_for_channel("#general"), None);
+    }
+
+    #[test]
+    fn channel_burst_stores_timestamp() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::ChannelBurst {
+                channel: "#general".to_string(),
+                ts: 1_700_000_000,
+                members: vec![],
+            },
+        );
+        assert_eq!(state.ts_for_channel("#general"), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn channel_burst_does_not_overwrite_existing_ts() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::ChannelBurst {
+                channel: "#general".to_string(),
+                ts: 1_000,
+                members: vec![],
+            },
+        );
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::ChannelBurst {
+                channel: "#general".to_string(),
+                ts: 2_000,
+                members: vec![],
+            },
+        );
+        assert_eq!(state.ts_for_channel("#general"), Some(1_000));
+    }
+
+    #[test]
+    fn channel_ts_lookup_is_case_insensitive() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::ChannelBurst {
+                channel: "#General".to_string(),
+                ts: 42,
+                members: vec![],
+            },
+        );
+        assert_eq!(state.ts_for_channel("#general"), Some(42));
+        assert_eq!(state.ts_for_channel("#GENERAL"), Some(42));
+    }
+
+    #[test]
+    fn nick_forced_updates_external_nick() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("002BBBBBB", "bob"));
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::NickForced {
+                uid: "002BBBBBB".to_string(),
+                new_nick: "bob_".to_string(),
+            },
+        );
+        assert_eq!(state.nick_of("002BBBBBB"), Some("bob_"));
+    }
+
+    #[test]
+    fn nick_forced_updates_pseudoclient_nick() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        // Introduce a pseudoclient
+        pm.introduce(
+            99,
+            "discorduser",
+            "Discord User",
+            &["#general".to_string()],
+            1000,
+        )
+        .expect("introduce should succeed");
+        let uid = pm.get_by_discord_id(99).expect("should exist").uid.clone();
+        let orig_nick = pm.get_by_discord_id(99).expect("should exist").nick.clone();
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::NickForced {
+                uid: uid.clone(),
+                new_nick: "newnick".to_string(),
+            },
+        );
+        let updated_nick = pm
+            .get_by_discord_id(99)
+            .expect("should still exist")
+            .nick
+            .clone();
+        assert_ne!(updated_nick, orig_nick, "nick should have changed");
+        assert_eq!(updated_nick, "newnick");
+    }
+
+    #[test]
+    fn user_parted_removes_pseudoclient_from_channel() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        pm.introduce(77, "testuser", "Test User", &["#lobby".to_string()], 1000)
+            .expect("introduce should succeed");
+        let uid = pm.get_by_discord_id(77).expect("should exist").uid.clone();
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserParted {
+                uid,
+                channel: "#lobby".to_string(),
+                reason: None,
+            },
+        );
+        let channels = &pm.get_by_discord_id(77).map(|s| s.channels.clone());
+        // After parting the only channel the pseudoclient should be removed entirely
+        // (PseudoclientManager::part_channel returns Quit when no channels remain)
+        assert!(
+            channels.is_none()
+                || channels
+                    .as_ref()
+                    .map_or(true, |c| !c.contains(&"#lobby".to_string())),
+            "pseudoclient should no longer be in #lobby"
+        );
+    }
+
+    #[test]
+    fn user_kicked_removes_pseudoclient_from_channel() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        pm.introduce(
+            88,
+            "testuser2",
+            "Test User 2",
+            &["#kicked".to_string()],
+            1000,
+        )
+        .expect("introduce should succeed");
+        let uid = pm.get_by_discord_id(88).expect("should exist").uid.clone();
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserKicked {
+                uid,
+                channel: "#kicked".to_string(),
+                by_uid: "003CCCCCC".to_string(),
+                reason: "test".to_string(),
+            },
+        );
+        let channels = &pm.get_by_discord_id(88).map(|s| s.channels.clone());
+        assert!(
+            channels.is_none()
+                || channels
+                    .as_ref()
+                    .map_or(true, |c| !c.contains(&"#kicked".to_string())),
+            "pseudoclient should no longer be in #kicked"
+        );
+    }
+
+    #[test]
+    fn user_parted_ignores_external_user() {
+        // A PART from an external user (not our pseudoclient) should not crash.
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("002ZZZZZZ", "extern"));
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserParted {
+                uid: "002ZZZZZZ".to_string(),
+                channel: "#general".to_string(),
+                reason: None,
+            },
+        );
+        // Still trackable in nick map
+        assert_eq!(state.nick_of("002ZZZZZZ"), Some("extern"));
+    }
+
+    #[test]
+    fn link_down_resets_pseudoclient_manager() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        pm.introduce(55, "user55", "User 55", &["#test".to_string()], 1000)
+            .expect("introduce should succeed");
+        assert!(pm.get_by_discord_id(55).is_some());
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::LinkDown {
+                reason: "down".to_string(),
+            },
+        );
+        assert!(
+            pm.get_by_discord_id(55).is_none(),
+            "PseudoclientManager should be reset"
+        );
     }
 }

@@ -126,15 +126,25 @@ pub(crate) fn build_member_snapshot_event(
     members: &[RawMemberData<'_>],
     presences: &HashMap<u64, DiscordPresence>,
 ) -> DiscordEvent {
+    // Only include non-offline members in the burst.  Offline members are
+    // excluded to keep the initial IRC channel population small; they will be
+    // introduced lazily when they come online (PRESENCE_UPDATE) or first speak
+    // (MESSAGE_CREATE).
     let member_infos: Vec<MemberInfo> = members
         .iter()
-        .map(|m| MemberInfo {
-            user_id: m.user_id,
-            display_name: resolve_display_name(m.nick, m.global_name, m.username).to_owned(),
-            presence: presences
+        .filter_map(|m| {
+            let presence = presences
                 .get(&m.user_id)
                 .copied()
-                .unwrap_or(DiscordPresence::Offline),
+                .unwrap_or(DiscordPresence::Offline);
+            if presence == DiscordPresence::Offline {
+                return None;
+            }
+            Some(MemberInfo {
+                user_id: m.user_id,
+                display_name: resolve_display_name(m.nick, m.global_name, m.username).to_owned(),
+                presence,
+            })
         })
         .collect();
     DiscordEvent::MemberSnapshot {
@@ -462,7 +472,7 @@ mod tests {
     // ---------------------------------------------------------------------------
 
     #[test]
-    fn snapshot_with_presences_uses_correct_status() {
+    fn snapshot_excludes_offline_members_includes_online() {
         let members = vec![
             RawMemberData {
                 user_id: 1,
@@ -479,7 +489,7 @@ mod tests {
         ];
         let mut presences = HashMap::new();
         presences.insert(1u64, DiscordPresence::Online);
-        // user 2 absent → defaults to Offline
+        // user 2 absent from presences → Offline → must be excluded
 
         let ev = build_member_snapshot_event(99, &members, &presences);
         let DiscordEvent::MemberSnapshot {
@@ -490,12 +500,13 @@ mod tests {
             panic!("expected MemberSnapshot");
         };
         assert_eq!(guild_id, 99);
+        assert_eq!(infos.len(), 1, "offline member must be excluded");
+        assert_eq!(infos[0].user_id, 1);
         assert_eq!(infos[0].presence, DiscordPresence::Online);
-        assert_eq!(infos[1].presence, DiscordPresence::Offline);
     }
 
     #[test]
-    fn snapshot_with_no_presences_all_offline() {
+    fn snapshot_with_all_offline_is_empty() {
         let members = vec![RawMemberData {
             user_id: 5,
             nick: Some("N"),
@@ -506,8 +517,38 @@ mod tests {
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
         };
-        assert_eq!(infos[0].presence, DiscordPresence::Offline);
-        assert_eq!(infos[0].display_name, "N");
+        assert!(
+            infos.is_empty(),
+            "all-offline snapshot must produce no members"
+        );
+    }
+
+    #[test]
+    fn snapshot_non_offline_statuses_all_included() {
+        // idle and dnd members must be included (only offline is excluded)
+        let members = vec![
+            RawMemberData {
+                user_id: 10,
+                nick: None,
+                global_name: None,
+                username: "idler",
+            },
+            RawMemberData {
+                user_id: 11,
+                nick: None,
+                global_name: None,
+                username: "busy",
+            },
+        ];
+        let mut presences = HashMap::new();
+        presences.insert(10u64, DiscordPresence::Idle);
+        presences.insert(11u64, DiscordPresence::DoNotDisturb);
+
+        let ev = build_member_snapshot_event(1, &members, &presences);
+        let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
+            panic!()
+        };
+        assert_eq!(infos.len(), 2, "idle and dnd members must be included");
     }
 
     // ---------------------------------------------------------------------------

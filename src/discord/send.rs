@@ -139,21 +139,28 @@ pub(crate) fn snapshot_from_cache(cache: &Cache, channel_id: u64) -> Option<Disc
         .map(|(uid, p)| (uid.get(), map_online_status(p.status)))
         .collect();
 
+    // Only include non-offline members, consistent with build_member_snapshot_event.
     let members: Vec<MemberInfo> = guild
         .members
         .values()
-        .map(|m| MemberInfo {
-            user_id: m.user.id.get(),
-            display_name: resolve_display_name(
-                m.nick.as_deref(),
-                m.user.global_name.as_deref(),
-                &m.user.name,
-            )
-            .to_owned(),
-            presence: presences
+        .filter_map(|m| {
+            let presence = presences
                 .get(&m.user.id.get())
                 .copied()
-                .unwrap_or(DiscordPresence::Offline),
+                .unwrap_or(DiscordPresence::Offline);
+            if presence == DiscordPresence::Offline {
+                return None;
+            }
+            Some(MemberInfo {
+                user_id: m.user.id.get(),
+                display_name: resolve_display_name(
+                    m.nick.as_deref(),
+                    m.user.global_name.as_deref(),
+                    &m.user.name,
+                )
+                .to_owned(),
+                presence,
+            })
         })
         .collect();
 

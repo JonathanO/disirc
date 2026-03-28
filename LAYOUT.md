@@ -14,6 +14,7 @@ Update it whenever a module is added, removed, or significantly refactored.
 | `src/config.rs` | Configuration file format (`Config`, `IrcConfig`, `BridgeEntry`, etc.) and validation. Read from `config.toml` at startup. |
 | `src/formatting.rs` | Bidirectional text transforms: Discord markdown ↔ IRC formatting codes, mention/emoji expansion, message splitting, truncation. No I/O. |
 | `src/pseudoclients.rs` | Pseudoclient lifecycle and identity. Tracks Discord users as fake IRC clients; generates UID allocations, nick sanitisation, and builds the UnrealIRCd wire messages (UID/SJOIN/QUIT/PART) to introduce or remove them. |
+| `src/bridge.rs` | **Bridge processing layer.** `BridgeMap` (discord↔IRC channel routing), `IrcState` (external nick map + channel-ts cache), `DiscordState` (display-name cache + guild→irc-channel map), and the five pure relay functions: `discord_to_irc_commands`, `irc_to_discord_command`, `apply_irc_event`, `apply_discord_event`. No I/O; takes and returns protocol-agnostic types (`S2SCommand`, `DiscordCommand`). |
 | `src/signal.rs` | OS signal handling (SIGTERM / Ctrl-C). Wraps `tokio::signal` into a future the main task can `select!` on. |
 | `src/irc/` | IRC abstraction layer — see below. |
 

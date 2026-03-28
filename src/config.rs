@@ -51,7 +51,7 @@ pub fn config_path_from_args() -> PathBuf {
 // Structs
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct Config {
     pub discord: DiscordConfig,
     pub irc: IrcConfig,
@@ -61,12 +61,12 @@ pub struct Config {
     pub bridges: Vec<BridgeEntry>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct DiscordConfig {
     pub token: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct IrcConfig {
     pub uplink: String,
     #[serde(default = "default_port")]
@@ -80,7 +80,7 @@ pub struct IrcConfig {
     pub description: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct PseudoclientConfig {
     #[serde(default = "default_host_suffix")]
     pub host_suffix: String,

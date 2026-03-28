@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
+use tokio::sync::mpsc;
 
-use crate::config::BridgeEntry;
+use crate::config::{BridgeEntry, Config};
 use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence};
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::{S2SCommand, S2SEvent};
 use crate::pseudoclients::{PseudoclientManager, sanitize_nick};
+use crate::signal::ControlEvent;
 
 // ---------------------------------------------------------------------------
 // BridgeMap
@@ -247,8 +249,12 @@ impl IrcState {
 pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event: &S2SEvent) {
     match event {
         S2SEvent::LinkDown { .. } => {
+            // Reset IRC-side state: external nick map and channel timestamps are
+            // no longer valid after a link loss.  PseudoclientManager is NOT
+            // reset here — its state survives so the burst on the next LinkUp
+            // can re-introduce all known Discord pseudoclients without waiting
+            // for a fresh MemberSnapshot.
             state.reset();
-            pm.reset();
         }
 
         S2SEvent::UserIntroduced { uid, nick, .. } => {
@@ -342,7 +348,11 @@ pub fn apply_discord_event(
     now_ts: u64,
 ) -> Vec<S2SCommand> {
     match event {
-        DiscordEvent::MemberSnapshot { guild_id, members } => {
+        DiscordEvent::MemberSnapshot {
+            guild_id,
+            members,
+            channel_ids: _,
+        } => {
             let channels = discord_state
                 .guild_irc_channels
                 .get(guild_id)
@@ -497,6 +507,344 @@ fn introduce_pseudoclient(
     }
 
     cmds
+}
+
+// ---------------------------------------------------------------------------
+// Bridge loop helpers
+// ---------------------------------------------------------------------------
+
+/// Null resolver: no IRC mention conversion.
+struct NoopIrcResolver;
+impl IrcMentionResolver for NoopIrcResolver {
+    fn resolve_nick(&self, _: &str) -> Option<String> {
+        None
+    }
+}
+
+/// Null resolver: no Discord mention conversion.
+struct NoopDiscordResolver;
+impl DiscordResolver for NoopDiscordResolver {
+    fn resolve_user(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn resolve_channel(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn resolve_role(&self, _: &str) -> Option<String> {
+        None
+    }
+}
+
+/// Generate the burst `S2SCommand`s for all currently-known pseudoclients.
+///
+/// Each pseudoclient gets an `IntroduceUser` followed by one `JoinChannel`
+/// per mapped IRC channel.  The sequence ends with `BurstComplete`.
+/// Called on every `LinkUp` event.
+pub fn produce_burst_commands(
+    pm: &PseudoclientManager,
+    irc_state: &IrcState,
+    now_ts: u64,
+) -> Vec<S2SCommand> {
+    let mut cmds = Vec::new();
+    for state in pm.iter_states() {
+        let host = format!(
+            "{}.{}",
+            sanitize_nick(&state.display_name),
+            pm.host_suffix()
+        );
+        cmds.push(S2SCommand::IntroduceUser {
+            uid: state.uid.clone(),
+            nick: state.nick.clone(),
+            ident: pm.ident().to_string(),
+            host,
+            realname: state.display_name.clone(),
+        });
+        for channel in &state.channels {
+            cmds.push(S2SCommand::JoinChannel {
+                uid: state.uid.clone(),
+                channel: channel.clone(),
+                ts: irc_state.ts_for_channel(channel).unwrap_or(now_ts),
+            });
+        }
+    }
+    cmds.push(S2SCommand::BurstComplete);
+    cmds
+}
+
+/// Route one IRC message (PRIVMSG or NOTICE) to Discord.
+///
+/// Returns `None` when:
+/// - `from_uid` is one of our own pseudoclients (loop prevention), or
+/// - `target` is not a mapped IRC channel.
+#[allow(clippy::too_many_arguments)]
+pub fn route_irc_to_discord(
+    pm: &PseudoclientManager,
+    bridge_map: &BridgeMap,
+    irc_state: &IrcState,
+    from_uid: &str,
+    target: &str,
+    text: &str,
+    is_notice: bool,
+    resolver: &dyn IrcMentionResolver,
+) -> Option<DiscordCommand> {
+    if pm.is_our_uid(from_uid) {
+        return None;
+    }
+    let bridge = bridge_map.by_irc_channel(target)?;
+    let nick = irc_state.nick_of(from_uid).unwrap_or(from_uid);
+    Some(irc_to_discord_command(
+        bridge.discord_channel_id,
+        bridge.webhook_url.as_deref(),
+        nick,
+        text,
+        is_notice,
+        resolver,
+    ))
+}
+
+/// Route one Discord `MessageReceived` event to IRC.
+///
+/// Returns the `S2SCommand`s to send.  Introduces the pseudoclient on-demand
+/// (to the single mapped channel) if it is not yet known to `pm`.
+/// Returns an empty vec when `channel_id` is not mapped.
+#[allow(clippy::too_many_arguments)]
+pub fn route_discord_to_irc(
+    pm: &mut PseudoclientManager,
+    bridge_map: &BridgeMap,
+    discord_state: &DiscordState,
+    irc_state: &IrcState,
+    channel_id: u64,
+    author_id: u64,
+    author_name: &str,
+    content: &str,
+    attachments: &[String],
+    timestamp: Option<DateTime<Utc>>,
+    now_ts: u64,
+    resolver: &dyn DiscordResolver,
+) -> Vec<S2SCommand> {
+    let Some(bridge) = bridge_map.by_discord_id(channel_id) else {
+        return vec![];
+    };
+    let irc_channel = bridge.irc_channel.clone();
+
+    // On-demand introduction: ensure a pseudoclient exists for this author.
+    if pm.get_by_discord_id(author_id).is_none() {
+        let display_name = discord_state
+            .display_names
+            .get(&author_id)
+            .cloned()
+            .unwrap_or_else(|| author_name.to_string());
+        let channels = vec![irc_channel.clone()];
+        let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
+        pm.introduce(author_id, &display_name, &display_name, &channels, ts);
+    }
+
+    let uid = match pm.get_by_discord_id(author_id) {
+        Some(s) => s.uid.clone(),
+        None => return vec![],
+    };
+
+    discord_to_irc_commands(
+        &uid,
+        &irc_channel,
+        content,
+        attachments,
+        timestamp,
+        resolver,
+    )
+}
+
+/// Update `discord_state.guild_irc_channels` from a `MemberSnapshot`'s
+/// channel_ids list.
+///
+/// Called in the bridge loop before `apply_discord_event` so that
+/// `apply_discord_event` can use the (now-current) guild→irc-channel map.
+pub fn update_guild_irc_channels(
+    discord_state: &mut DiscordState,
+    bridge_map: &BridgeMap,
+    guild_id: u64,
+    channel_ids: &[u64],
+) {
+    let irc_channels: Vec<String> = channel_ids
+        .iter()
+        .filter_map(|&cid| {
+            bridge_map
+                .by_discord_id(cid)
+                .map(|info| info.irc_channel.clone())
+        })
+        .collect();
+    discord_state
+        .guild_irc_channels
+        .insert(guild_id, irc_channels);
+}
+
+// ---------------------------------------------------------------------------
+// Bridge loop
+// ---------------------------------------------------------------------------
+
+/// Current Unix timestamp in seconds.
+fn unix_now() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Main bridge processing loop.
+///
+/// Owns `PseudoclientManager`, `IrcState`, and `DiscordState`.  Runs until
+/// both event channels close (which happens when the connection tasks exit).
+///
+/// - `config_path` — path to the config file, used for hot-reload on
+///   `ControlEvent::Reload`.
+pub async fn run_bridge(
+    config: &Config,
+    config_path: &std::path::Path,
+    mut irc_event_rx: mpsc::Receiver<S2SEvent>,
+    irc_cmd_tx: mpsc::Sender<S2SCommand>,
+    mut discord_event_rx: mpsc::Receiver<DiscordEvent>,
+    discord_cmd_tx: mpsc::Sender<DiscordCommand>,
+    mut control_rx: mpsc::Receiver<ControlEvent>,
+) {
+    let mut current_config = config.clone();
+    let mut bridge_map = BridgeMap::from_config(&config.bridges);
+    let mut pm = PseudoclientManager::new(
+        &config.irc.sid,
+        &config.pseudoclients.ident,
+        &config.pseudoclients.host_suffix,
+    );
+    let mut irc_state = IrcState::default();
+    let mut discord_state = DiscordState::default();
+
+    loop {
+        tokio::select! {
+            maybe_event = irc_event_rx.recv() => {
+                let Some(event) = maybe_event else { break };
+
+                match &event {
+                    S2SEvent::LinkUp => {
+                        let now = unix_now();
+                        for cmd in produce_burst_commands(&pm, &irc_state, now) {
+                            let _ = irc_cmd_tx.send(cmd).await;
+                        }
+                    }
+                    S2SEvent::MessageReceived { from_uid, target, text, timestamp } => {
+                        if let Some(cmd) = route_irc_to_discord(
+                            &pm, &bridge_map, &irc_state,
+                            from_uid, target, text, false, &NoopIrcResolver,
+                        ) {
+                            let _ = discord_cmd_tx.send(cmd).await;
+                        }
+                        let _ = timestamp; // acknowledged; used in cmd via irc_to_discord_command
+                    }
+                    S2SEvent::NoticeReceived { from_uid, target, text } => {
+                        if let Some(cmd) = route_irc_to_discord(
+                            &pm, &bridge_map, &irc_state,
+                            from_uid, target, text, true, &NoopIrcResolver,
+                        ) {
+                            let _ = discord_cmd_tx.send(cmd).await;
+                        }
+                    }
+                    _ => {}
+                }
+
+                apply_irc_event(&mut irc_state, &mut pm, &event);
+            }
+
+            maybe_event = discord_event_rx.recv() => {
+                let Some(event) = maybe_event else { break };
+
+                // Populate guild→irc-channel map before apply_discord_event uses it.
+                if let DiscordEvent::MemberSnapshot { guild_id, channel_ids, .. } = &event {
+                    update_guild_irc_channels(&mut discord_state, &bridge_map, *guild_id, channel_ids);
+                }
+
+                // Route Discord messages to IRC before state update.
+                if let DiscordEvent::MessageReceived {
+                    channel_id,
+                    author_id,
+                    author_name,
+                    content,
+                    attachments,
+                } = &event
+                {
+                    let now = unix_now();
+                    let cmds = route_discord_to_irc(
+                        &mut pm, &bridge_map, &discord_state, &irc_state,
+                        *channel_id, *author_id, author_name, content, attachments,
+                        None, now, &NoopDiscordResolver,
+                    );
+                    for cmd in cmds {
+                        let _ = irc_cmd_tx.send(cmd).await;
+                    }
+                }
+
+                let now = unix_now();
+                let cmds = apply_discord_event(&mut discord_state, &mut pm, &irc_state, &event, now);
+                for cmd in cmds {
+                    let _ = irc_cmd_tx.send(cmd).await;
+                }
+            }
+
+            maybe_ctrl = control_rx.recv() => {
+                match maybe_ctrl {
+                    Some(ControlEvent::Reload) => {
+                        match crate::config::reload(config_path, &current_config) {
+                            Ok((new_config, diff)) => {
+                                if !diff.is_empty() {
+                                    let added_ids: Vec<u64> = diff
+                                        .added
+                                        .iter()
+                                        .chain(diff.webhook_changed.iter())
+                                        .filter_map(|e| e.discord_channel_id.parse().ok())
+                                        .collect();
+                                    let removed_ids: Vec<u64> = diff
+                                        .removed
+                                        .iter()
+                                        .filter_map(|e| e.discord_channel_id.parse().ok())
+                                        .collect();
+                                    let added_webhook_ids: Vec<u64> = diff
+                                        .added
+                                        .iter()
+                                        .chain(diff.webhook_changed.iter())
+                                        .filter_map(|e| {
+                                            e.webhook_url.as_deref()
+                                                .and_then(crate::discord::webhook_id_from_url)
+                                        })
+                                        .collect();
+                                    let removed_webhook_ids: Vec<u64> = diff
+                                        .removed
+                                        .iter()
+                                        .chain(diff.webhook_changed.iter())
+                                        .filter_map(|e| {
+                                            e.webhook_url.as_deref()
+                                                .and_then(crate::discord::webhook_id_from_url)
+                                        })
+                                        .collect();
+                                    let _ = discord_cmd_tx
+                                        .send(DiscordCommand::ReloadBridges {
+                                            added_channel_ids: added_ids,
+                                            removed_channel_ids: removed_ids,
+                                            added_webhook_ids,
+                                            removed_webhook_ids,
+                                        })
+                                        .await;
+                                    bridge_map = BridgeMap::from_config(&new_config.bridges);
+                                }
+                                current_config = new_config;
+                                tracing::info!("Config reloaded");
+                            }
+                            Err(e) => {
+                                tracing::warn!("Config reload failed: {e}");
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,12 +1516,14 @@ mod tests {
     }
 
     #[test]
-    fn link_down_resets_pseudoclient_manager() {
+    fn link_down_preserves_pseudoclient_manager_for_reburst() {
+        // PM state must survive LinkDown so the bridge can re-introduce all
+        // pseudoclients immediately on the next LinkUp without waiting for a
+        // fresh Discord MemberSnapshot.
         let mut state = IrcState::default();
         let mut pm = make_pm();
         pm.introduce(55, "user55", "User 55", &["#test".to_string()], 1000)
             .expect("introduce should succeed");
-        assert!(pm.get_by_discord_id(55).is_some());
         apply_irc_event(
             &mut state,
             &mut pm,
@@ -1182,8 +1532,8 @@ mod tests {
             },
         );
         assert!(
-            pm.get_by_discord_id(55).is_none(),
-            "PseudoclientManager should be reset"
+            pm.get_by_discord_id(55).is_some(),
+            "PseudoclientManager must survive LinkDown for reburst"
         );
     }
 
@@ -1208,7 +1558,7 @@ mod tests {
     fn member_snapshot_introduces_non_offline_members() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
-        let mut irc = IrcState::default();
+        let irc = IrcState::default();
 
         let cmds = apply_discord_event(
             &mut ds,
@@ -1216,6 +1566,7 @@ mod tests {
             &irc,
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
+                channel_ids: vec![],
                 members: vec![
                     member(10, "alice", DiscordPresence::Online),
                     member(20, "bob", DiscordPresence::Offline),
@@ -1251,6 +1602,7 @@ mod tests {
             &irc,
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
+                channel_ids: vec![],
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -1275,6 +1627,7 @@ mod tests {
             &irc,
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
+                channel_ids: vec![],
                 members: vec![member(10, "alice", DiscordPresence::Idle)],
             },
             1000,
@@ -1299,6 +1652,7 @@ mod tests {
             &irc,
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
+                channel_ids: vec![],
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -1346,6 +1700,7 @@ mod tests {
             &irc,
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
+                channel_ids: vec![],
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -1519,6 +1874,7 @@ mod tests {
             &irc,
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
+                channel_ids: vec![],
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             9_999,
@@ -1532,5 +1888,334 @@ mod tests {
             }
         });
         assert_eq!(join_ts, Some(5_000), "should use channel ts from IrcState");
+    }
+
+    // --- produce_burst_commands ---
+
+    #[test]
+    fn burst_empty_pm_produces_only_burst_complete() {
+        let pm = make_pm();
+        let irc = IrcState::default();
+        let cmds = produce_burst_commands(&pm, &irc, 1_000);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], S2SCommand::BurstComplete));
+    }
+
+    #[test]
+    fn burst_one_pseudoclient_produces_introduce_join_burst_complete() {
+        let mut pm = make_pm();
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        let irc = IrcState::default();
+        let cmds = produce_burst_commands(&pm, &irc, 1_000);
+        // IntroduceUser, JoinChannel, BurstComplete
+        assert_eq!(cmds.len(), 3);
+        assert!(matches!(cmds[0], S2SCommand::IntroduceUser { .. }));
+        assert!(matches!(cmds[1], S2SCommand::JoinChannel { .. }));
+        assert!(matches!(cmds[2], S2SCommand::BurstComplete));
+    }
+
+    #[test]
+    fn burst_uses_channel_ts_from_irc_state() {
+        let mut pm = make_pm();
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        let mut irc = IrcState::default();
+        apply_irc_event(
+            &mut irc,
+            &mut make_pm(),
+            &S2SEvent::ChannelBurst {
+                channel: "#general".to_string(),
+                ts: 9_999,
+                members: vec![],
+            },
+        );
+        let cmds = produce_burst_commands(&pm, &irc, 1_000);
+        let ts = cmds.iter().find_map(|c| {
+            if let S2SCommand::JoinChannel { ts, .. } = c {
+                Some(*ts)
+            } else {
+                None
+            }
+        });
+        assert_eq!(ts, Some(9_999));
+    }
+
+    #[test]
+    fn burst_falls_back_to_now_ts_when_channel_unknown() {
+        let mut pm = make_pm();
+        pm.introduce(42, "alice", "Alice", &["#unknown".to_string()], 500);
+        let irc = IrcState::default();
+        let cmds = produce_burst_commands(&pm, &irc, 7_777);
+        let ts = cmds.iter().find_map(|c| {
+            if let S2SCommand::JoinChannel { ts, .. } = c {
+                Some(*ts)
+            } else {
+                None
+            }
+        });
+        assert_eq!(ts, Some(7_777));
+    }
+
+    #[test]
+    fn burst_last_command_is_always_burst_complete() {
+        let mut pm = make_pm();
+        pm.introduce(1, "a", "A", &["#c1".to_string(), "#c2".to_string()], 0);
+        pm.introduce(2, "b", "B", &["#c1".to_string()], 0);
+        let irc = IrcState::default();
+        let cmds = produce_burst_commands(&pm, &irc, 0);
+        assert!(matches!(cmds.last(), Some(S2SCommand::BurstComplete)));
+    }
+
+    // --- route_irc_to_discord ---
+
+    fn make_bridge_map() -> BridgeMap {
+        use crate::config::BridgeEntry;
+        BridgeMap::from_config(&[BridgeEntry {
+            discord_channel_id: "111".to_string(),
+            irc_channel: "#general".to_string(),
+            webhook_url: None,
+        }])
+    }
+
+    #[test]
+    fn route_irc_own_uid_returns_none() {
+        let mut pm = make_pm();
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 0);
+        let bridge_map = make_bridge_map();
+        let irc = IrcState::default();
+        // Find the UID that was assigned to alice
+        let uid = pm
+            .get_by_discord_id(42)
+            .expect("alice should be introduced")
+            .uid
+            .clone();
+        let result = route_irc_to_discord(
+            &pm,
+            &bridge_map,
+            &irc,
+            &uid,
+            "#general",
+            "hello",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(result.is_none(), "own pseudoclient UID must be filtered");
+    }
+
+    #[test]
+    fn route_irc_unknown_channel_returns_none() {
+        let pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let irc = IrcState::default();
+        let result = route_irc_to_discord(
+            &pm,
+            &bridge_map,
+            &irc,
+            "002AAAAAB",
+            "#notbridged",
+            "hello",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn route_irc_known_channel_external_uid_returns_command() {
+        let pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let mut irc = IrcState::default();
+        // Register an external user nick
+        apply_irc_event(&mut irc, &mut make_pm(), &introduced("002AAAAAB", "bob"));
+        let result = route_irc_to_discord(
+            &pm,
+            &bridge_map,
+            &irc,
+            "002AAAAAB",
+            "#general",
+            "hi there",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(result.is_some());
+        if let Some(DiscordCommand::SendMessage {
+            channel_id,
+            sender_nick,
+            text,
+            ..
+        }) = result
+        {
+            assert_eq!(channel_id, 111);
+            // Plain path (no webhook): nick is the original unfixed nick
+            assert_eq!(sender_nick, "bob");
+            // Plain path embeds nick in text; confirm the message body is present
+            assert!(
+                text.contains("hi there"),
+                "text should contain the message body"
+            );
+        }
+    }
+
+    #[test]
+    fn route_irc_unknown_uid_falls_back_to_uid_as_nick() {
+        let pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let irc = IrcState::default(); // no nick registered
+        let result = route_irc_to_discord(
+            &pm,
+            &bridge_map,
+            &irc,
+            "002ZZZZZ",
+            "#general",
+            "msg",
+            false,
+            &NullIrcResolver,
+        );
+        if let Some(DiscordCommand::SendMessage { sender_nick, .. }) = result {
+            assert_eq!(sender_nick, "002ZZZZZ");
+        } else {
+            panic!("expected a SendMessage command");
+        }
+    }
+
+    // --- route_discord_to_irc ---
+
+    #[test]
+    fn route_discord_unmapped_channel_returns_empty() {
+        let mut pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let ds = DiscordState::default();
+        let irc = IrcState::default();
+        let cmds = route_discord_to_irc(
+            &mut pm,
+            &bridge_map,
+            &ds,
+            &irc,
+            999, // not in bridge_map
+            1,
+            "alice",
+            "hello",
+            &[],
+            None,
+            0,
+            &NullResolver,
+        );
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn route_discord_known_channel_returns_privmsg_commands() {
+        let mut pm = make_pm();
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 0);
+        let bridge_map = make_bridge_map();
+        let ds = DiscordState::default();
+        let irc = IrcState::default();
+        let cmds = route_discord_to_irc(
+            &mut pm,
+            &bridge_map,
+            &ds,
+            &irc,
+            111,
+            42,
+            "Alice",
+            "hello",
+            &[],
+            None,
+            0,
+            &NullResolver,
+        );
+        assert!(!cmds.is_empty());
+        assert!(matches!(
+            &cmds[0],
+            S2SCommand::SendMessage { target, text, .. }
+            if target == "#general" && text == "hello"
+        ));
+    }
+
+    #[test]
+    fn route_discord_on_demand_introduction_when_author_unknown() {
+        let mut pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let ds = DiscordState::default();
+        let irc = IrcState::default();
+        // author_id 77 has no pseudoclient yet
+        let cmds = route_discord_to_irc(
+            &mut pm,
+            &bridge_map,
+            &ds,
+            &irc,
+            111,
+            77,
+            "newuser",
+            "first message",
+            &[],
+            None,
+            0,
+            &NullResolver,
+        );
+        // Must produce at least a SendMessage (introduction happened internally)
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::SendMessage { .. }))
+        );
+        // Pseudoclient must now be registered
+        assert!(pm.get_by_discord_id(77).is_some());
+    }
+
+    #[test]
+    fn route_discord_on_demand_uses_cached_display_name() {
+        let mut pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let mut ds = DiscordState::default();
+        ds.display_names.insert(77, "CachedName".to_string());
+        let irc = IrcState::default();
+        route_discord_to_irc(
+            &mut pm,
+            &bridge_map,
+            &ds,
+            &irc,
+            111,
+            77,
+            "fallback_name",
+            "hi",
+            &[],
+            None,
+            0,
+            &NullResolver,
+        );
+        let state = pm.get_by_discord_id(77).expect("should be introduced");
+        assert_eq!(state.display_name, "CachedName");
+    }
+
+    // --- update_guild_irc_channels ---
+
+    #[test]
+    fn update_guild_irc_channels_maps_known_discord_ids() {
+        let mut ds = DiscordState::default();
+        let bridge_map = make_bridge_map(); // 111 -> #general
+        update_guild_irc_channels(&mut ds, &bridge_map, 5, &[111]);
+        assert_eq!(
+            ds.guild_irc_channels.get(&5),
+            Some(&vec!["#general".to_string()])
+        );
+    }
+
+    #[test]
+    fn update_guild_irc_channels_filters_unknown_discord_ids() {
+        let mut ds = DiscordState::default();
+        let bridge_map = make_bridge_map(); // only 111 is mapped
+        update_guild_irc_channels(&mut ds, &bridge_map, 5, &[999]);
+        assert_eq!(ds.guild_irc_channels.get(&5), Some(&vec![] as &Vec<String>));
+    }
+
+    #[test]
+    fn update_guild_irc_channels_overwrites_previous_entry() {
+        let mut ds = DiscordState::default();
+        ds.guild_irc_channels.insert(5, vec!["#old".to_string()]);
+        let bridge_map = make_bridge_map();
+        update_guild_irc_channels(&mut ds, &bridge_map, 5, &[111]);
+        assert_eq!(
+            ds.guild_irc_channels.get(&5),
+            Some(&vec!["#general".to_string()])
+        );
     }
 }

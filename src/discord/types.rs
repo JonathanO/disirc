@@ -76,6 +76,10 @@ pub enum DiscordEvent {
     MemberSnapshot {
         guild_id: u64,
         members: Vec<MemberInfo>,
+        /// Discord channel IDs in this guild that have a `[[bridge]]` entry.
+        /// Supplied so the bridge loop can derive the IRC channel list for this
+        /// guild without needing direct access to the Discord cache.
+        channel_ids: Vec<u64>,
     },
 }
 

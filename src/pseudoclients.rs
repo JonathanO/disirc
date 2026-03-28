@@ -504,6 +504,11 @@ impl PseudoclientManager {
     pub fn host_suffix(&self) -> &str {
         &self.host_suffix
     }
+
+    /// Iterate over all active pseudoclient states.
+    pub fn iter_states(&self) -> impl Iterator<Item = &PseudoclientState> {
+        self.by_discord_id.values()
+    }
 }
 
 /// Result of `part_channel`.

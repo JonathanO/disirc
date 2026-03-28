@@ -125,6 +125,7 @@ pub(crate) fn build_member_snapshot_event(
     guild_id: u64,
     members: &[RawMemberData<'_>],
     presences: &HashMap<u64, DiscordPresence>,
+    channel_ids: Vec<u64>,
 ) -> DiscordEvent {
     // Only include non-offline members in the burst.  Offline members are
     // excluded to keep the initial IRC channel population small; they will be
@@ -150,6 +151,7 @@ pub(crate) fn build_member_snapshot_event(
     DiscordEvent::MemberSnapshot {
         guild_id,
         members: member_infos,
+        channel_ids,
     }
 }
 
@@ -227,7 +229,19 @@ impl EventHandler for DiscordHandler {
             })
             .collect();
 
-        let event = build_member_snapshot_event(guild.id.get(), &raw, &presences);
+        // Determine which bridged channel IDs belong to this guild.
+        let guild_channel_ids: Vec<u64> = {
+            let bridged = self.bridged_channel_ids.read().await;
+            guild
+                .channels
+                .keys()
+                .filter(|cid| bridged.contains(&cid.get()))
+                .map(|cid| cid.get())
+                .collect()
+        };
+
+        let event =
+            build_member_snapshot_event(guild.id.get(), &raw, &presences, guild_channel_ids);
         let _ = self.event_tx.send(event).await;
     }
 
@@ -491,10 +505,11 @@ mod tests {
         presences.insert(1u64, DiscordPresence::Online);
         // user 2 absent from presences → Offline → must be excluded
 
-        let ev = build_member_snapshot_event(99, &members, &presences);
+        let ev = build_member_snapshot_event(99, &members, &presences, vec![]);
         let DiscordEvent::MemberSnapshot {
             guild_id,
             members: infos,
+            ..
         } = ev
         else {
             panic!("expected MemberSnapshot");
@@ -513,7 +528,7 @@ mod tests {
             global_name: None,
             username: "u",
         }];
-        let ev = build_member_snapshot_event(10, &members, &HashMap::new());
+        let ev = build_member_snapshot_event(10, &members, &HashMap::new(), vec![]);
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
         };
@@ -544,7 +559,7 @@ mod tests {
         presences.insert(10u64, DiscordPresence::Idle);
         presences.insert(11u64, DiscordPresence::DoNotDisturb);
 
-        let ev = build_member_snapshot_event(1, &members, &presences);
+        let ev = build_member_snapshot_event(1, &members, &presences, vec![]);
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
         };

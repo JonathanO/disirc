@@ -120,7 +120,11 @@ pub(crate) fn apply_reload(
 ///
 /// Returns `None` if the channel or its guild is not present in the cache
 /// (should not happen in normal operation after startup).
-pub(crate) fn snapshot_from_cache(cache: &Cache, channel_id: u64) -> Option<DiscordEvent> {
+pub(crate) fn snapshot_from_cache(
+    cache: &Cache,
+    channel_id: u64,
+    all_bridged_channel_ids: &std::collections::HashSet<u64>,
+) -> Option<DiscordEvent> {
     // Find the owning guild by checking each guild's channel map.
     // disirc connects to a small number of guilds so this iteration is cheap.
     let target = ChannelId::new(channel_id);
@@ -164,6 +168,14 @@ pub(crate) fn snapshot_from_cache(cache: &Cache, channel_id: u64) -> Option<Disc
         })
         .collect();
 
+    // Bridged Discord channel IDs that belong to this guild.
+    let channel_ids: Vec<u64> = guild
+        .channels
+        .keys()
+        .filter(|cid| all_bridged_channel_ids.contains(&cid.get()))
+        .map(|cid| cid.get())
+        .collect();
+
     debug!(
         guild_id = guild_id.get(),
         count = members.len(),
@@ -173,6 +185,7 @@ pub(crate) fn snapshot_from_cache(cache: &Cache, channel_id: u64) -> Option<Disc
     Some(DiscordEvent::MemberSnapshot {
         guild_id: guild_id.get(),
         members,
+        channel_ids,
     })
 }
 
@@ -227,8 +240,10 @@ pub(crate) async fn process_discord_commands(
                     );
                 }
                 // Emit member snapshots for each newly added channel from cache.
+                let all_channel_ids: std::collections::HashSet<u64> =
+                    { channel_ids.read().await.clone() };
                 for channel_id in added_channel_ids {
-                    match snapshot_from_cache(&cache, channel_id) {
+                    match snapshot_from_cache(&cache, channel_id, &all_channel_ids) {
                         Some(event) => {
                             let _ = event_tx.send(event).await;
                         }
@@ -414,6 +429,7 @@ mod tests {
     #[test]
     fn snapshot_from_cache_returns_none_for_unknown_channel() {
         let cache = Cache::new();
-        assert!(snapshot_from_cache(&cache, 99_999).is_none());
+        let empty = std::collections::HashSet::new();
+        assert!(snapshot_from_cache(&cache, 99_999, &empty).is_none());
     }
 }

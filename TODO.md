@@ -16,7 +16,7 @@ _(none)_
 | [specs/01-configuration](specs/01-configuration/TODO.md) | ✅ Implemented | — |
 | [specs/02-irc-connection](specs/02-irc-connection/TODO.md) | ✅ Implemented | — |
 | [specs/03-discord-connection](specs/03-discord-connection/TODO.md) | ✅ Implemented | — |
-| [specs/04-message-bridging](specs/04-message-bridging/TODO.md) | 🔨 In Progress | task 1/6 |
+| [specs/04-message-bridging](specs/04-message-bridging/TODO.md) | 🔨 In Progress | all tasks done; mutation testing pending |
 | [specs/05-formatting](specs/05-formatting/TODO.md) | ✅ Implemented | — |
 | [specs/06-pseudoclients](specs/06-pseudoclients/TODO.md) | ✅ Implemented | — |
 | [specs/07-irc-message-types](specs/07-irc-message-types/TODO.md) | ✅ Implemented | — |

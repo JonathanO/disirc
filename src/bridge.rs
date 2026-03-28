@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::config::BridgeEntry;
-use crate::formatting::DiscordResolver;
+use crate::discord::DiscordCommand;
+use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::S2SCommand;
 
 // ---------------------------------------------------------------------------
@@ -124,6 +125,82 @@ pub fn discord_to_irc_commands(
 }
 
 // ---------------------------------------------------------------------------
+// IRC → Discord relay
+// ---------------------------------------------------------------------------
+
+/// Extract the CTCP ACTION body from a PRIVMSG text, if present.
+///
+/// Returns `Some(body)` for text of the form `\x01ACTION <body>[\x01]`.
+fn extract_action(text: &str) -> Option<&str> {
+    text.strip_prefix("\x01ACTION ")
+        .map(|s| s.strip_suffix('\x01').unwrap_or(s))
+}
+
+/// Build the `DiscordCommand` needed to relay an IRC message to Discord.
+///
+/// Handles three IRC event types:
+/// - `PRIVMSG` (`is_notice = false`, no CTCP prefix) — normal message via
+///   webhook or plain channel send.
+/// - `NOTICE` (`is_notice = true`) — text wrapped in `*…*` (italic) then
+///   sent via webhook or plain channel send.
+/// - `ACTION` (`PRIVMSG` whose text starts with `\x01ACTION `) — formatted
+///   as `* nick body` regardless of send path.
+///
+/// Ping-fix (`U+200B` after the first character) is applied to the nick
+/// wherever it appears as a label: webhook username, `**[nick]**` prefix,
+/// and the `* nick` action prefix.
+pub fn irc_to_discord_command(
+    channel_id: u64,
+    webhook_url: Option<&str>,
+    sender_nick: &str,
+    text: &str,
+    is_notice: bool,
+    resolver: &dyn IrcMentionResolver,
+) -> DiscordCommand {
+    use crate::formatting::{
+        convert_irc_mentions, irc_to_discord_formatting, ping_fix_nick, truncate_for_discord,
+    };
+
+    let use_webhook = webhook_url.is_some();
+    let ping_fixed_nick = ping_fix_nick(sender_nick);
+
+    let (text_body, nick_field) = if let Some(action_body) = extract_action(text) {
+        // CTCP ACTION (/me): "* nick action_body"
+        let fmt = irc_to_discord_formatting(action_body);
+        let with_mentions = convert_irc_mentions(&fmt, resolver);
+        let full = format!("* {ping_fixed_nick} {with_mentions}");
+        let body = truncate_for_discord(&full).into_owned();
+        (body, ping_fixed_nick)
+    } else {
+        // Regular PRIVMSG or NOTICE
+        let fmt = irc_to_discord_formatting(text);
+        let with_mentions = convert_irc_mentions(&fmt, resolver);
+        let content = if is_notice {
+            format!("*{with_mentions}*")
+        } else {
+            with_mentions
+        };
+
+        if use_webhook {
+            let body = truncate_for_discord(&content).into_owned();
+            (body, ping_fixed_nick)
+        } else {
+            // Plain path: embed nick in the message text as "**[nick]** content"
+            let plain = format!("**[{ping_fixed_nick}]** {content}");
+            let body = truncate_for_discord(&plain).into_owned();
+            (body, sender_nick.to_string())
+        }
+    };
+
+    DiscordCommand::SendMessage {
+        channel_id,
+        webhook_url: webhook_url.map(str::to_string),
+        sender_nick: nick_field,
+        text: text_body,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -134,6 +211,9 @@ mod tests {
     use crate::formatting::DiscordResolver;
     use crate::irc::S2SCommand;
 
+    use crate::discord::DiscordCommand;
+    use crate::formatting::IrcMentionResolver;
+
     struct NullResolver;
     impl DiscordResolver for NullResolver {
         fn resolve_user(&self, _: &str) -> Option<String> {
@@ -143,6 +223,13 @@ mod tests {
             None
         }
         fn resolve_role(&self, _: &str) -> Option<String> {
+            None
+        }
+    }
+
+    struct NullIrcResolver;
+    impl IrcMentionResolver for NullIrcResolver {
+        fn resolve_nick(&self, _: &str) -> Option<String> {
             None
         }
     }
@@ -319,5 +406,182 @@ mod tests {
         let map = BridgeMap::from_config(&[]);
         assert!(map.by_discord_id(1).is_none());
         assert!(map.by_irc_channel("#x").is_none());
+    }
+
+    // --- irc_to_discord_command ---
+
+    #[test]
+    fn privmsg_webhook_path_uses_webhook_url() {
+        let cmd = irc_to_discord_command(
+            42,
+            Some("https://discord.com/api/webhooks/1/tok"),
+            "alice",
+            "hello",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { webhook_url: Some(u), .. } if u.contains("webhooks")
+        ));
+    }
+
+    #[test]
+    fn privmsg_plain_path_formats_with_bracket_prefix() {
+        let cmd = irc_to_discord_command(42, None, "alice", "hello", false, &NullIrcResolver);
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { webhook_url: None, text, .. }
+            if text.contains("**[") && text.contains(']') && text.contains("hello")
+        ));
+    }
+
+    #[test]
+    fn notice_webhook_path_wraps_in_italics() {
+        let cmd = irc_to_discord_command(
+            42,
+            Some("https://discord.com/api/webhooks/1/tok"),
+            "bob",
+            "server restart soon",
+            true,
+            &NullIrcResolver,
+        );
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { text, .. }
+            if text.starts_with('*') && text.ends_with('*')
+        ));
+    }
+
+    #[test]
+    fn notice_plain_path_wraps_in_italics_and_has_bracket_prefix() {
+        let cmd = irc_to_discord_command(42, None, "bob", "ping", true, &NullIrcResolver);
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { text, .. }
+            if text.contains("**[") && text.contains("*ping*")
+        ));
+    }
+
+    #[test]
+    fn action_formats_as_star_nick_body() {
+        let cmd = irc_to_discord_command(
+            42,
+            Some("https://discord.com/api/webhooks/1/tok"),
+            "carol",
+            "\x01ACTION waves\x01",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { text, .. } if text.contains("* ") && text.contains("waves")
+        ));
+        if let DiscordCommand::SendMessage { text, .. } = &cmd {
+            assert!(
+                text.starts_with("* "),
+                "expected '* ' prefix, got: {text:?}"
+            );
+            assert!(text.contains("waves"), "action body missing");
+        }
+    }
+
+    #[test]
+    fn action_plain_path_same_star_format() {
+        let cmd = irc_to_discord_command(
+            42,
+            None,
+            "carol",
+            "\x01ACTION waves\x01",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { text, .. }
+            if text.starts_with("* ") && text.contains("waves")
+        ));
+    }
+
+    #[test]
+    fn action_without_trailing_ctcp_delimiter_still_detected() {
+        let cmd = irc_to_discord_command(
+            42,
+            None,
+            "dave",
+            "\x01ACTION dances",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { text, .. }
+            if text.starts_with("* ") && text.contains("dances")
+        ));
+    }
+
+    #[test]
+    fn ping_fix_applied_to_webhook_username() {
+        let cmd = irc_to_discord_command(
+            42,
+            Some("https://discord.com/api/webhooks/1/tok"),
+            "alice",
+            "hi",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { sender_nick, .. }
+            if sender_nick.contains('\u{200B}')
+        ));
+    }
+
+    #[test]
+    fn ping_fix_applied_to_nick_in_plain_path_text() {
+        let cmd = irc_to_discord_command(42, None, "alice", "hi", false, &NullIrcResolver);
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { text, .. }
+            if text.contains('\u{200B}')
+        ));
+    }
+
+    #[test]
+    fn plain_path_nick_field_is_unfixed_original() {
+        let cmd = irc_to_discord_command(42, None, "alice", "hi", false, &NullIrcResolver);
+        // For the plain path the send layer doesn't use sender_nick as a webhook
+        // username, so we store the original nick (no ping-fix).
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { sender_nick, .. } if sender_nick == "alice"
+        ));
+    }
+
+    #[test]
+    fn channel_id_and_webhook_url_propagated() {
+        let url = "https://discord.com/api/webhooks/99/secret";
+        let cmd = irc_to_discord_command(1234, Some(url), "eve", "test", false, &NullIrcResolver);
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { channel_id: 1234, webhook_url: Some(u), .. }
+            if u == url
+        ));
+    }
+
+    #[test]
+    fn irc_bold_formatting_converted_to_discord_bold() {
+        let cmd = irc_to_discord_command(
+            1,
+            Some("https://discord.com/api/webhooks/1/t"),
+            "nick",
+            "\x02bold\x02",
+            false,
+            &NullIrcResolver,
+        );
+        assert!(matches!(
+            &cmd,
+            DiscordCommand::SendMessage { text, .. } if text.contains("**bold**")
+        ));
     }
 }

@@ -12,6 +12,15 @@ pub enum DiscordPresence {
 }
 
 impl DiscordPresence {
+    /// Returns `true` for any presence that should be represented on IRC
+    /// (online, idle, do-not-disturb).  Returns `false` only for `Offline`,
+    /// which is used to exclude members from the initial burst and from cache
+    /// snapshots on config reload.
+    #[must_use]
+    pub fn is_non_offline(self) -> bool {
+        self != Self::Offline
+    }
+
     /// Returns the IRC `AWAY` message text for this presence, or `None` if the
     /// user is considered online (`DiscordPresence::Online`).
     #[must_use]
@@ -126,6 +135,30 @@ mod tests {
     use proptest::prelude::*;
 
     // --- DiscordPresence::away_message ---
+
+    // --- is_non_offline ---
+
+    #[test]
+    fn offline_is_not_non_offline() {
+        assert!(!DiscordPresence::Offline.is_non_offline());
+    }
+
+    #[test]
+    fn online_is_non_offline() {
+        assert!(DiscordPresence::Online.is_non_offline());
+    }
+
+    #[test]
+    fn idle_is_non_offline() {
+        assert!(DiscordPresence::Idle.is_non_offline());
+    }
+
+    #[test]
+    fn dnd_is_non_offline() {
+        assert!(DiscordPresence::DoNotDisturb.is_non_offline());
+    }
+
+    // --- away_message ---
 
     #[test]
     fn online_is_not_away() {

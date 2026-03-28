@@ -137,7 +137,7 @@ pub(crate) fn build_member_snapshot_event(
                 .get(&m.user_id)
                 .copied()
                 .unwrap_or(DiscordPresence::Offline);
-            if presence == DiscordPresence::Offline {
+            if !presence.is_non_offline() {
                 return None;
             }
             Some(MemberInfo {

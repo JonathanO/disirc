@@ -52,7 +52,8 @@ functions with full coverage.
 | Location | Mutation |
 |---|---|
 | `send.rs:61` | `send_discord_message` → `()` |
-| `send.rs` | `snapshot_from_cache` → `None` | Requires a populated serenity `Cache`; the guild-iteration and member-building logic inside calls helpers already unit-tested elsewhere. |
+| `send.rs` | `snapshot_from_cache` → `None` | Requires a populated serenity `Cache`; all logic inside delegates to helpers unit-tested elsewhere. |
+| `send.rs` | `delete !` in `snapshot_from_cache` offline filter | Same function; `DiscordPresence::is_non_offline()` is tested in `types.rs` (4 tests), and the identical `!is_non_offline()` filter in `build_member_snapshot_event` is caught by handler tests. The `!` inside `snapshot_from_cache` is integration-only. |
 | `send.rs` | `process_discord_commands` → `()` | Requires live Discord HTTP and channel pairs. |
 
 ### TIMEOUT = caught

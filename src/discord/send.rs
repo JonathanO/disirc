@@ -148,7 +148,7 @@ pub(crate) fn snapshot_from_cache(cache: &Cache, channel_id: u64) -> Option<Disc
                 .get(&m.user.id.get())
                 .copied()
                 .unwrap_or(DiscordPresence::Offline);
-            if presence == DiscordPresence::Offline {
+            if !presence.is_non_offline() {
                 return None;
             }
             Some(MemberInfo {

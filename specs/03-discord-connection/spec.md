@@ -44,6 +44,8 @@ Discord enforces a 2–32 character limit on webhook usernames:
 
 Webhooks have their own Discord user ID distinct from the bot's user ID. `disirc` must record the user ID of every webhook it uses and filter incoming `MESSAGE_CREATE` events whose `author.id` matches either the bot's user ID **or** any webhook user ID. Without this, messages sent via webhook would loop back to IRC.
 
+The webhook user ID equals the numeric `{id}` segment embedded in the webhook URL path (`https://discord.com/api/webhooks/{id}/{token}`). No REST call is required to discover it — parse the URL at startup and store the `id` in the self-message filter set.
+
 ### Mention safety (webhook path)
 
 When sending via webhook, pass `allowed_mentions` with `parse: []` to suppress `@everyone` and `@here`. If the bot has the `MENTION_EVERYONE` permission and the IRC message explicitly contains `@everyone` or `@here`, this suppression may be relaxed as a future operator option — but the safe default is always to suppress.
@@ -54,9 +56,9 @@ On the fallback path, replace `@everyone` and `@here` (case-insensitively) with 
 
 ## Lifecycle
 
-1. On startup, establish a Gateway connection using the bot token.
-2. Wait for the `READY` event. Record the bot's own user ID and all webhook user IDs for self-message filtering.
-3. For each bridged Discord channel, fetch the current member list and active presence data.
+1. On startup, establish a Gateway connection using the bot token. Parse all configured webhook URLs and record the numeric webhook ID from each URL in the self-message filter set.
+2. Wait for the `READY` event. Record the bot's own user ID in the self-message filter set.
+3. The Gateway delivers a `GUILD_CREATE` event for each guild the bot is in. Each `GUILD_CREATE` (with both `GUILD_MEMBERS` and `GUILD_PRESENCES` intents active) includes `members` and `presences` maps that form the initial snapshot. For large guilds (member count above Discord's large-guild threshold), the `GUILD_CREATE` contains online and role-bearing members only; the remaining members arrive in subsequent `GUILD_MEMBERS_CHUNK` events that serenity merges into the cache automatically.
 4. This membership snapshot is used to populate the IRC burst (see `02-irc-connection.md`).
 5. Enter the event loop dispatching events.
 
@@ -112,9 +114,14 @@ Discord presence is mapped to IRC away status for pseudoclients:
 | `idle` | `AWAY :idle` |
 | `dnd` | `AWAY :do not disturb` |
 | `offline` / `invisible` | `AWAY :offline` |
+| _(unknown future variant)_ | `AWAY :offline` |
+
+`OnlineStatus` is `#[non_exhaustive]` in serenity — any variant not listed above must be treated as offline.
 
 ## References
 
 - [research/discord-irc-prior-art.md](../../research/discord-irc-prior-art.md) — webhook lifecycle, loop prevention, username constraints, @everyone suppression bug
+- [research/discord-gateway-presences.md](../../research/discord-gateway-presences.md) — member list and presence snapshot timing; large-guild chunking behaviour
+- [research/serenity-0.12-api.md](../../research/serenity-0.12-api.md) — serenity EventHandler API, OnlineStatus non_exhaustive, CreateAllowedMentions, webhook execution
 - [Discord Webhooks documentation](https://discord.com/developers/docs/resources/webhook) — accessed 2026-03-22
 - [Discord Gateway Intents](https://discord.com/developers/docs/topics/gateway#gateway-intents) — accessed 2026-03-22

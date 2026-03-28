@@ -6,7 +6,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-- **spec-02 (IRC connection)** — writing spec; S2SEvent/S2SCommand architecture decided, translation layer constraint added to spec-00
+_(none)_
 
 ## Spec status
 
@@ -14,8 +14,8 @@ Updated by Claude at the start and end of each session, and whenever task status
 |------|--------|--------|
 | [specs/00-overview](specs/00-overview/TODO.md) | n/a — architecture doc | — |
 | [specs/01-configuration](specs/01-configuration/TODO.md) | ✅ Implemented | — |
-| [specs/02-irc-connection](specs/02-irc-connection/TODO.md) | 🔄 In Progress | 11 tasks |
-| [specs/03-discord-connection](specs/03-discord-connection/TODO.md) | ⏳ Pending | 7 tasks |
+| [specs/02-irc-connection](specs/02-irc-connection/TODO.md) | ✅ Implemented | — |
+| [specs/03-discord-connection](specs/03-discord-connection/TODO.md) | ✅ Implemented | — |
 | [specs/04-message-bridging](specs/04-message-bridging/TODO.md) | ⏳ Pending | 6 tasks |
 | [specs/05-formatting](specs/05-formatting/TODO.md) | ✅ Implemented | — |
 | [specs/06-pseudoclients](specs/06-pseudoclients/TODO.md) | ✅ Implemented | — |
@@ -32,3 +32,5 @@ Updated by Claude at the start and end of each session, and whenever task status
 - Implemented `specs/05-formatting`: 111 tests, 0 surviving mutants, chrono for server-time
 - Implemented `specs/06-pseudoclients`: 103 tests, 0 surviving mutants, nick sanitization + collision chain + UID gen + state management
 - Implemented `specs/07-irc-message-types`: 82 tests, 0 surviving mutants, `IrcMessage`/`IrcCommand`/`UidParams`/`SjoinParams`
+- Implemented `specs/02-irc-connection`: 400 tests, 3 equivalent mutants (documented), S2S handshake + rate limiter + reconnect + full session loop
+- Implemented `specs/03-discord-connection`: 25 handler + 16 send + 11 types + 8 connection tests, 1 equivalent mutant + 6 shim integration-only + 5 HTTP integration-only (all documented), Gateway event handling + webhook send + config reload

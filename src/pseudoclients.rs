@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
+use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams, UidParams};
 
 // ---------------------------------------------------------------------------
 // Nick sanitization

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -28,6 +29,10 @@ pub(crate) struct DiscordHandler {
     pub(crate) bridged_channel_ids: Arc<RwLock<HashSet<u64>>>,
 }
 
+// ---------------------------------------------------------------------------
+// Pure / testable helper functions
+// ---------------------------------------------------------------------------
+
 /// Resolve the display name for a guild member.
 ///
 /// Priority: guild nickname → global display name → username.
@@ -48,6 +53,8 @@ pub(crate) fn map_online_status(status: OnlineStatus) -> DiscordPresence {
         OnlineStatus::Online => DiscordPresence::Online,
         OnlineStatus::Idle => DiscordPresence::Idle,
         OnlineStatus::DoNotDisturb => DiscordPresence::DoNotDisturb,
+        // The explicit arm documents intent; the `_` catch-all below handles
+        // any future #[non_exhaustive] variants identically (equivalent mutant).
         OnlineStatus::Offline | OnlineStatus::Invisible => DiscordPresence::Offline,
         _ => DiscordPresence::Offline,
     }
@@ -66,62 +73,97 @@ pub(crate) fn should_relay_message(
     bridged_channel_ids.contains(&channel_id) && !self_filter.contains(&author_id)
 }
 
-/// Build a [`MemberInfo`] from a presence snapshot, defaulting to offline when
-/// the user has no presence entry (common for large guilds before chunking).
-fn member_presence(
-    presences: &std::collections::HashMap<serenity::model::id::UserId, Presence>,
-    user_id: serenity::model::id::UserId,
-) -> DiscordPresence {
-    presences
-        .get(&user_id)
-        .map_or(DiscordPresence::Offline, |p| map_online_status(p.status))
+/// Build a [`DiscordEvent::PresenceUpdated`] if the presence has an associated
+/// guild ID (DM presences without a guild ID are ignored — returns `None`).
+pub(crate) fn presence_event(
+    user_id: u64,
+    guild_id: Option<u64>,
+    status: OnlineStatus,
+) -> Option<DiscordEvent> {
+    guild_id.map(|gid| DiscordEvent::PresenceUpdated {
+        user_id,
+        guild_id: gid,
+        presence: map_online_status(status),
+    })
 }
 
-#[async_trait]
-impl EventHandler for DiscordHandler {
-    async fn ready(&self, _ctx: Context, ready: Ready) {
-        let bot_id = ready.user.id.get();
+/// Build a [`DiscordEvent::MemberAdded`] for a new guild member.
+pub(crate) fn member_addition_event(
+    user_id: u64,
+    guild_id: u64,
+    nick: Option<&str>,
+    global_name: Option<&str>,
+    username: &str,
+) -> DiscordEvent {
+    DiscordEvent::MemberAdded {
+        user_id,
+        guild_id,
+        display_name: resolve_display_name(nick, global_name, username).to_owned(),
+    }
+}
+
+/// Build a [`DiscordEvent::MemberRemoved`] for a departing guild member.
+pub(crate) fn member_removal_event(user_id: u64, guild_id: u64) -> DiscordEvent {
+    DiscordEvent::MemberRemoved { user_id, guild_id }
+}
+
+/// Intermediate representation of a guild member used by
+/// [`build_member_snapshot_event`] so it can be tested without serenity types.
+pub(crate) struct RawMemberData<'a> {
+    pub user_id: u64,
+    pub nick: Option<&'a str>,
+    pub global_name: Option<&'a str>,
+    pub username: &'a str,
+}
+
+/// Build a [`DiscordEvent::MemberSnapshot`] from raw member data.
+///
+/// `presences` maps user IDs to their current [`DiscordPresence`].  Members
+/// absent from the map are treated as offline (common during large-guild
+/// chunking and on the REST fallback path).
+pub(crate) fn build_member_snapshot_event(
+    guild_id: u64,
+    members: &[RawMemberData<'_>],
+    presences: &HashMap<u64, DiscordPresence>,
+) -> DiscordEvent {
+    let member_infos: Vec<MemberInfo> = members
+        .iter()
+        .map(|m| MemberInfo {
+            user_id: m.user_id,
+            display_name: resolve_display_name(m.nick, m.global_name, m.username).to_owned(),
+            presence: presences
+                .get(&m.user_id)
+                .copied()
+                .unwrap_or(DiscordPresence::Offline),
+        })
+        .collect();
+    DiscordEvent::MemberSnapshot {
+        guild_id,
+        members: member_infos,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DiscordHandler methods — testable inner logic called by the shims below
+// ---------------------------------------------------------------------------
+
+impl DiscordHandler {
+    /// Record the bot user ID in the self-message filter and log readiness.
+    pub(crate) async fn handle_ready(&self, bot_id: u64, tag: &str) {
         self.self_filter.write().await.insert(bot_id);
-        info!(
-            bot_id,
-            tag = %ready.user.tag(),
-            "Discord bot ready"
-        );
+        info!(bot_id, tag, "Discord bot ready");
     }
 
-    async fn guild_create(&self, _ctx: Context, guild: Guild, _is_new: Option<bool>) {
-        let guild_id = guild.id.get();
-
-        let members: Vec<MemberInfo> = guild
-            .members
-            .values()
-            .map(|m| {
-                let user_id = m.user.id.get();
-                let display_name = resolve_display_name(
-                    m.nick.as_deref(),
-                    m.user.global_name.as_deref(),
-                    &m.user.name,
-                )
-                .to_owned();
-                let presence = member_presence(&guild.presences, m.user.id);
-                MemberInfo {
-                    user_id,
-                    display_name,
-                    presence,
-                }
-            })
-            .collect();
-
-        let _ = self
-            .event_tx
-            .send(DiscordEvent::MemberSnapshot { guild_id, members })
-            .await;
-    }
-
-    async fn message(&self, _ctx: Context, msg: Message) {
-        let channel_id = msg.channel_id.get();
-        let author_id = msg.author.id.get();
-
+    /// Relay a `MESSAGE_CREATE` event to the processing task if it passes
+    /// channel routing and self-message filtering.
+    pub(crate) async fn handle_message_event(
+        &self,
+        channel_id: u64,
+        author_id: u64,
+        author_name: String,
+        content: String,
+        attachments: Vec<String>,
+    ) {
         let channels = self.bridged_channel_ids.read().await;
         let filter = self.self_filter.read().await;
         if !should_relay_message(channel_id, author_id, &channels, &filter) {
@@ -133,50 +175,82 @@ impl EventHandler for DiscordHandler {
         }
         drop(filter);
         drop(channels);
-
-        let attachments = msg.attachments.iter().map(|a| a.url.clone()).collect();
-
         let _ = self
             .event_tx
             .send(DiscordEvent::MessageReceived {
                 channel_id,
                 author_id,
-                author_name: msg.author.name.clone(),
-                content: msg.content.clone(),
+                author_name,
+                content,
                 attachments,
             })
             .await;
     }
+}
 
-    async fn presence_update(&self, _ctx: Context, new_data: Presence) {
-        let Some(guild_id) = new_data.guild_id else {
-            return; // ignore DM presences
-        };
-        let _ = self
-            .event_tx
-            .send(DiscordEvent::PresenceUpdated {
-                user_id: new_data.user.id.get(),
-                guild_id: guild_id.get(),
-                presence: map_online_status(new_data.status),
-            })
+// ---------------------------------------------------------------------------
+// Serenity EventHandler shims — thin wrappers; integration-tested only
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl EventHandler for DiscordHandler {
+    async fn ready(&self, _ctx: Context, ready: Ready) {
+        self.handle_ready(ready.user.id.get(), &ready.user.tag())
             .await;
     }
 
+    async fn guild_create(&self, _ctx: Context, guild: Guild, _is_new: Option<bool>) {
+        let presences: HashMap<u64, DiscordPresence> = guild
+            .presences
+            .iter()
+            .map(|(uid, p)| (uid.get(), map_online_status(p.status)))
+            .collect();
+
+        let raw: Vec<RawMemberData<'_>> = guild
+            .members
+            .values()
+            .map(|m| RawMemberData {
+                user_id: m.user.id.get(),
+                nick: m.nick.as_deref(),
+                global_name: m.user.global_name.as_deref(),
+                username: &m.user.name,
+            })
+            .collect();
+
+        let event = build_member_snapshot_event(guild.id.get(), &raw, &presences);
+        let _ = self.event_tx.send(event).await;
+    }
+
+    async fn message(&self, _ctx: Context, msg: Message) {
+        self.handle_message_event(
+            msg.channel_id.get(),
+            msg.author.id.get(),
+            msg.author.name.clone(),
+            msg.content.clone(),
+            msg.attachments.iter().map(|a| a.url.clone()).collect(),
+        )
+        .await;
+    }
+
+    async fn presence_update(&self, _ctx: Context, new_data: Presence) {
+        if let Some(event) = presence_event(
+            new_data.user.id.get(),
+            new_data.guild_id.map(GuildId::get),
+            new_data.status,
+        ) {
+            let _ = self.event_tx.send(event).await;
+        }
+    }
+
     async fn guild_member_addition(&self, _ctx: Context, new_member: Member) {
-        let display_name = resolve_display_name(
+        let event = member_addition_event(
+            new_member.user.id.get(),
+            new_member.guild_id.get(),
             new_member.nick.as_deref(),
             new_member.user.global_name.as_deref(),
             &new_member.user.name,
-        )
-        .to_owned();
-        let _ = self
-            .event_tx
-            .send(DiscordEvent::MemberAdded {
-                user_id: new_member.user.id.get(),
-                guild_id: new_member.guild_id.get(),
-                display_name,
-            })
-            .await;
+        );
+        let _ = self.event_tx.send(event).await;
     }
 
     async fn guild_member_removal(
@@ -188,10 +262,7 @@ impl EventHandler for DiscordHandler {
     ) {
         let _ = self
             .event_tx
-            .send(DiscordEvent::MemberRemoved {
-                user_id: user.id.get(),
-                guild_id: guild_id.get(),
-            })
+            .send(member_removal_event(user.id.get(), guild_id.get()))
             .await;
     }
 }
@@ -200,12 +271,98 @@ impl EventHandler for DiscordHandler {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use tokio::sync::mpsc;
 
-    // --- should_relay_message ---
+    // ---------------------------------------------------------------------------
+    // Test helper
+    // ---------------------------------------------------------------------------
+
+    fn make_handler(
+        tx: mpsc::Sender<DiscordEvent>,
+        channel_ids: &[u64],
+        self_filter_ids: &[u64],
+    ) -> DiscordHandler {
+        DiscordHandler {
+            event_tx: tx,
+            self_filter: Arc::new(RwLock::new(self_filter_ids.iter().copied().collect())),
+            bridged_channel_ids: Arc::new(RwLock::new(channel_ids.iter().copied().collect())),
+        }
+    }
 
     fn ids(vals: &[u64]) -> HashSet<u64> {
         vals.iter().copied().collect()
     }
+
+    // ---------------------------------------------------------------------------
+    // handle_ready
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn handle_ready_inserts_bot_id_into_filter() {
+        let (tx, _rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[], &[]);
+        h.handle_ready(42, "TestBot#0001").await;
+        assert!(h.self_filter.read().await.contains(&42));
+    }
+
+    #[tokio::test]
+    async fn handle_ready_does_not_affect_existing_filter_entries() {
+        let (tx, _rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[], &[99]); // 99 is a pre-existing webhook ID
+        h.handle_ready(42, "Bot").await;
+        let f = h.self_filter.read().await;
+        assert!(f.contains(&42));
+        assert!(f.contains(&99));
+    }
+
+    // ---------------------------------------------------------------------------
+    // handle_message_event
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn relayed_message_emits_event() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[10], &[]); // channel 10 bridged, empty self-filter
+        h.handle_message_event(10, 99, "alice".into(), "hello".into(), vec![])
+            .await;
+        let event = rx.try_recv().expect("expected MessageReceived event");
+        assert!(matches!(
+            event,
+            DiscordEvent::MessageReceived {
+                channel_id: 10,
+                author_id: 99,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn self_message_is_dropped() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[10], &[99]); // author 99 is in self-filter
+        h.handle_message_event(10, 99, "bot".into(), "echo".into(), vec![])
+            .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "self-message must not emit an event"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_bridged_channel_is_dropped() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[10], &[]); // only channel 10 bridged
+        h.handle_message_event(99, 1, "user".into(), "hi".into(), vec![])
+            .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "non-bridged channel must not emit an event"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // should_relay_message
+    // ---------------------------------------------------------------------------
 
     #[test]
     fn relayed_when_bridged_and_not_self() {
@@ -228,8 +385,6 @@ mod tests {
     }
 
     proptest! {
-        /// For any combination of channel/author IDs and set membership, the
-        /// relay decision equals the logical conjunction.
         #[test]
         fn relay_matches_logical_conjunction(
             channel_id in 1u64..100,
@@ -247,7 +402,117 @@ mod tests {
         }
     }
 
-    // --- resolve_display_name ---
+    // ---------------------------------------------------------------------------
+    // presence_event
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn presence_event_with_guild_id_emits_event() {
+        let ev = presence_event(42, Some(100), OnlineStatus::Idle);
+        assert_eq!(
+            ev,
+            Some(DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 100,
+                presence: DiscordPresence::Idle,
+            })
+        );
+    }
+
+    #[test]
+    fn presence_event_without_guild_id_returns_none() {
+        assert_eq!(presence_event(42, None, OnlineStatus::Online), None);
+    }
+
+    // ---------------------------------------------------------------------------
+    // member_addition_event
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn member_addition_resolves_display_name_and_builds_event() {
+        let ev = member_addition_event(7, 100, Some("NickName"), Some("Global"), "user");
+        assert_eq!(
+            ev,
+            DiscordEvent::MemberAdded {
+                user_id: 7,
+                guild_id: 100,
+                display_name: "NickName".to_string(),
+            }
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // member_removal_event
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn member_removal_carries_user_and_guild_ids() {
+        let ev = member_removal_event(7, 100);
+        assert_eq!(
+            ev,
+            DiscordEvent::MemberRemoved {
+                user_id: 7,
+                guild_id: 100
+            }
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // build_member_snapshot_event
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn snapshot_with_presences_uses_correct_status() {
+        let members = vec![
+            RawMemberData {
+                user_id: 1,
+                nick: None,
+                global_name: None,
+                username: "alice",
+            },
+            RawMemberData {
+                user_id: 2,
+                nick: None,
+                global_name: None,
+                username: "bob",
+            },
+        ];
+        let mut presences = HashMap::new();
+        presences.insert(1u64, DiscordPresence::Online);
+        // user 2 absent → defaults to Offline
+
+        let ev = build_member_snapshot_event(99, &members, &presences);
+        let DiscordEvent::MemberSnapshot {
+            guild_id,
+            members: infos,
+        } = ev
+        else {
+            panic!("expected MemberSnapshot");
+        };
+        assert_eq!(guild_id, 99);
+        assert_eq!(infos[0].presence, DiscordPresence::Online);
+        assert_eq!(infos[1].presence, DiscordPresence::Offline);
+    }
+
+    #[test]
+    fn snapshot_with_no_presences_all_offline() {
+        let members = vec![RawMemberData {
+            user_id: 5,
+            nick: Some("N"),
+            global_name: None,
+            username: "u",
+        }];
+        let ev = build_member_snapshot_event(10, &members, &HashMap::new());
+        let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
+            panic!()
+        };
+        assert_eq!(infos[0].presence, DiscordPresence::Offline);
+        assert_eq!(infos[0].display_name, "N");
+    }
+
+    // ---------------------------------------------------------------------------
+    // resolve_display_name / map_online_status (unchanged from before)
+    // ---------------------------------------------------------------------------
 
     #[test]
     fn nick_takes_priority_over_all() {
@@ -272,11 +537,8 @@ mod tests {
 
     #[test]
     fn empty_nick_still_preferred_over_global_name() {
-        // Discord does not allow empty nicks, but guard against it defensively.
         assert_eq!(resolve_display_name(Some(""), Some("GlobalName"), "u"), "");
     }
-
-    // --- map_online_status ---
 
     #[test]
     fn online_maps_to_online() {

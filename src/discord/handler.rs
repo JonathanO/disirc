@@ -206,6 +206,7 @@ impl DiscordHandler {
 // ---------------------------------------------------------------------------
 
 #[async_trait]
+#[mutants::skip] // Serenity EventHandler shims — require live Discord Gateway to exercise
 impl EventHandler for DiscordHandler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
         self.handle_ready(ready.user.id.get(), &ready.user.tag())

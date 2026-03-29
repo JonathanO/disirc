@@ -51,6 +51,8 @@ const INTENTS: GatewayIntents = GatewayIntents::from_bits_truncate(
 /// connection in the initial version.
 ///
 /// Spawns a separate task to drain `cmd_rx` and send outgoing messages.
+// mutants::skip — requires live Discord Gateway connection and bot token
+#[mutants::skip]
 pub async fn run_discord(
     config: &DiscordConfig,
     bridges: &[BridgeEntry],
@@ -161,6 +163,28 @@ mod tests {
         let ids = webhook_ids_from_bridges(&bridges);
         assert_eq!(ids.len(), 1);
         assert!(ids.contains(&999_000_000_000_000_009_u64));
+    }
+
+    #[test]
+    fn bridged_channel_ids_parses_valid_ids() {
+        let bridges = vec![bridge("111", None), bridge("222", None)];
+        let ids = bridged_channel_ids(&bridges);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&111));
+        assert!(ids.contains(&222));
+    }
+
+    #[test]
+    fn bridged_channel_ids_skips_non_numeric() {
+        let bridges = vec![bridge("abc", None), bridge("999", None)];
+        let ids = bridged_channel_ids(&bridges);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&999));
+    }
+
+    #[test]
+    fn bridged_channel_ids_empty_input() {
+        assert!(bridged_channel_ids(&[]).is_empty());
     }
 
     /// Requires a live Discord token — skipped in CI.

@@ -20,6 +20,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 thiserror = "2"
 anyhow = "1"
 rand = "0.10.0"
+mutants = "0.0.4"
 
 [lints.rust]
 unsafe_code = "forbid"

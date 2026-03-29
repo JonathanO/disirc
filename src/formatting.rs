@@ -1091,6 +1091,12 @@ mod tests {
     }
 
     #[test]
+    fn word_boundary_underscore_mid_sentence() {
+        // Closing _ followed by space (not at end of string) — exercises chars[j+1].is_whitespace()
+        assert_eq!(markdown_to_irc("_hello_ world"), "\x1dhello\x1d world");
+    }
+
+    #[test]
     fn underscore_not_at_word_boundary_end() {
         // Opening _ at word boundary, closing _ NOT at word boundary
         assert_eq!(markdown_to_irc("_foo_bar"), "_foo_bar");
@@ -2014,6 +2020,24 @@ mod tests {
                     "word {word:?} lost in split.\n  input: {text:?}\n  output: {joined:?}"
                 );
             }
+        }
+
+        /// `_word_` followed by space must always produce italic markers, regardless
+        /// of the word content. This catches off-by-one errors in
+        /// `find_word_boundary_close` where the closing `_` is followed by
+        /// whitespace (not at end of string).
+        #[test]
+        fn underscore_word_boundary_mid_sentence_converts(
+            word in "[a-zA-Z0-9]{1,20}",
+            suffix in "[a-zA-Z0-9 ,.!?]{1,20}",
+        ) {
+            let input = format!("_{word}_ {suffix}");
+            let result = markdown_to_irc(&input);
+            let expected = format!("\x1d{word}\x1d {suffix}");
+            prop_assert_eq!(
+                &result, &expected,
+                "_word_ followed by space must become italic"
+            );
         }
 
         /// `resolve_mentions` must pass through text that contains no `<...>`

@@ -146,6 +146,31 @@ cargo mutants -p disirc -- <module-path>
 
 Zero surviving mutants that represent real test gaps. Equivalent mutants and integration-only survivors (e.g., thin shims that require live network context, non-deterministic clock functions, async event loops) must be documented in the spec's `TODO.md` with a brief justification for each category. If a mutant survives and is not equivalent, either fix the test gap or update the spec to explicitly exclude that case.
 
+### Excluding equivalent mutants
+
+Exclusions must be as specific as possible to avoid accidentally hiding real test gaps.
+
+- **Whole-function exclusions**: Use the `#[mutants::skip]` attribute on the function, with a comment explaining why the function is excluded. This is appropriate when every possible mutation of the function is equivalent or untestable (e.g., non-deterministic clock functions, thin shims that require live network connections, `main` entry points).
+
+  ```rust
+  /// Returns the current Unix timestamp.
+  // mutants::skip — non-deterministic clock function; cannot be tested deterministically.
+  #[mutants::skip]
+  fn unix_now() -> u64 { ... }
+  ```
+
+- **Specific mutation exclusions**: Add a regex to `exclude_re` in `.cargo/mutants.toml` with an adjacent comment explaining why. This is appropriate when only certain mutations of a function are equivalent while others are real test targets.
+
+  ```toml
+  exclude_re = [
+      # sentinel_to_char: input values are always in-range (produced by
+      # strip_irc_formatting), so < vs <= is equivalent.
+      "replace < with <= in sentinel_to_char",
+  ]
+  ```
+
+Prefer `#[mutants::skip]` over config-file exclusions when the entire function should be skipped — it keeps the rationale next to the code. Use config-file exclusions for specific mutation patterns within otherwise-testable functions.
+
 ## When to commit
 
 Commit at these natural boundaries — not before:

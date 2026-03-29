@@ -51,6 +51,8 @@ pub(crate) fn suppress_mentions(text: &str) -> String {
 /// Uses the webhook if a `webhook_url` is provided; falls back to plain
 /// `channel.send()` otherwise. Failures are logged at `WARN` and dropped —
 /// no retry is attempted.
+// mutants::skip — requires live Discord HTTP/webhook connection
+#[mutants::skip]
 pub(crate) async fn send_discord_message(
     http: &Http,
     channel_id: u64,
@@ -125,6 +127,8 @@ pub(crate) fn apply_reload(
 ///
 /// Returns `None` if the channel or its guild is not present in the cache
 /// (should not happen in normal operation after startup).
+// mutants::skip — requires populated Serenity cache from live Discord connection
+#[mutants::skip]
 pub(crate) fn snapshot_from_cache(
     cache: &Cache,
     channel_id: u64,
@@ -199,6 +203,8 @@ pub(crate) fn snapshot_from_cache(
 /// new bridge channel is added via [`DiscordCommand::ReloadBridges`].
 ///
 /// Runs until the sender side of `rx` is dropped.
+// mutants::skip — async event loop requiring live Discord HTTP + cache
+#[mutants::skip]
 pub(crate) async fn process_discord_commands(
     http: Arc<Http>,
     cache: Arc<Cache>,

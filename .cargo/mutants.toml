@@ -40,4 +40,13 @@ exclude_re = [
 
     # Main entry point — requires full runtime environment.
     "replace main",
+
+    # INTENTS constant: bitwise OR combines independent flags into a const.
+    # Mutating | to & or ^ produces a different intent set but no unit test
+    # inspects the value — it's only observable via Discord Gateway behaviour.
+    "replace \\| with [&^] in INTENTS",
+
+    # run_session + to - in timer reset: changes rate-limit delay arithmetic
+    # but requires a live IRC connection with real timing to observe.
+    "replace \\+ with - in run_session",
 ]

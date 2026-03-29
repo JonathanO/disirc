@@ -36,6 +36,8 @@ pub fn spawn_signal_handler() -> mpsc::Receiver<ControlEvent> {
 }
 
 #[cfg(unix)]
+// mutants::skip — platform-specific; tested via SIGHUP integration test on Unix only
+#[mutants::skip]
 async fn unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
     use tokio::signal::unix::{SignalKind, signal};
 

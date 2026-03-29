@@ -520,6 +520,8 @@ fn introduce_pseudoclient(
 
 /// Null resolver: no IRC mention conversion.
 struct NoopIrcResolver;
+// mutants::skip — trivial test-only stub returning None
+#[mutants::skip]
 impl IrcMentionResolver for NoopIrcResolver {
     fn resolve_nick(&self, _: &str) -> Option<String> {
         None
@@ -528,6 +530,8 @@ impl IrcMentionResolver for NoopIrcResolver {
 
 /// Null resolver: no Discord mention conversion.
 struct NoopDiscordResolver;
+// mutants::skip — trivial test-only stub returning None
+#[mutants::skip]
 impl DiscordResolver for NoopDiscordResolver {
     fn resolve_user(&self, _: &str) -> Option<String> {
         None
@@ -713,6 +717,8 @@ pub fn update_guild_irc_channels(
 // ---------------------------------------------------------------------------
 
 /// Current Unix timestamp in seconds.
+// mutants::skip — non-deterministic clock function; cannot be tested deterministically
+#[mutants::skip]
 fn unix_now() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -728,6 +734,8 @@ fn unix_now() -> u64 {
 ///
 /// - `config_path` — path to the config file, used for hot-reload on
 ///   `ControlEvent::Reload`.
+// mutants::skip — requires live IRC + Discord connections to exercise
+#[mutants::skip]
 pub async fn run_bridge(
     config: &Config,
     config_path: &std::path::Path,

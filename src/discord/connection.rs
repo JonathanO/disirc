@@ -187,6 +187,14 @@ mod tests {
         assert!(bridged_channel_ids(&[]).is_empty());
     }
 
+    #[test]
+    fn intents_include_all_required_flags() {
+        assert!(INTENTS.contains(GatewayIntents::GUILD_MEMBERS));
+        assert!(INTENTS.contains(GatewayIntents::GUILD_MESSAGES));
+        assert!(INTENTS.contains(GatewayIntents::GUILD_PRESENCES));
+        assert!(INTENTS.contains(GatewayIntents::MESSAGE_CONTENT));
+    }
+
     /// Requires a live Discord token — skipped in CI.
     #[tokio::test]
     #[ignore = "requires Discord credentials"]

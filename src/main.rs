@@ -7,6 +7,8 @@ use disirc::discord::connection::run_discord;
 use disirc::irc::unreal::run_connection;
 use disirc::signal::spawn_signal_handler;
 
+// mutants::skip — entry point requiring full runtime environment
+#[mutants::skip]
 #[tokio::main]
 async fn main() {
     // --- Logging ---

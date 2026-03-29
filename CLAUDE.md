@@ -37,7 +37,7 @@ Do not batch `TODO.md` updates to the end of a session — update them in place 
 - Focus on understanding the problem requirements and implementing the correct algorithm. Tests verify correctness, not define the solution. Provide principled implementations that follow best practices and software design principles.
 - If a task is unreasonable or infeasible, or if any tests are incorrect, inform me rather than working around them. Solutions should be robust, maintainable, and extendable.
 - If you intend to call multiple tools and there are no dependencies between the tool calls, make all of the independent tool calls in parallel. Prioritize calling tools simultaneously whenever the actions can be done in parallel rather than sequentially. Never use placeholders or guess missing parameters in tool calls.
-- Tests should be written first for bug fixes, as the test case serves to prevent regressions in future.
+- Tests should be written first for bug fixes. For functions with edge-case-prone inputs, write a **property-based test** that captures the class of bug before writing a unit test for the specific instance. The property test should fail on the unfixed code. Then add a targeted unit test for the exact regression case. Only then fix the code and verify both tests pass.
 
 ## Spec-driven development workflow
 
@@ -92,7 +92,7 @@ deny.toml               — cargo-deny configuration
 - Unit tests go inline with `#[cfg(test)]` modules.
 - Integration tests that require real network connections or credentials must be annotated `#[ignore]` until a mock harness exists.
 - Integration tests that don't require external connections go in `tests/` (e.g., `tests/config.rs`, `tests/formatting.rs`).
-- Use **property-based tests** (`proptest`) wherever a function has edge-case-prone input domains — formatting transforms, string validation, message splitting, and routing logic are all good candidates. Prefer `proptest!` macros over hand-picked example inputs for these cases.
+- Use **property-based tests** (`proptest`) wherever a function has edge-case-prone input domains — formatting transforms, string validation, message splitting, and routing logic are all good candidates. Prefer `proptest!` macros over hand-picked example inputs for these cases. When fixing a bug, write the property test **before** the fix — a good property (e.g., "no-`@`-input is identity", "underscore-delimited word mid-sentence always converts") would have caught the class of bug, not just the specific instance. The property test should fail on the unfixed code, confirming it captures the defect.
 - **Async event serialization**: IRC and Discord events must be funnelled through `tokio::sync::mpsc` channels to a single processing task per direction. Do not `tokio::spawn` a new task per incoming event — concurrent handlers will race on shared state.
 - `#![deny(unsafe_code)]` must appear at the crate root, and `unsafe_code = "forbid"` is set in `[lints.rust]` in `Cargo.toml`. There is no justified use of `unsafe` in this project.
 

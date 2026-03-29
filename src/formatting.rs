@@ -1064,6 +1064,26 @@ mod tests {
         assert_eq!(markdown_to_irc("\\hello"), "\\hello");
     }
 
+    #[test]
+    fn sentinel_to_char_rejects_one_past_end() {
+        // The char at ESCAPE_BASE + ESCAPABLE.len() is one past the valid
+        // sentinel range. `sentinel_to_char` must return None, not panic.
+        // This distinguishes `<` from `<=` in the bounds check.
+        let one_past = char::from_u32(ESCAPE_BASE + ESCAPABLE.len() as u32).unwrap();
+        assert_eq!(sentinel_to_char(one_past), None);
+    }
+
+    #[test]
+    fn sentinel_to_char_accepts_last_valid() {
+        // The last valid sentinel (ESCAPE_BASE + len - 1) must return the
+        // last ESCAPABLE character.
+        let last_valid = char::from_u32(ESCAPE_BASE + ESCAPABLE.len() as u32 - 1).unwrap();
+        assert_eq!(
+            sentinel_to_char(last_valid),
+            Some(*ESCAPABLE.last().unwrap())
+        );
+    }
+
     // -------------------------------------------------------------------
     // Intraword underscores
     // -------------------------------------------------------------------
@@ -1661,6 +1681,20 @@ mod tests {
         for part in &parts {
             assert!(part.is_char_boundary(part.len()));
         }
+    }
+
+    #[test]
+    fn split_long_line_remainder_exactly_max_bytes() {
+        // After one word-boundary split, the remainder is exactly max_bytes.
+        // With `>` the loop exits correctly; with `>=` it would re-enter
+        // and hard-split the remainder unnecessarily.
+        let first = "a".repeat(350);
+        let second = "b".repeat(MAX_LINE_BYTES); // exactly 400
+        let line = format!("{first} {second}");
+        let parts = split_long_line(&line, MAX_LINE_BYTES);
+        assert_eq!(parts.len(), 2, "should split into exactly 2 parts");
+        assert_eq!(parts[0], first);
+        assert_eq!(parts[1], second);
     }
 
     #[test]

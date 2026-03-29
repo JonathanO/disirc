@@ -54,6 +54,8 @@ pub fn config_path_from_iter(mut args: impl Iterator<Item = String>) -> PathBuf 
 }
 
 /// Return the config file path from the process's command-line arguments.
+// mutants::skip — trivial delegation to config_path_from_iter (which is thoroughly tested)
+#[mutants::skip]
 pub fn config_path_from_args() -> PathBuf {
     config_path_from_iter(std::env::args())
 }

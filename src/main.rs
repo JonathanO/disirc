@@ -18,7 +18,7 @@ async fn main() {
 
     // --- Config ---
     let config_path = config::config_path_from_args();
-    let cfg = match config::load(&config_path) {
+    let cfg = match config::load_and_validate(&config_path) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to load config: {e}");

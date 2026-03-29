@@ -267,10 +267,7 @@ async fn do_handshake(
             IrcCommand::Pass { password } => {
                 if *password != config.link_password {
                     let _ = writer.write_raw("ERROR :Bad password\r\n").await;
-                    tracing::error!(
-                        "Uplink sent wrong link password — this is a misconfiguration, exiting"
-                    );
-                    std::process::exit(1);
+                    anyhow::bail!("Uplink sent wrong link password — this is a misconfiguration");
                 }
                 pass_seen = true;
             }
@@ -690,6 +687,32 @@ mod tests {
         assert!(
             err_msg.contains("ERROR"),
             "error message should mention ERROR, got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handshake_bad_password_returns_err() {
+        let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
+        let cfg = test_config();
+
+        // Send a PASS with the wrong password.
+        let server_task = tokio::spawn(async move {
+            uplink_w
+                .write_all(b"PASS :wrong_password\r\n")
+                .await
+                .unwrap();
+        });
+
+        let result = do_handshake(&mut client_r, &mut client_w, &cfg).await;
+        server_task.await.unwrap();
+        assert!(
+            result.is_err(),
+            "bad password must return Err, not exit the process"
+        );
+        let err_msg = result.err().unwrap().to_string();
+        assert!(
+            err_msg.contains("password"),
+            "error should mention password, got: {err_msg}"
         );
     }
 

@@ -100,8 +100,12 @@ pub fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
             reason: reason.clone(),
         }),
 
-        IrcCommand::Kick { channel, reason, .. } => Some(S2SEvent::UserKicked {
-            uid: prefix.to_owned(),
+        IrcCommand::Kick {
+            channel,
+            target,
+            reason,
+        } => Some(S2SEvent::UserKicked {
+            uid: target.clone(),
             channel: channel.clone(),
             by_uid: prefix.to_owned(),
             reason: reason.clone().unwrap_or_default(),
@@ -653,15 +657,45 @@ mod tests {
                 reason: Some("spam".into()),
             },
         };
+        let event = translate_inbound(&msg).unwrap();
+        // uid = the kicked user (target), by_uid = the kicker (prefix)
         assert_eq!(
-            translate_inbound(&msg).unwrap(),
+            event,
             S2SEvent::UserKicked {
-                uid: UID.into(),
+                uid: "ABC000002".into(),
                 channel: "#general".into(),
                 by_uid: UID.into(),
                 reason: "spam".into(),
             }
         );
+    }
+
+    #[test]
+    fn inbound_kick_distinguishes_kicker_from_target() {
+        // Use distinct values for prefix and target to ensure they are not conflated.
+        let msg = IrcMessage {
+            tags: vec![],
+            prefix: Some("001KICKER".into()),
+            command: IrcCommand::Kick {
+                channel: "#test".into(),
+                target: "001KICKED".into(),
+                reason: Some("bye".into()),
+            },
+        };
+        let event = translate_inbound(&msg).unwrap();
+        let S2SEvent::UserKicked {
+            uid,
+            by_uid,
+            channel,
+            reason,
+        } = event
+        else {
+            panic!("expected UserKicked");
+        };
+        assert_eq!(uid, "001KICKED", "uid must be the kicked user (target)");
+        assert_eq!(by_uid, "001KICKER", "by_uid must be the kicker (prefix)");
+        assert_eq!(channel, "#test");
+        assert_eq!(reason, "bye");
     }
 
     #[test]

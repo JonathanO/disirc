@@ -628,6 +628,7 @@ pub fn route_discord_to_irc(
     let irc_channel = bridge.irc_channel.clone();
 
     // On-demand introduction: ensure a pseudoclient exists for this author.
+    let mut cmds = Vec::new();
     if pm.get_by_discord_id(author_id).is_none() {
         let display_name = discord_state
             .display_names
@@ -637,6 +638,29 @@ pub fn route_discord_to_irc(
         let channels = vec![irc_channel.clone()];
         let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
         pm.introduce(author_id, &display_name, &display_name, &channels, ts);
+
+        // Emit the S2S commands so the IRC server learns about this user.
+        if let Some(state) = pm.get_by_discord_id(author_id) {
+            let host = format!(
+                "{}.{}",
+                crate::pseudoclients::sanitize_nick(&display_name),
+                pm.host_suffix()
+            );
+            cmds.push(S2SCommand::IntroduceUser {
+                uid: state.uid.clone(),
+                nick: state.nick.clone(),
+                ident: pm.ident().to_string(),
+                host,
+                realname: display_name,
+            });
+            for channel in &state.channels {
+                cmds.push(S2SCommand::JoinChannel {
+                    uid: state.uid.clone(),
+                    channel: channel.clone(),
+                    ts,
+                });
+            }
+        }
     }
 
     let uid = match pm.get_by_discord_id(author_id) {
@@ -644,14 +668,15 @@ pub fn route_discord_to_irc(
         None => return vec![],
     };
 
-    discord_to_irc_commands(
+    cmds.extend(discord_to_irc_commands(
         &uid,
         &irc_channel,
         content,
         attachments,
         timestamp,
         resolver,
-    )
+    ));
+    cmds
 }
 
 /// Update `discord_state.guild_irc_channels` from a `MemberSnapshot`'s
@@ -2184,6 +2209,45 @@ mod tests {
         );
         let state = pm.get_by_discord_id(77).expect("should be introduced");
         assert_eq!(state.display_name, "CachedName");
+    }
+
+    #[test]
+    fn route_discord_on_demand_emits_introduce_and_join_commands() {
+        let mut pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let ds = DiscordState::default();
+        let irc = IrcState::default();
+        // author_id 77 has no pseudoclient — on-demand introduction should
+        // produce IntroduceUser + JoinChannel commands alongside SendMessage.
+        let cmds = route_discord_to_irc(
+            &mut pm,
+            &bridge_map,
+            &ds,
+            &irc,
+            111,
+            77,
+            "newuser",
+            "first message",
+            &[],
+            None,
+            0,
+            &NullResolver,
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "on-demand introduction must emit IntroduceUser; got: {cmds:?}"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::JoinChannel { .. })),
+            "on-demand introduction must emit JoinChannel; got: {cmds:?}"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::SendMessage { .. })),
+            "message must still be sent; got: {cmds:?}"
+        );
     }
 
     // --- update_guild_irc_channels ---

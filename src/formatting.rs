@@ -629,27 +629,26 @@ pub trait IrcMentionResolver {
 #[must_use]
 pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> String {
     let mut result = String::with_capacity(text.len());
-    let bytes = text.as_bytes();
-    let mut i = 0;
+    let mut chars = text.char_indices().peekable();
 
-    while i < bytes.len() {
-        if bytes[i] == b'@' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_alphanumeric() {
-            // Extract the nick (alphanumeric, underscore, hyphen, brackets, backslash)
-            let nick_start = i + 1;
+    while let Some((i, ch)) = chars.next() {
+        if ch == '@'
+            && let Some(&(nick_start, next_ch)) = chars.peek()
+            && next_ch.is_ascii_alphanumeric()
+        {
+            // Extract the nick (alphanumeric, underscore, hyphen, brackets, etc.)
             let mut nick_end = nick_start;
-            while nick_end < bytes.len()
-                && (bytes[nick_end].is_ascii_alphanumeric()
-                    || bytes[nick_end] == b'_'
-                    || bytes[nick_end] == b'-'
-                    || bytes[nick_end] == b'['
-                    || bytes[nick_end] == b']'
-                    || bytes[nick_end] == b'\\'
-                    || bytes[nick_end] == b'`'
-                    || bytes[nick_end] == b'^'
-                    || bytes[nick_end] == b'{'
-                    || bytes[nick_end] == b'}')
-            {
-                nick_end += 1;
+            for &(j, c) in &chars.clone().collect::<Vec<_>>() {
+                if c.is_ascii_alphanumeric()
+                    || matches!(
+                        c,
+                        '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
+                    )
+                {
+                    nick_end = j + c.len_utf8();
+                } else {
+                    break;
+                }
             }
             let nick = &text[nick_start..nick_end];
             if let Some(user_id) = resolver.resolve_nick(nick) {
@@ -657,10 +656,17 @@ pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> St
             } else {
                 result.push_str(&text[i..nick_end]);
             }
-            i = nick_end;
+            // Advance chars past the nick.
+            while let Some(&(j, _)) = chars.peek() {
+                if j >= nick_end {
+                    break;
+                }
+                chars.next();
+            }
+        } else if ch == '@' {
+            result.push('@');
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            result.push(ch);
         }
     }
 
@@ -1452,6 +1458,25 @@ mod tests {
     }
 
     #[test]
+    fn irc_mention_preserves_multibyte_utf8() {
+        // Non-ASCII characters must survive the byte-iteration path without corruption.
+        let r = convert_irc_mentions("café @alice résumé", &StubIrcResolver);
+        assert_eq!(r, "café <@111> résumé");
+    }
+
+    #[test]
+    fn irc_mention_preserves_emoji() {
+        let r = convert_irc_mentions("hello @alice 🎉🌍", &StubIrcResolver);
+        assert_eq!(r, "hello <@111> 🎉🌍");
+    }
+
+    #[test]
+    fn irc_mention_preserves_cjk() {
+        let r = convert_irc_mentions("こんにちは @alice 世界", &StubIrcResolver);
+        assert_eq!(r, "こんにちは <@111> 世界");
+    }
+
+    #[test]
     fn irc_control_char_below_0x20_stripped() {
         // \x05 (ENQ) and \x07 (BEL) should be stripped
         assert_eq!(irc_to_discord_formatting("\x05hello\x07"), "hello");
@@ -1797,9 +1822,63 @@ mod tests {
             let _ = resolve_mentions(&text, &StubResolver);
         }
 
+        /// Arbitrary Unicode text without `@` must pass through `convert_irc_mentions`
+        /// completely unchanged. This catches any byte-vs-char corruption.
+        #[test]
+        fn irc_mentions_no_at_sign_is_identity(text in "[^@]{0,200}") {
+            let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
+            prop_assert_eq!(
+                &result, &text,
+                "text without @ must survive unchanged"
+            );
+        }
+
+        /// Text with frequent `@` signs must never corrupt surrounding
+        /// Unicode. The strategy forces `@` to appear often so we exercise
+        /// mention-parsing boundaries next to multi-byte characters.
+        #[test]
+        fn irc_mentions_at_heavy_unicode_never_corrupts(
+            parts in proptest::collection::vec(
+                proptest::prop_oneof![
+                    3 => Just("@".to_string()),
+                    2 => "[a-zA-Z_]{1,8}".prop_map(|s| format!("@{s}")),
+                    3 => "\\PC{1,20}",  // arbitrary non-control Unicode
+                ],
+                1..=10,
+            )
+        ) {
+            let text = parts.join("");
+            let result = convert_irc_mentions(&text, &StubIrcResolver);
+            // Every non-ASCII-alphanumeric, non-@ character in the input must
+            // appear in the output — mention resolution can only replace
+            // `@nick` with `<@id>`, never destroy surrounding text.
+            for ch in text.chars() {
+                if !ch.is_ascii_alphanumeric() && ch != '@' {
+                    prop_assert!(
+                        result.contains(ch),
+                        "character {ch:?} (U+{:04X}) was lost from output.\n  input:  {text:?}\n  output: {result:?}",
+                        ch as u32
+                    );
+                }
+            }
+        }
+
         #[test]
         fn markdown_to_irc_never_panics(text in ".*") {
             let _ = markdown_to_irc(&text);
+        }
+
+        /// Plain text (no markdown markers or backslashes) must pass through
+        /// `markdown_to_irc` completely unchanged.
+        #[test]
+        fn markdown_to_irc_plain_text_is_identity(
+            text in "[a-zA-Z0-9 ,.!?;:]{0,200}"
+        ) {
+            let result = markdown_to_irc(&text);
+            prop_assert_eq!(
+                &result, &text,
+                "plain text must survive markdown_to_irc unchanged"
+            );
         }
 
         #[test]
@@ -1822,6 +1901,57 @@ mod tests {
             assert!(!result.chars().any(|c| c.is_control()));
         }
 
+        /// `irc_to_discord_formatting` on full Unicode input: control chars
+        /// must be stripped, all other text must survive intact.
+        #[test]
+        fn irc_to_discord_preserves_unicode_text(text in "\\PC{0,200}") {
+            // \\PC = non-control Unicode chars — no IRC control codes present.
+            let result = irc_to_discord_formatting(&text);
+            prop_assert_eq!(
+                &result, &text,
+                "text without control characters must pass through unchanged"
+            );
+        }
+
+        /// `irc_to_discord_formatting` must strip all control characters and
+        /// preserve all non-control, non-digit-after-color characters.
+        ///
+        /// Note: digits immediately after `\x03` are legitimately consumed as
+        /// color parameters (up to 2 fg digits, optionally `,` + 2 bg digits),
+        /// so we use a strategy that avoids placing digits right after `\x03`.
+        #[test]
+        fn irc_to_discord_strips_controls_keeps_text(
+            parts in proptest::collection::vec(
+                proptest::prop_oneof![
+                    3 => "[a-zA-Z\u{00C0}-\u{024F}\u{4E00}-\u{4E10} ,.!?]{1,20}",
+                    2 => proptest::strategy::Just("\x02".to_string()),
+                    1 => proptest::strategy::Just("\x1d".to_string()),
+                    1 => proptest::strategy::Just("\x1f".to_string()),
+                    1 => proptest::strategy::Just("\x03 ".to_string()), // color + space (not digit)
+                    1 => proptest::strategy::Just("\x0f".to_string()),
+                ],
+                1..=10,
+            )
+        ) {
+            let text = parts.join("");
+            let result = irc_to_discord_formatting(&text);
+            // No IRC control characters survive
+            prop_assert!(
+                !result.chars().any(|c| c.is_control()),
+                "control characters must be stripped.\n  input:  {text:?}\n  output: {result:?}"
+            );
+            // Every non-control character from the input appears in the output
+            // (possibly wrapped in markdown markers)
+            for ch in text.chars() {
+                if !ch.is_control() {
+                    prop_assert!(
+                        result.contains(ch),
+                        "non-control char {ch:?} was lost.\n  input:  {text:?}\n  output: {result:?}"
+                    );
+                }
+            }
+        }
+
         #[test]
         fn markdown_to_irc_rich_syntax_never_panics(text in discord_markdown_strategy()) {
             let result = markdown_to_irc(&text);
@@ -1833,6 +1963,49 @@ mod tests {
         fn split_for_irc_never_panics(text in ".{0,2000}") {
             let lines = split_for_irc(&text);
             assert!(!lines.is_empty() || text.trim().is_empty());
+        }
+
+        /// Every line from `split_for_irc` must respect `MAX_LINE_BYTES`,
+        /// unless the line has no spaces (unsplittable word).
+        #[test]
+        fn split_for_irc_respects_line_length(text in ".{0,2000}") {
+            let lines = split_for_irc(&text);
+            for line in &lines {
+                prop_assert!(
+                    line.len() <= MAX_LINE_BYTES || !line.contains(' '),
+                    "line exceeds {MAX_LINE_BYTES} bytes and has spaces (should have been split): {:?} ({} bytes)",
+                    line, line.len()
+                );
+            }
+        }
+
+        /// `split_for_irc` must preserve all non-whitespace content from the
+        /// input (up to the line truncation limit).
+        #[test]
+        fn split_for_irc_preserves_words(text in "[a-zA-Z0-9 ]{0,500}") {
+            let lines = split_for_irc(&text);
+            let joined = lines.join(" ");
+            // Every word from the input must appear in the output
+            // (unless it was past the MAX_LINES cutoff).
+            for word in text.split_whitespace().take(50) {
+                prop_assert!(
+                    joined.contains(word),
+                    "word {word:?} lost in split.\n  input: {text:?}\n  output: {joined:?}"
+                );
+            }
+        }
+
+        /// `resolve_mentions` must pass through text that contains no `<...>`
+        /// patterns completely unchanged.
+        #[test]
+        fn resolve_mentions_no_angle_brackets_is_identity(
+            text in "[^<>]{0,200}"
+        ) {
+            let result = resolve_mentions(&text, &StubResolver);
+            prop_assert_eq!(
+                &result, &text,
+                "text without angle brackets must survive unchanged"
+            );
         }
 
         #[test]

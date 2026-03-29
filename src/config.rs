@@ -26,6 +26,17 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
     toml::from_str(&contents).map_err(ConfigError::Parse)
 }
 
+/// Load, deserialize, and validate the config file at `path`.
+///
+/// This is the correct entry point for initial startup — it ensures semantic
+/// validation (SID format, channel names, duplicates, etc.) runs before the
+/// application proceeds.
+pub fn load_and_validate(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
+    let config = load(path)?;
+    config.validate()?;
+    Ok(config)
+}
+
 /// Return the config file path from a CLI argument iterator.
 ///
 /// Looks for `--config <path>`; defaults to `config.toml` if not found.
@@ -980,5 +991,41 @@ mod tests {
             cfg.bridges[0].irc_channel = s.clone();
             prop_assert!(cfg.validate().is_err(), "irc channel {s} without # should be invalid");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // load_and_validate — ensures validation runs on initial load
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn load_and_validate_rejects_bad_sid() {
+        // Syntactically valid TOML that parses fine but has an invalid SID.
+        let dir = std::env::temp_dir().join("disirc_test_load_validate");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("bad_sid.toml");
+        std::fs::write(
+            &path,
+            r##"
+            [discord]
+            token = "Bot abc123"
+
+            [irc]
+            uplink = "irc.example.net"
+            link_name = "discord.example.net"
+            link_password = "secret"
+            sid = "INVALID"
+
+            [[bridge]]
+            discord_channel_id = "123456789012345678"
+            irc_channel = "#general"
+            "##,
+        )
+        .unwrap();
+        let result = load_and_validate(&path);
+        assert!(
+            result.is_err(),
+            "load_and_validate should reject invalid SID"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

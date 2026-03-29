@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs the quality gate before every commit.
+# Install with: git config core.hooksPath hooks
+#
+# Checks (in order, fast-failing):
+#   1. cargo fmt --check
+#   2. cargo clippy -- -D warnings
+#   3. cargo test
+#
+# cargo deny is intentionally excluded — it requires network access and is
+# slow enough to be disruptive in a commit hook. Run it manually or in CI.
+
+set -euo pipefail
+
+echo "pre-commit: checking formatting..."
+cargo fmt --check || {
+    echo ""
+    echo "FAILED: cargo fmt --check"
+    echo "Run 'cargo fmt' to fix."
+    exit 1
+}
+
+echo "pre-commit: running clippy..."
+cargo clippy -- -D warnings || {
+    echo ""
+    echo "FAILED: cargo clippy -- -D warnings"
+    exit 1
+}
+
+echo "pre-commit: running tests..."
+cargo test || {
+    echo ""
+    echo "FAILED: cargo test"
+    exit 1
+}
+
+echo "pre-commit: all checks passed."

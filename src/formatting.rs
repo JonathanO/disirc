@@ -1119,6 +1119,25 @@ mod tests {
     }
 
     #[test]
+    fn inline_code_before_code_block() {
+        // Inline code (`...`) must be recognized before a code block (```...```)
+        // when the inline backtick appears first in the string.
+        assert_eq!(
+            markdown_to_irc("`inline` then ```\nblock\n```"),
+            "`inline` then ```\nblock\n```"
+        );
+    }
+
+    #[test]
+    fn code_block_before_inline_code() {
+        // When ``` comes first, it must be recognized as a code block, not inline.
+        assert_eq!(
+            markdown_to_irc("```\nblock\n``` then `inline`"),
+            "```\nblock\n``` then `inline`"
+        );
+    }
+
+    #[test]
     fn unclosed_code_block_in_split() {
         // ``` without closing — should not panic
         let lines = split_for_irc("```rust\nfn main() {");

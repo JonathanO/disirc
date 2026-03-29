@@ -15,4 +15,15 @@ exclude_re = [
     # immediate re-fires. Creates a busy-loop but token bucket still gates
     # actual writes, so I/O behaviour is identical. Performance-only concern.
     "replace \\+ with - in run_session",
+
+    # INTENTS const: the four gateway intent flags are non-overlapping single-bit
+    # values, so `A | B == A ^ B` when `A & B == 0`. Equivalent mutant.
+    "replace \\| with \\^ in INTENTS",
+
+    # protect_code_spans: replacing `t <= s` with `false` makes the code always
+    # pick single-backtick mode when both ``` and ` start at the same position.
+    # This changes internal delimiter choice but not the output: the single-`
+    # path extracts a smaller span, and the remaining backticks are re-parsed on
+    # the next iteration, still protecting all code content.
+    "replace match guard t <= s with false in protect_code_spans",
 ]

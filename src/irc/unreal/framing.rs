@@ -48,19 +48,14 @@ impl<R: tokio::io::AsyncRead + Unpin> LineReader<R> {
             }
 
             // Strip trailing \r\n or bare \n.
-            // The *first* `end > 0` guard is always true because read_until returned
-            // n > 0 bytes (raw.len() ≥ 1). Mutating it to `>= 0` is therefore
-            // mutation-equivalent; the guard is kept for defensive clarity.
+            // `raw.len() >= 1` is guaranteed here because `read_until` returned
+            // `n > 0` bytes, so the first indexing is safe without a length check.
             //
-            // The *second* `end > 0` guard is NOT equivalent: when the input is a
-            // bare `\n` (one byte), stripping the newline leaves end = 0, and the
-            // guard prevents a usize underflow/panic when checking `raw[end - 1]`.
+            // The `end > 0` guard on the *second* strip IS required: a bare `\n`
+            // input leaves `end = 0` after stripping the newline, and the guard
+            // prevents a usize underflow/panic when checking `raw[end - 1]`.
             let end = raw.len();
-            let end = if end > 0 && raw[end - 1] == b'\n' {
-                end - 1
-            } else {
-                end
-            };
+            let end = if raw[end - 1] == b'\n' { end - 1 } else { end };
             let end = if end > 0 && raw[end - 1] == b'\r' {
                 end - 1
             } else {

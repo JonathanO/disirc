@@ -440,9 +440,12 @@ fn split_long_line(line: &str, max_bytes: usize) -> Vec<String> {
     let mut remaining = line;
 
     while remaining.len() > max_bytes {
-        // Find the last char boundary at or before max_bytes
+        // Find the last char boundary at or before max_bytes.
+        // `is_char_boundary(0)` is always true, so the loop is guaranteed to
+        // terminate without the `> 0` guard — removed to eliminate an
+        // equivalent-mutant target.
         let mut boundary = max_bytes;
-        while boundary > 0 && !remaining.is_char_boundary(boundary) {
+        while !remaining.is_char_boundary(boundary) {
             boundary -= 1;
         }
 
@@ -811,6 +814,29 @@ mod tests {
     }
 
     #[test]
+    fn inline_code_with_formatting_before_code_block() {
+        // The inline code `*not_italic*` must be picked up first (position 0)
+        // so its content is protected from markdown conversion.  If the match
+        // guard picked the later ``` first, the `*` would be converted to IRC
+        // italic control codes.
+        assert_eq!(
+            markdown_to_irc("`*protected*` then ```block```"),
+            "`*protected*` then ```block```"
+        );
+    }
+
+    #[test]
+    fn code_block_with_formatting_before_inline() {
+        // The ``` block appears first (position 0) — its content must be
+        // protected.  If the match guard wrongly selected single backtick
+        // first, the `**bold**` would be converted.
+        assert_eq!(
+            markdown_to_irc("```**protected**``` then `inline`"),
+            "```**protected**``` then `inline`"
+        );
+    }
+
+    #[test]
     fn unclosed_code_block_in_split() {
         let lines = split_for_irc("```rust\nfn main() {");
         assert!(!lines.is_empty());
@@ -968,6 +994,18 @@ mod tests {
         let line = "x".repeat(MAX_LINE_BYTES);
         let parts = split_long_line(&line, MAX_LINE_BYTES);
         assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], line);
+    }
+
+    #[test]
+    fn split_long_line_exactly_max_bytes_with_space_stays_whole() {
+        // A string of exactly max_bytes with an internal space must NOT be
+        // split — it fits in one line.  Catches > vs >= in the outer loop.
+        let mut line = "a".repeat(MAX_LINE_BYTES - 5);
+        line.push_str(" bbbb");
+        assert_eq!(line.len(), MAX_LINE_BYTES);
+        let parts = split_long_line(&line, MAX_LINE_BYTES);
+        assert_eq!(parts.len(), 1, "should not split at exactly max_bytes");
         assert_eq!(parts[0], line);
     }
 

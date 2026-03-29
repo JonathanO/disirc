@@ -259,6 +259,23 @@ mod tests {
     }
 
     #[test]
+    fn burst_introduce_uses_configured_ident_and_host_suffix() {
+        let mut pm = make_pm(); // ident="bridge", host_suffix="users.example.com"
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        let irc = IrcState::default();
+        let cmds = produce_burst_commands(&pm, &irc, 1_000);
+        if let S2SCommand::IntroduceUser { ident, host, .. } = &cmds[0] {
+            assert_eq!(ident, "bridge");
+            assert!(
+                host.ends_with(".users.example.com"),
+                "host should end with configured host_suffix, got: {host}"
+            );
+        } else {
+            panic!("expected IntroduceUser as first command");
+        }
+    }
+
+    #[test]
     fn burst_uses_channel_ts_from_irc_state() {
         let mut pm = make_pm();
         pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);

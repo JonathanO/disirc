@@ -34,8 +34,9 @@ The sanitized nick is stable for the session. If the Discord user changes their 
 ### Introduction
 
 A pseudoclient is introduced when:
-- The IRC link burst begins and the Discord user is currently in a bridged channel, **or**
-- A Discord user sends a message in a bridged channel and has no existing pseudoclient.
+- The IRC link burst begins and the Discord user is **non-offline** in a bridged channel, **or**
+- A Discord user sends a message in a bridged channel and has no existing pseudoclient, **or**
+- A `PRESENCE_UPDATE` arrives for a user with no existing pseudoclient and the new status is non-offline (user came online after the initial burst).
 
 Introduction sequence:
 ```
@@ -44,6 +45,25 @@ Introduction sequence:
 ```
 
 Multiple bridged channels: one `SJOIN` per channel.
+
+### Unknown user events (large-guild chunking)
+
+For large Discord guilds, `GUILD_CREATE` delivers only online and role-bearing members;
+the remaining (offline) members arrive via `GUILD_MEMBERS_CHUNK` events that serenity
+merges into its cache. `disirc` does not process `GUILD_MEMBERS_CHUNK` directly, so
+these offline members have no pseudoclient at startup.
+
+Events received for a user with no existing pseudoclient are handled as follows:
+
+| Event | Behaviour |
+|---|---|
+| `DiscordEvent::MessageReceived` | Introduce pseudoclient on demand (see Introduction above), then relay the message. |
+| `DiscordEvent::PresenceUpdated` with non-offline status | Introduce pseudoclient (Introduction sequence), then apply the AWAY state for the new presence. This is how offline members who were excluded from the burst appear on IRC when they come online. |
+| `DiscordEvent::PresenceUpdated` with offline status | Silently drop. The user was never introduced; there is nothing to update or quit. |
+| `DiscordEvent::MemberRemoved` | Silently drop. No pseudoclient exists to quit. |
+
+This lazy introduction strategy avoids introducing pseudoclients for offline members who
+may never become active in a bridged channel.
 
 ### Quit
 

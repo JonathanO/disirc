@@ -32,7 +32,7 @@ pub struct TokenBucket {
     capacity: f64,
     /// Tokens added per millisecond.
     rate_per_ms: f64,
-    /// Wall-clock time of last call to refill().
+    /// Wall-clock time of last call to `refill()`.
     last_refill: Instant,
 }
 

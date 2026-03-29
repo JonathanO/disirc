@@ -73,9 +73,12 @@ pub async fn run_discord(
         .expect("Failed to create Discord client");
 
     // Spawn the outgoing command + reload processor before starting the Gateway
-    // loop.  client.http is available immediately after Client::builder.
+    // loop.  client.http and client.cache are both available immediately after
+    // Client::builder; the cache is already populated by the time any
+    // ReloadBridges command can arrive.
     tokio::spawn(process_discord_commands(
         client.http.clone(),
+        client.cache.clone(),
         cmd_rx,
         event_tx,
         self_filter,

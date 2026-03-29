@@ -1,7 +1,7 @@
 // This module will be called from main.rs in a future task.
 #![allow(dead_code)]
 
-//! Full IRC server-link connection loop for UnrealIRCd S2S.
+//! Full IRC server-link connection loop for `UnrealIRCd` S2S.
 //!
 //! The public entry point is [`run_connection`]. It never returns — on link
 //! failure it emits `S2SEvent::LinkDown`, waits with full-jitter exponential
@@ -50,7 +50,7 @@ impl SessionTimings {
     }
 }
 
-/// Capabilities negotiated during the UnrealIRCd handshake.
+/// Capabilities negotiated during the `UnrealIRCd` handshake.
 struct HandshakeResult {
     /// The uplink's SID, extracted from its `PROTOCTL SID=` line.
     uplink_sid: String,
@@ -76,7 +76,7 @@ pub(crate) fn backoff_delay(attempt: u32) -> Duration {
 
 /// Run the IRC connection forever, reconnecting on failure.
 ///
-/// Connects to `config.uplink:config.port`, runs the UnrealIRCd S2S
+/// Connects to `config.uplink:config.port`, runs the `UnrealIRCd` S2S
 /// handshake, emits `S2SEvent::LinkUp`, then processes events until the link
 /// fails. On failure emits `S2SEvent::LinkDown` and reconnects after a
 /// full-jitter exponential backoff delay.
@@ -230,7 +230,7 @@ async fn send_credentials(writer: &mut IrcWriter, config: &IrcConfig) -> std::io
     Ok(())
 }
 
-/// Run the UnrealIRCd S2S handshake and return the negotiated capabilities.
+/// Run the `UnrealIRCd` S2S handshake and return the negotiated capabilities.
 ///
 /// Sends our credentials, then reads the uplink's credentials until `SERVER`
 /// is received. Returns `Err` (fatal misconfiguration) if the uplink sends the
@@ -277,7 +277,7 @@ async fn do_handshake(
             IrcCommand::Protoctl { tokens } => {
                 for token in tokens {
                     if let Some(sid) = token.strip_prefix("SID=") {
-                        uplink_sid = sid.to_owned();
+                        sid.clone_into(&mut uplink_sid);
                     }
                     if token == "MTAGS" {
                         mtags_active = true;
@@ -432,7 +432,7 @@ async fn run_session(
             }
 
             // Rate-limited queue drain: fires when the next token is available.
-            _ = &mut write_timer, if !queue.is_empty() => {
+            () = &mut write_timer, if !queue.is_empty() => {
                 // Token should now be available; loop back to drain at the top.
             }
 
@@ -447,7 +447,7 @@ async fn run_session(
             }
 
             // PONG timeout.
-            _ = &mut pong_sleep, if waiting_for_pong => {
+            () = &mut pong_sleep, if waiting_for_pong => {
                 anyhow::bail!("Ping timeout: no PONG received within {pong_timeout:?}");
             }
         }

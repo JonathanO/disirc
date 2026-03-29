@@ -13,11 +13,11 @@ use thiserror::Error;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// A single IRC message with optional IRCv3 tags, an optional source prefix,
+/// A single IRC message with optional `IRCv3` tags, an optional source prefix,
 /// and a typed command.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrcMessage {
-    /// IRCv3 message tags (key, optional value).  Order is preserved.
+    /// `IRCv3` message tags (key, optional value).  Order is preserved.
     pub tags: Vec<(String, Option<String>)>,
     /// Source prefix (server name or UID), without the leading `:`.
     pub prefix: Option<String>,
@@ -27,7 +27,7 @@ pub struct IrcMessage {
 
 /// Parameters for the `UID` command (user introduction burst).
 ///
-/// Corresponds to the 12-field `UID` command in the UnrealIRCd S2S protocol.
+/// Corresponds to the 12-field `UID` command in the `UnrealIRCd` S2S protocol.
 /// Field order matches the wire format exactly.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UidParams {
@@ -95,7 +95,7 @@ pub enum IrcCommand {
         /// Human-readable server description.
         description: String,
     },
-    /// `SID` — server announcement with a numeric SID (UnrealIRCd TS6).
+    /// `SID` — server announcement with a numeric SID (`UnrealIRCd` TS6).
     Sid {
         /// Fully-qualified server name.
         name: String,

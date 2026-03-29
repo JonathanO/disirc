@@ -68,7 +68,7 @@ fn make_accept_any_tls_config() -> ClientConfig {
 
 /// A TLS server-certificate verifier that accepts any certificate.
 ///
-/// IRC servers (including UnrealIRCd) commonly use self-signed certificates
+/// IRC servers (including `UnrealIRCd`) commonly use self-signed certificates
 /// for server links. The link password is the real authentication mechanism;
 /// cert verification would add operator burden without a security benefit
 /// in this context.

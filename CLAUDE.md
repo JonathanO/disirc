@@ -4,12 +4,22 @@
 
 `disirc` is a Discord ↔ IRC bridge daemon written in Rust. It relays messages bidirectionally between mapped Discord channels and IRC channels, running as a single async process. It peers with UnrealIRCd using the server-to-server (S2S) protocol, presenting Discord users as real IRC pseudoclients on the network.
 
+## Current project phase
+
+All v1 specs (01–07) are implemented with mutation testing complete. The project is in integration/hardening phase. Likely next work:
+
+- End-to-end integration testing with real IRC and Discord connections
+- Bug fixes discovered during integration (write a failing test first, then fix)
+- The deferred DM bridging spec (see TODO.md "Future specs")
+- Performance profiling and optimization if needed
+
 ## Session continuity
 
 At the **start** of every session:
 1. Re-read this file (`CLAUDE.md`) in full.
 2. Read `TODO.md` to understand what was in progress and what is pending.
-3. Sync the in-session `TodoWrite` task list with `TODO.md`.
+3. Read `LAYOUT.md` for a map of every source module and what belongs in it.
+4. If `TODO.md` shows tasks in progress, load them into the in-session task tracker so work can resume.
 
 At the **start of each new implementation task** (new spec, new module, new bug fix), re-read the relevant spec and the **Spec-driven development workflow** and **Done means** sections of this file before writing any code.
 
@@ -20,18 +30,20 @@ Update `TODO.md` and the relevant `specs/<spec>/TODO.md` **immediately** wheneve
 
 Do not batch `TODO.md` updates to the end of a session — update them in place as work happens so the files always reflect reality.
 
+## General coding principles
+
+- Use subagents when tasks can run in parallel, require isolated context, or involve independent workstreams that don't need to share state. For simple tasks, sequential operations, single-file edits, or tasks where you need to maintain context across steps, work directly rather than delegating.
+- Write high-quality, general-purpose solutions using the standard tools available. Do not create helper scripts or workarounds. Implement solutions that work correctly for all valid inputs, not just test cases. Do not hard-code values or create solutions that only work for specific test inputs.
+- Focus on understanding the problem requirements and implementing the correct algorithm. Tests verify correctness, not define the solution. Provide principled implementations that follow best practices and software design principles.
+- If a task is unreasonable or infeasible, or if any tests are incorrect, inform me rather than working around them. Solutions should be robust, maintainable, and extendable.
+- If you intend to call multiple tools and there are no dependencies between the tool calls, make all of the independent tool calls in parallel. Prioritize calling tools simultaneously whenever the actions can be done in parallel rather than sequentially. Never use placeholders or guess missing parameters in tool calls.
+- Tests should be written first for bug fixes, as the test case serves to prevent regressions in future.
+
 ## Spec-driven development workflow
 
 1. **Specs live in `specs/<name>/spec.md`**. Before implementing any feature, read the relevant spec file(s). Each spec directory also contains a `TODO.md` tracking tasks for that spec.
 2. **No spec = no implementation**. If a feature has no spec, write or extend the spec first, get it reviewed, then implement.
-3. **Tests before code — always, no exceptions**. This applies to **all** code changes without exception: new features, bug fixes, refactors, and spec updates that change behaviour. The sequence is rigid:
-   a. Write the test(s) that capture the expected behaviour or the bug being fixed.
-   b. Run them and confirm they **fail** (red) for the right reason.
-   c. Write the minimum implementation code to make them pass (green).
-   d. Refactor if needed, keeping tests green.
-
-   **Never write implementation code before the failing test exists.** If you catch yourself writing code before writing a test, stop, write the test first, confirm it fails, then continue.
-4. **Update `SPECS.md`** when a spec moves from Pending → In Progress → Implemented.
+3. **Update `SPECS.md`** when a spec moves from Pending → In Progress → Implemented.
 
 ## Key dependencies
 
@@ -41,22 +53,35 @@ Do not batch `TODO.md` updates to the end of a session — update them in place 
 | `tokio-rustls` | TLS for the UnrealIRCd server link |
 | `serenity` | Discord Gateway + REST client |
 | `serde` + `toml` | Config deserialization |
-| `tracing` + `tracing-subscriber` | Structured logging |
+| `tracing` + `tracing-subscriber` | Structured logging (with `env-filter` feature for `RUST_LOG`) |
+| `chrono` | Timestamp handling (server-time in formatting) |
 | `thiserror` | Derive macros for typed error enums in each module |
 | `anyhow` | Error propagation with context chains in the application/connection layer |
+| `rand` | Random jitter for reconnect backoff |
 | `proptest` | Property-based testing (dev) |
+| `tracing-test` | Test harness for tracing assertions (dev) |
 | `cargo-deny` | Dependency audit — CVEs, licences, duplicates (CI) |
+
+## Prerequisites
+
+`cargo-deny` and `cargo-mutants` are CLI tools that must be installed separately:
+
+```
+cargo install cargo-deny cargo-mutants
+```
 
 ## Project structure
 
 ```
-src/                    — implementation (added as specs are approved)
+src/                    — implementation (see LAYOUT.md for per-module detail)
+  irc/                  — IRC abstraction layer + UnrealIRCd S2S implementation
+  discord/              — Discord Gateway handler, webhook sender, event/command types
 specs/                  — behavioral specs (source of truth)
   <name>/spec.md        — the spec itself
   <name>/TODO.md        — per-spec task list
 research/               — research notes, protocol analysis, prior art (source material for specs)
 tests/                  — integration tests
-config.toml             — example/local config (never commit real tokens)
+config.example.toml     — example config with dummy values (copy to config.toml)
 SPECS.md                — spec implementation status tracker (links to per-spec dirs)
 TODO.md                 — high-level status index (links to per-spec TODOs)
 deny.toml               — cargo-deny configuration
@@ -96,9 +121,13 @@ cargo fmt --check
 cargo deny check                    # no CVEs, licence violations, or banned crates
 ```
 
-Clippy lint groups are configured in `Cargo.toml` under `[lints.clippy]`:
-- `pedantic = "warn"` — stricter correctness and style
-- `cargo = "warn"` — Cargo.toml hygiene
+Clippy pedantic and cargo lint groups should be enabled. If `Cargo.toml` does not yet contain a `[lints.clippy]` section, add one:
+
+```toml
+[lints.clippy]
+pedantic = "warn"
+cargo = "warn"
+```
 
 ## Closing out a spec (Implemented)
 
@@ -108,7 +137,7 @@ Before marking a spec as Implemented in `SPECS.md`, run mutation testing scoped 
 cargo mutants -p disirc -- <module-path>
 ```
 
-Zero surviving mutants is required. If a mutant survives, either fix the test gap or update the spec to explicitly exclude that case.
+Zero surviving mutants that represent real test gaps. Equivalent mutants and integration-only survivors (e.g., thin shims that require live network context, non-deterministic clock functions, async event loops) must be documented in the spec's `TODO.md` with a brief justification for each category. If a mutant survives and is not equivalent, either fix the test gap or update the spec to explicitly exclude that case.
 
 ## When to commit
 
@@ -117,6 +146,8 @@ Commit at these natural boundaries — not before:
 1. **Spec approved** — after a spec has been written and reviewed, before any implementation begins. Message: `spec: add/update <spec-name>`.
 2. **Task complete** — after each individual implementation task passes `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check`. Message: `feat(<module>): <task description>`.
 3. **Spec implemented** — after all tasks for a spec are done and mutation testing is clean, mark the spec Implemented in `SPECS.md`. Message: `chore: mark <spec-name> as Implemented`.
+
+Valid commit message prefixes: `feat(<module>)`, `fix(<module>)`, `refactor(<module>)`, `chore(<scope>)`, `spec:`, `test(<module>)`.
 
 Each task should be a single focused commit. Do not batch multiple tasks into one commit.
 
@@ -172,4 +203,6 @@ Do not write spec behaviour from memory alone when a primary source exists and i
 
 - Never commit `config.toml` containing real tokens. Use `config.example.toml` for examples.
 - The Discord bot token and IRC connection passwords are secrets — treat them accordingly.
+- Webhook URLs contain authentication tokens — treat them as secrets equivalent to the bot token.
+- The IRC TLS connection uses `AcceptAnyCert` because IRC servers commonly use self-signed certificates. The link password is the real authentication mechanism. Do not weaken this further (e.g., by disabling TLS entirely).
 - `@everyone` and `@here` must be suppressed on all IRC → Discord paths by default. This is a mandatory safety rule, not an operator option.

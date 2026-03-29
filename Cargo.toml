@@ -11,12 +11,31 @@ tracing-test = "0.2"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
-serenity = { version = "0.12", features = ["client", "gateway", "model"] }
+serenity = { version = "0.12", features = ["cache", "client", "gateway", "model"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 thiserror = "2"
 anyhow = "1"
 rand = "0.10.0"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Cargo group: transitive dep duplication is not our fault; metadata is irrelevant for a non-published binary.
+multiple_crate_versions = "allow"
+cargo_common_metadata = "allow"
+# Pedantic group: noisy without proportional value for this codebase.
+similar_names = "allow"
+too_many_lines = "allow"
+module_name_repetitions = "allow"
+struct_excessive_bools = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+items_after_statements = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"

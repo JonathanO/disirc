@@ -3,6 +3,7 @@
 //! See `specs/05-formatting.md` for the full specification.
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 
 // ---------------------------------------------------------------------------
 // IRC control characters
@@ -569,7 +570,7 @@ pub fn irc_to_discord_formatting(text: &str) -> String {
 /// Consume up to 2 color digits from the iterator.
 fn consume_color_digits(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
     for _ in 0..2 {
-        if chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+        if chars.peek().is_some_and(char::is_ascii_digit) {
             chars.next();
         } else {
             break;
@@ -652,7 +653,7 @@ pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> St
             }
             let nick = &text[nick_start..nick_end];
             if let Some(user_id) = resolver.resolve_nick(nick) {
-                result.push_str(&format!("<@{user_id}>"));
+                write!(result, "<@{user_id}>").unwrap();
             } else {
                 result.push_str(&text[i..nick_end]);
             }

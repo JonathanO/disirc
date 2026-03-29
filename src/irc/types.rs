@@ -20,7 +20,7 @@ pub enum MemberPrefix {
 /// Protocol-agnostic events emitted by the connection module to the processing task.
 ///
 /// The processing task receives these over an `mpsc` channel and must never
-/// see `IrcMessage` or any other UnrealIRCd wire type directly.
+/// see [`IrcMessage`] or any other `UnrealIRCd` wire type directly.
 #[derive(Debug, Clone, PartialEq)]
 pub enum S2SEvent {
     /// Handshake complete; the link is ready for burst.

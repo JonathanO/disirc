@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+pub mod bridge;
 pub mod config;
 pub mod discord;
 pub mod formatting;

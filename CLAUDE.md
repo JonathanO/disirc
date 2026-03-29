@@ -9,7 +9,8 @@
 At the **start** of every session:
 1. Re-read this file (`CLAUDE.md`) in full.
 2. Read `TODO.md` to understand what was in progress and what is pending.
-3. Sync the in-session `TodoWrite` task list with `TODO.md`.
+3. Read `LAYOUT.md` for a map of every source module and what belongs in it.
+4. Sync the in-session `TodoWrite` task list with `TODO.md`.
 
 At the **start of each new implementation task** (new spec, new module, new bug fix), re-read the relevant spec and the **Spec-driven development workflow** and **Done means** sections of this file before writing any code.
 
@@ -20,18 +21,18 @@ Update `TODO.md` and the relevant `specs/<spec>/TODO.md` **immediately** wheneve
 
 Do not batch `TODO.md` updates to the end of a session — update them in place as work happens so the files always reflect reality.
 
+Use subagents when tasks can run in parallel, require isolated context, or involve independent workstreams that don't need to share state. For simple tasks, sequential operations, single-file edits, or tasks where you need to maintain context across steps, work directly rather than delegating.
+Please write a high-quality, general-purpose solution using the standard tools available. Do not create helper scripts or workarounds to accomplish the task more efficiently. Implement a solution that works correctly for all valid inputs, not just the test cases. Do not hard-code values or create solutions that only work for specific test inputs. Instead, implement the actual logic that solves the problem generally.
+Focus on understanding the problem requirements and implementing the correct algorithm. Tests are there to verify correctness, not to define the solution. Provide a principled implementation that follows best practices and software design principles.
+If the task is unreasonable or infeasible, or if any of the tests are incorrect, please inform me rather than working around them. The solution should be robust, maintainable, and extendable.
+If you intend to call multiple tools and there are no dependencies between the tool calls, make all of the independent tool calls in parallel. Prioritize calling tools simultaneously whenever the actions can be done in parallel rather than sequentially. For example, when reading 3 files, run 3 tool calls in parallel to read all 3 files into context at the same time. Maximize use of parallel tool calls where possible to increase speed and efficiency. However, if some tool calls depend on previous calls to inform dependent values like the parameters, do NOT call these tools in parallel and instead call them sequentially. Never use placeholders or guess missing parameters in tool calls.
+Tests should be written first for bug fixes, as the test case serves to prevent regressions in future.
+
 ## Spec-driven development workflow
 
 1. **Specs live in `specs/<name>/spec.md`**. Before implementing any feature, read the relevant spec file(s). Each spec directory also contains a `TODO.md` tracking tasks for that spec.
 2. **No spec = no implementation**. If a feature has no spec, write or extend the spec first, get it reviewed, then implement.
-3. **Tests before code — always, no exceptions**. This applies to **all** code changes without exception: new features, bug fixes, refactors, and spec updates that change behaviour. The sequence is rigid:
-   a. Write the test(s) that capture the expected behaviour or the bug being fixed.
-   b. Run them and confirm they **fail** (red) for the right reason.
-   c. Write the minimum implementation code to make them pass (green).
-   d. Refactor if needed, keeping tests green.
-
-   **Never write implementation code before the failing test exists.** If you catch yourself writing code before writing a test, stop, write the test first, confirm it fails, then continue.
-4. **Update `SPECS.md`** when a spec moves from Pending → In Progress → Implemented.
+3. **Update `SPECS.md`** when a spec moves from Pending → In Progress → Implemented.
 
 ## Key dependencies
 

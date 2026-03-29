@@ -67,10 +67,16 @@ pub async fn run_discord(
         bridged_channel_ids: Arc::clone(&channel_ids),
     };
 
-    let mut client = Client::builder(&config.token, INTENTS)
+    let mut client = match Client::builder(&config.token, INTENTS)
         .event_handler(handler)
         .await
-        .expect("Failed to create Discord client");
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "Failed to create Discord client");
+            panic!("Failed to create Discord client: {e}");
+        }
+    };
 
     // Spawn the outgoing command + reload processor before starting the Gateway
     // loop.  client.http and client.cache are both available immediately after
@@ -88,6 +94,9 @@ pub async fn run_discord(
     if let Err(e) = client.start().await {
         error!(error = %e, "Discord client fatal error");
     }
+    // This function returns `-> !`. Serenity's client.start() only returns on
+    // a fatal error that cannot be retried. Panicking here is intentional —
+    // the tokio runtime will propagate the panic to the join handle in main.
     panic!("Discord client terminated unexpectedly");
 }
 

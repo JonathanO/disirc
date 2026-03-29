@@ -204,17 +204,24 @@ fn validate_irc_channel(channel: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Webhook URL must be HTTPS with host `discord.com` or `discordapp.com`.
+/// Webhook URL must be HTTPS with host `discord.com` or `discordapp.com`
+/// and path starting with `/api/webhooks/`.
 fn validate_webhook_url(url: &str) -> Result<(), ConfigError> {
     let err = || {
         ConfigError::Validation(format!(
-            "bridge webhook_url {url:?} is invalid: must be an HTTPS URL with host discord.com or discordapp.com"
+            "bridge webhook_url {url:?} is invalid: must be https://discord.com/api/webhooks/<id>/<token> \
+             or https://discordapp.com/api/webhooks/<id>/<token>"
         ))
     };
 
     let rest = url.strip_prefix("https://").ok_or_else(err)?;
-    let host = rest.split('/').next().unwrap_or("");
+    // Split host from path at the first '/'.
+    let (host, path) = rest.split_once('/').ok_or_else(err)?;
     if host != "discord.com" && host != "discordapp.com" {
+        return Err(err());
+    }
+    // Path must start with "api/webhooks/" (the leading '/' was consumed by split_once).
+    if !path.starts_with("api/webhooks/") {
         return Err(err());
     }
     Ok(())
@@ -683,6 +690,10 @@ mod tests {
             "https://notdiscord.com/api/webhooks/1/a", // wrong host
             "discord.com/api/webhooks/111/aaa",        // no scheme
             "",                                        // empty
+            "https://discord.com/",                    // no api/webhooks path
+            "https://discord.com",                     // no path at all
+            "https://discord.com/other/path",          // wrong path
+            "https://discordapp.com/channels/111/222", // valid host, wrong path
         ] {
             let mut cfg = valid_config();
             cfg.bridges[0].webhook_url = Some((*url).to_string());

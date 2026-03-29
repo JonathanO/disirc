@@ -76,8 +76,13 @@ pub(crate) async fn send_discord_message(
             warn!(error = %e, channel_id, "Webhook execute failed; dropping message");
         }
     } else {
-        // Plain send: prepend nick and apply mention suppression to the text body
-        let safe_text = format!("**[{}]** {}", sender_nick, suppress_mentions(text));
+        // Plain send: prepend nick and apply mention suppression to both nick and body.
+        // A malicious IRC nick like "@everyone" must not trigger pings.
+        let safe_text = format!(
+            "**[{}]** {}",
+            suppress_mentions(sender_nick),
+            suppress_mentions(text)
+        );
         let msg = CreateMessage::new().content(safe_text);
         if let Err(e) = ChannelId::new(channel_id).send_message(http, msg).await {
             warn!(error = %e, channel_id, "Channel send failed; dropping message");
@@ -421,6 +426,40 @@ mod tests {
         ) {
             prop_assert_eq!(suppress_mentions(&s), s);
         }
+    }
+
+    // --- plain-send nick sanitization ---
+
+    #[test]
+    fn plain_send_format_suppresses_at_everyone_in_nick() {
+        // Simulates the plain-send format string used in send_discord_message.
+        let nick = "@everyone";
+        let text = "hello";
+        let safe_text = format!(
+            "**[{}]** {}",
+            suppress_mentions(nick),
+            suppress_mentions(text)
+        );
+        assert!(
+            !safe_text.contains("@everyone"),
+            "plain-send must suppress @everyone in nick: {safe_text:?}"
+        );
+        assert!(safe_text.contains("@\u{200B}everyone"));
+    }
+
+    #[test]
+    fn plain_send_format_suppresses_at_here_in_nick() {
+        let nick = "@here";
+        let text = "world";
+        let safe_text = format!(
+            "**[{}]** {}",
+            suppress_mentions(nick),
+            suppress_mentions(text)
+        );
+        assert!(
+            !safe_text.contains("@here"),
+            "plain-send must suppress @here in nick: {safe_text:?}"
+        );
     }
 
     // --- snapshot_from_cache ---

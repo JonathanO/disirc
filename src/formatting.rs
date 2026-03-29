@@ -780,7 +780,9 @@ pub fn irc_to_discord_plain(
 pub fn format_server_time(unix_secs: i64, millis: u32) -> String {
     use chrono::{DateTime, Utc};
 
-    let dt = DateTime::<Utc>::from_timestamp(unix_secs, millis * 1_000_000)
+    // Clamp to valid range to prevent overflow in the nanosecond conversion.
+    let nanos = millis.min(999) * 1_000_000;
+    let dt = DateTime::<Utc>::from_timestamp(unix_secs, nanos)
         .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).expect("epoch is valid"));
     dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
@@ -2037,6 +2039,17 @@ mod tests {
             assert_eq!(&formatted[13..14], ":");
             assert_eq!(&formatted[16..17], ":");
             assert_eq!(&formatted[19..20], ".");
+        }
+
+        /// Out-of-range millis values must not panic (clamped to 999).
+        #[test]
+        fn server_time_out_of_range_millis_does_not_panic(
+            secs in 0i64..4_102_444_800i64,
+            millis in 1000u32..=u32::MAX,
+        ) {
+            let formatted = format_server_time(secs, millis);
+            assert!(formatted.ends_with('Z'));
+            assert_eq!(formatted.len(), 24);
         }
 
         /// Discord → IRC → Discord round-trip: formatting should survive

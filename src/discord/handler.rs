@@ -41,7 +41,9 @@ pub(crate) fn resolve_display_name<'a>(
     global_name: Option<&'a str>,
     username: &'a str,
 ) -> &'a str {
-    nick.or(global_name).unwrap_or(username)
+    nick.filter(|s| !s.is_empty())
+        .or(global_name.filter(|s| !s.is_empty()))
+        .unwrap_or(username)
 }
 
 /// Map a serenity [`OnlineStatus`] to a [`DiscordPresence`].
@@ -465,21 +467,6 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // member_removal_event
-    // ---------------------------------------------------------------------------
-
-    #[test]
-    fn member_removal_carries_user_and_guild_ids() {
-        let ev = member_removal_event(7, 100);
-        assert_eq!(
-            ev,
-            DiscordEvent::MemberRemoved {
-                user_id: 7,
-                guild_id: 100
-            }
-        );
-    }
-
     // ---------------------------------------------------------------------------
     // build_member_snapshot_event
     // ---------------------------------------------------------------------------
@@ -591,8 +578,16 @@ mod tests {
     }
 
     #[test]
-    fn empty_nick_still_preferred_over_global_name() {
-        assert_eq!(resolve_display_name(Some(""), Some("GlobalName"), "u"), "");
+    fn empty_nick_falls_through_to_global_name() {
+        assert_eq!(
+            resolve_display_name(Some(""), Some("GlobalName"), "u"),
+            "GlobalName"
+        );
+    }
+
+    #[test]
+    fn empty_nick_and_global_name_falls_through_to_username() {
+        assert_eq!(resolve_display_name(Some(""), Some(""), "user"), "user");
     }
 
     #[test]

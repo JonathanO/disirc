@@ -449,6 +449,15 @@ fn warn_extra_params(command: &str, params: &[String], expected: usize) {
     }
 }
 
+/// Build a typed `IrcCommand` from the raw command name and parameter list.
+///
+/// # Safety of `.unwrap()` calls
+///
+/// Every `.unwrap()` on `params.last()` or `params[N]` is guarded by a
+/// preceding `require_params(name, &params, min)` call which returns `Err`
+/// if the vec has fewer than `min` elements. After that check succeeds,
+/// indexing up to `min - 1` and `.last()` (for vecs of length ≥ 1) are
+/// guaranteed to succeed.
 fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseError> {
     let upper = name.to_ascii_uppercase();
     match upper.as_str() {

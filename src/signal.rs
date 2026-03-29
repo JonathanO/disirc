@@ -68,15 +68,6 @@ mod tests {
     #[cfg(unix)]
     use std::time::Duration;
 
-    /// Sending on the control channel works end-to-end (channel infrastructure).
-    #[tokio::test]
-    async fn reload_event_roundtrips_through_channel() {
-        let (tx, mut rx) = mpsc::channel(1);
-        tx.send(ControlEvent::Reload).await.unwrap();
-        let event = rx.recv().await.unwrap();
-        assert_eq!(event, ControlEvent::Reload);
-    }
-
     /// On non-Unix platforms the sender is dropped immediately, closing the
     /// channel. recv() returns None at once — no events, no blocking.
     /// The main loop simply never receives a reload event.

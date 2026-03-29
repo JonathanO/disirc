@@ -397,15 +397,14 @@ pub fn apply_discord_event(
             guild_id: _,
         } => {
             discord_state.display_names.remove(user_id);
-            if let Some(msg) = pm.quit(*user_id, "Left Discord") {
-                // msg is an IrcMessage but we need to emit an S2SCommand;
-                // extract the UID from the message prefix.
-                if let Some(uid) = msg.prefix {
-                    return vec![S2SCommand::QuitUser {
-                        uid,
-                        reason: "Left Discord".to_string(),
-                    }];
-                }
+            // Look up the UID before quitting (quit removes all state).
+            let uid = pm.get_by_discord_id(*user_id).map(|s| s.uid.clone());
+            if let Some(uid) = uid {
+                pm.quit(*user_id, "Left Discord");
+                return vec![S2SCommand::QuitUser {
+                    uid,
+                    reason: "Left Discord".to_string(),
+                }];
             }
             vec![]
         }
@@ -423,11 +422,17 @@ pub fn apply_discord_event(
                 .get(guild_id)
                 .cloned()
                 .unwrap_or_default();
-            let display_name = discord_state
+            let Some(display_name) = discord_state
                 .display_names
                 .get(user_id)
+                .filter(|s| !s.is_empty())
                 .cloned()
-                .unwrap_or_default();
+            else {
+                // No cached display name — skip introduction. The user will
+                // be introduced on-demand when they send a message (which
+                // carries their username).
+                return vec![];
+            };
             introduce_pseudoclient(
                 pm,
                 irc_state,
@@ -761,7 +766,9 @@ pub async fn run_bridge(
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
                         }
-                        let _ = timestamp; // acknowledged; used in cmd via irc_to_discord_command
+                        // TODO: thread `timestamp` (IRC server-time) through to
+                        // the Discord send path for accurate message timing.
+                        let _ = timestamp;
                     }
                     S2SEvent::NoticeReceived { from_uid, target, text } => {
                         if let Some(cmd) = route_irc_to_discord(
@@ -1828,6 +1835,58 @@ mod tests {
             cmds.iter()
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. }))
         );
+    }
+
+    #[test]
+    fn presence_updated_no_cached_display_name_skips_introduction() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        // No display name cached for user 50 — should not introduce.
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+            },
+            1000,
+        );
+
+        assert!(
+            pm.get_by_discord_id(50).is_none(),
+            "must not introduce with no display name"
+        );
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn presence_updated_empty_display_name_skips_introduction() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, String::new()); // empty display name
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+            },
+            1000,
+        );
+
+        assert!(
+            pm.get_by_discord_id(50).is_none(),
+            "must not introduce with empty display name"
+        );
+        assert!(cmds.is_empty());
     }
 
     #[test]

@@ -184,7 +184,7 @@ mod tests {
     use super::*;
 
     use crate::config::BridgeEntry;
-    use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence, MemberInfo};
+    use crate::discord::DiscordCommand;
     use crate::formatting::DiscordResolver;
     use crate::irc::{S2SCommand, S2SEvent};
     use crate::pseudoclients::PseudoclientManager;

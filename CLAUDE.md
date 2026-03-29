@@ -32,6 +32,7 @@ Do not batch `TODO.md` updates to the end of a session — update them in place 
 
 ## General coding principles
 
+- **Ask before implementing.** When the user asks a question about the codebase (e.g. "can we improve X?", "is there a way to fix Y?"), present the analysis and proposed approach first — do not start writing code until the user confirms. Only proceed directly when given an explicit instruction to implement (e.g. "do it", "go ahead", "make that change").
 - Use subagents when tasks can run in parallel, require isolated context, or involve independent workstreams that don't need to share state. For simple tasks, sequential operations, single-file edits, or tasks where you need to maintain context across steps, work directly rather than delegating.
 - Write high-quality, general-purpose solutions using the standard tools available. Do not create helper scripts or workarounds. Implement solutions that work correctly for all valid inputs, not just test cases. Do not hard-code values or create solutions that only work for specific test inputs.
 - Focus on understanding the problem requirements and implementing the correct algorithm. Tests verify correctness, not define the solution. Provide principled implementations that follow best practices and software design principles.

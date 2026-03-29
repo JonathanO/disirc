@@ -419,202 +419,223 @@ fn parse_params(s: &str) -> Vec<String> {
     params
 }
 
-/// Returns `Err(ParseError::MissingParams)` when `params` has fewer than `required` entries.
-fn require_params(command: &str, params: &[String], required: usize) -> Result<(), ParseError> {
-    if params.len() < required {
-        Err(ParseError::MissingParams {
-            command: command.to_string(),
-            required,
-            got: params.len(),
-        })
-    } else {
-        Ok(())
+/// Validated parameter iterator for building typed commands.
+///
+/// Created by [`take_params`], which checks the minimum count upfront.
+/// After validation, [`Params::next`] is guaranteed not to panic when called
+/// up to `required` times.
+struct Params(std::vec::IntoIter<String>);
+
+impl Params {
+    /// Take the next parameter.  Panics only if called more than `required` times
+    /// (a bug in the caller, not in the input).
+    fn next(&mut self) -> String {
+        self.0
+            .next()
+            .expect("take_params validated enough elements")
+    }
+
+    /// Parse the next parameter, falling back to `T::default()` on parse failure.
+    fn next_parse<T: std::str::FromStr + Default>(&mut self) -> T {
+        self.next().parse().unwrap_or_default()
+    }
+
+    /// Consume all remaining parameters and return the last one (the trailing
+    /// parameter).  Returns an empty string if nothing remains.
+    fn trailing(self) -> String {
+        self.0.last().unwrap_or_default()
+    }
+
+    /// Consume all remaining parameters and return the last one, if any.
+    fn optional_trailing(self) -> Option<String> {
+        self.0.last()
     }
 }
 
-/// Emits a `WARN`-level log when `params` has more entries than `expected`.
+/// Validate the parameter count and return a consuming [`Params`] iterator.
 ///
-/// Extra parameters are discarded; this is the forward-compatibility policy for
-/// protocol extensions that insert new non-trailing fields before the trailing one.
-fn warn_extra_params(command: &str, params: &[String], expected: usize) {
+/// Returns `Err(ParseError::MissingParams)` when `params` has fewer than
+/// `required` entries.  Warns if more than `warn_above` are present (pass
+/// `usize::MAX` to suppress the warning).
+fn take_params(
+    command: &str,
+    params: Vec<String>,
+    required: usize,
+    warn_above: usize,
+) -> Result<Params, ParseError> {
     let got = params.len();
-    if got > expected {
+    if got < required {
+        return Err(ParseError::MissingParams {
+            command: command.to_string(),
+            required,
+            got,
+        });
+    }
+    if got > warn_above {
         tracing::warn!(
             command,
-            expected,
+            expected = warn_above,
             got,
             "ignoring {} unexpected extra parameter(s)",
-            got - expected
+            got - warn_above
         );
     }
+    Ok(Params(params.into_iter()))
 }
 
 /// Build a typed `IrcCommand` from the raw command name and parameter list.
-///
-/// # Safety of `.unwrap()` calls
-///
-/// Every `.unwrap()` on `params.last()` or `params[N]` is guarded by a
-/// preceding `require_params(name, &params, min)` call which returns `Err`
-/// if the vec has fewer than `min` elements. After that check succeeds,
-/// indexing up to `min - 1` and `.last()` (for vecs of length ≥ 1) are
-/// guaranteed to succeed.
 fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseError> {
     let upper = name.to_ascii_uppercase();
     match upper.as_str() {
         "PASS" => {
-            require_params("PASS", &params, 1)?;
-            warn_extra_params("PASS", &params, 1);
+            let p = take_params("PASS", params, 1, 1)?;
             Ok(IrcCommand::Pass {
-                password: params.last().unwrap().clone(),
+                password: p.trailing(),
             })
         }
         "SERVER" => {
-            require_params("SERVER", &params, 3)?;
-            warn_extra_params("SERVER", &params, 3);
+            let mut p = take_params("SERVER", params, 3, 3)?;
+            let name = p.next();
+            let hop_count = p.next_parse();
             Ok(IrcCommand::Server {
-                name: params[0].clone(),
-                hop_count: params[1].parse().unwrap_or(0),
-                description: params.last().unwrap().clone(),
+                name,
+                hop_count,
+                description: p.trailing(),
             })
         }
         "SID" => {
-            require_params("SID", &params, 4)?;
-            warn_extra_params("SID", &params, 4);
+            let mut p = take_params("SID", params, 4, 4)?;
+            let name = p.next();
+            let hop_count = p.next_parse();
+            let sid = p.next();
             Ok(IrcCommand::Sid {
-                name: params[0].clone(),
-                hop_count: params[1].parse().unwrap_or(0),
-                sid: params[2].clone(),
-                description: params.last().unwrap().clone(),
+                name,
+                hop_count,
+                sid,
+                description: p.trailing(),
             })
         }
         "PROTOCTL" => Ok(IrcCommand::Protoctl { tokens: params }),
         "UID" => {
-            require_params("UID", &params, 12)?;
-            warn_extra_params("UID", &params, 12);
+            let mut p = take_params("UID", params, 12, 12)?;
             Ok(IrcCommand::Uid(UidParams {
-                nick: params[0].clone(),
-                hop_count: params[1].parse().unwrap_or(0),
-                timestamp: params[2].parse().unwrap_or(0),
-                ident: params[3].clone(),
-                host: params[4].clone(),
-                uid: params[5].clone(),
-                services_stamp: params[6].clone(),
-                umodes: params[7].clone(),
-                vhost: params[8].clone(),
-                cloaked_host: params[9].clone(),
-                ip: params[10].clone(),
-                realname: params.last().unwrap().clone(),
+                nick: p.next(),
+                hop_count: p.next_parse(),
+                timestamp: p.next_parse(),
+                ident: p.next(),
+                host: p.next(),
+                uid: p.next(),
+                services_stamp: p.next(),
+                umodes: p.next(),
+                vhost: p.next(),
+                cloaked_host: p.next(),
+                ip: p.next(),
+                realname: p.trailing(),
             }))
         }
         "SJOIN" => {
-            require_params("SJOIN", &params, 4)?;
             // No warn_extra_params: extra params between modes and the member list are
             // valid mode parameters (e.g. "+l 10 :@UID"), so excess is intentional.
-            let members: Vec<String> = params
-                .last()
-                .unwrap()
+            let mut p = take_params("SJOIN", params, 4, usize::MAX)?;
+            let timestamp = p.next_parse();
+            let channel = p.next();
+            let modes = p.next();
+            let members: Vec<String> = p
+                .trailing()
                 .split_whitespace()
                 .map(str::to_string)
                 .collect();
             Ok(IrcCommand::Sjoin(SjoinParams {
-                timestamp: params[0].parse().unwrap_or(0),
-                channel: params[1].clone(),
-                modes: params[2].clone(),
+                timestamp,
+                channel,
+                modes,
                 members,
             }))
         }
         "PART" => {
-            require_params("PART", &params, 1)?;
-            warn_extra_params("PART", &params, 2);
+            let mut p = take_params("PART", params, 1, 2)?;
+            let channel = p.next();
             Ok(IrcCommand::Part {
-                channel: params[0].clone(),
-                reason: if params.len() >= 2 {
-                    params.last().cloned()
-                } else {
-                    None
-                },
+                channel,
+                reason: p.optional_trailing(),
             })
         }
         "KICK" => {
-            require_params("KICK", &params, 2)?;
-            warn_extra_params("KICK", &params, 3);
+            let mut p = take_params("KICK", params, 2, 3)?;
+            let channel = p.next();
+            let target = p.next();
             Ok(IrcCommand::Kick {
-                channel: params[0].clone(),
-                target: params[1].clone(),
-                reason: if params.len() >= 3 {
-                    params.last().cloned()
-                } else {
-                    None
-                },
+                channel,
+                target,
+                reason: p.optional_trailing(),
             })
         }
         "NICK" => {
-            require_params("NICK", &params, 2)?;
-            warn_extra_params("NICK", &params, 2);
+            let mut p = take_params("NICK", params, 2, 2)?;
+            let new_nick = p.next();
+            let timestamp = p.next_parse();
             Ok(IrcCommand::Nick {
-                new_nick: params[0].clone(),
-                timestamp: params[1].parse().unwrap_or(0),
+                new_nick,
+                timestamp,
             })
         }
         "QUIT" => {
-            warn_extra_params("QUIT", &params, 1);
+            let p = take_params("QUIT", params, 0, 1)?;
             Ok(IrcCommand::Quit {
-                reason: params.last().cloned().unwrap_or_default(),
+                reason: p.trailing(),
             })
         }
         "AWAY" => {
-            warn_extra_params("AWAY", &params, 1);
+            let p = take_params("AWAY", params, 0, 1)?;
             Ok(IrcCommand::Away {
-                reason: params.last().cloned(),
+                reason: p.optional_trailing(),
             })
         }
         "SVSNICK" => {
-            require_params("SVSNICK", &params, 2)?;
-            warn_extra_params("SVSNICK", &params, 2);
+            let mut p = take_params("SVSNICK", params, 2, 2)?;
             Ok(IrcCommand::Svsnick {
-                target_uid: params[0].clone(),
-                new_nick: params[1].clone(),
+                target_uid: p.next(),
+                new_nick: p.next(),
             })
         }
         "PRIVMSG" => {
-            require_params("PRIVMSG", &params, 2)?;
-            warn_extra_params("PRIVMSG", &params, 2);
+            let mut p = take_params("PRIVMSG", params, 2, 2)?;
+            let target = p.next();
             Ok(IrcCommand::Privmsg {
-                target: params[0].clone(),
-                text: params.last().unwrap().clone(),
+                target,
+                text: p.trailing(),
             })
         }
         "NOTICE" => {
-            require_params("NOTICE", &params, 2)?;
-            warn_extra_params("NOTICE", &params, 2);
+            let mut p = take_params("NOTICE", params, 2, 2)?;
+            let target = p.next();
             Ok(IrcCommand::Notice {
-                target: params[0].clone(),
-                text: params.last().unwrap().clone(),
+                target,
+                text: p.trailing(),
             })
         }
         "PING" => {
-            require_params("PING", &params, 1)?;
-            warn_extra_params("PING", &params, 1);
+            let p = take_params("PING", params, 1, 1)?;
             Ok(IrcCommand::Ping {
-                token: params.last().unwrap().clone(),
+                token: p.trailing(),
             })
         }
         "PONG" => {
-            require_params("PONG", &params, 2)?;
-            warn_extra_params("PONG", &params, 2);
+            let mut p = take_params("PONG", params, 2, 2)?;
+            let server = p.next();
             Ok(IrcCommand::Pong {
-                server: params[0].clone(),
-                token: params.last().unwrap().clone(),
+                server,
+                token: p.trailing(),
             })
         }
         "EOS" => {
-            warn_extra_params("EOS", &params, 0);
+            let _p = take_params("EOS", params, 0, 0)?;
             Ok(IrcCommand::Eos)
         }
         "ERROR" => {
-            warn_extra_params("ERROR", &params, 1);
+            let p = take_params("ERROR", params, 0, 1)?;
             Ok(IrcCommand::Error {
-                message: params.last().cloned().unwrap_or_default(),
+                message: p.trailing(),
             })
         }
         _ => Ok(IrcCommand::Raw {

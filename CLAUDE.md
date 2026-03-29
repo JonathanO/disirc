@@ -94,7 +94,14 @@ deny.toml               — cargo-deny configuration
 - Integration tests that don't require external connections go in `tests/` (e.g., `tests/config.rs`, `tests/formatting.rs`).
 - Use **property-based tests** (`proptest`) wherever a function has edge-case-prone input domains — formatting transforms, string validation, message splitting, and routing logic are all good candidates. Prefer `proptest!` macros over hand-picked example inputs for these cases.
 - **Async event serialization**: IRC and Discord events must be funnelled through `tokio::sync::mpsc` channels to a single processing task per direction. Do not `tokio::spawn` a new task per incoming event — concurrent handlers will race on shared state.
-- `#![deny(unsafe_code)]` must appear at the crate root. There is no justified use of `unsafe` in this project.
+- `#![deny(unsafe_code)]` must appear at the crate root, and `unsafe_code = "forbid"` is set in `[lints.rust]` in `Cargo.toml`. There is no justified use of `unsafe` in this project.
+
+### Error handling
+
+- **`thiserror`** for typed error enums in library/module code. Each module that can fail defines its own error enum with `#[derive(thiserror::Error)]`.
+- **`anyhow`** for error propagation in the application/connection layer (`main.rs`, connection loops) where the caller only needs a human-readable error chain, not programmatic matching.
+- **Never `unwrap()` or `expect()` in non-test code** unless the invariant is provably upheld by construction and a comment explains why. Prefer `?`, `ok_or()`, `ok_or_else()`, or `unwrap_or()`.
+- In test code, `unwrap()` and `expect()` are fine — a panic is the correct failure mode.
 
 ### What to test
 

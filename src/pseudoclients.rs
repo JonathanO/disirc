@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams, UidParams};
 
@@ -6,7 +6,7 @@ use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams, UidParams};
 // Nick sanitization
 // ---------------------------------------------------------------------------
 
-/// Characters allowed in IRC nicks per UnrealIRCd defaults.
+/// Characters allowed in IRC nicks per `UnrealIRCd` defaults.
 fn is_valid_nick_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
@@ -167,7 +167,7 @@ impl UidGenerator {
 /// IRC nicks are compared case-insensitively (ASCII).
 #[derive(Debug, Default)]
 pub struct NickSet {
-    nicks: HashMap<String, ()>,
+    nicks: HashSet<String>,
 }
 
 impl NickSet {
@@ -178,7 +178,7 @@ impl NickSet {
 
     /// Insert a nick into the set.
     pub fn insert(&mut self, nick: &str) {
-        self.nicks.insert(nick.to_ascii_lowercase(), ());
+        self.nicks.insert(nick.to_ascii_lowercase());
     }
 
     /// Remove a nick from the set.
@@ -189,7 +189,7 @@ impl NickSet {
     /// Check if a nick is in the set (case-insensitive).
     #[must_use]
     pub fn contains(&self, nick: &str) -> bool {
-        self.nicks.contains_key(&nick.to_ascii_lowercase())
+        self.nicks.contains(&nick.to_ascii_lowercase())
     }
 }
 

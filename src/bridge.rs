@@ -655,7 +655,7 @@ pub fn route_discord_to_irc(
 }
 
 /// Update `discord_state.guild_irc_channels` from a `MemberSnapshot`'s
-/// channel_ids list.
+/// `channel_ids` list.
 ///
 /// Called in the bridge loop before `apply_discord_event` so that
 /// `apply_discord_event` can use the (now-current) guild→irc-channel map.

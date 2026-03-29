@@ -4,7 +4,7 @@ Tracks implementation status for each spec file.
 
 | Spec | Topic | Status |
 |------|-------|--------|
-| [`specs/00-overview/spec.md`](specs/00-overview/spec.md) | Architecture & goals | Pending |
+| [`specs/00-overview/spec.md`](specs/00-overview/spec.md) | Architecture & goals | N/A — architecture overview |
 | [`specs/01-configuration/spec.md`](specs/01-configuration/spec.md) | Config file format & validation | Implemented |
 | [`specs/02-irc-connection/spec.md`](specs/02-irc-connection/spec.md) | UnrealIRCd S2S link lifecycle | Implemented |
 | [`specs/03-discord-connection/spec.md`](specs/03-discord-connection/spec.md) | Discord bot & gateway | Implemented |

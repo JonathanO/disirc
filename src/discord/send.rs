@@ -131,8 +131,7 @@ pub(crate) fn snapshot_from_cache(
     let guild_id = cache.guilds().into_iter().find(|&gid| {
         cache
             .guild(gid)
-            .map(|g| g.channels.contains_key(&target))
-            .unwrap_or(false)
+            .is_some_and(|g| g.channels.contains_key(&target))
     })?;
 
     let guild = cache.guild(guild_id)?;

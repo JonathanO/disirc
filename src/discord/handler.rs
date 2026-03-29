@@ -55,8 +55,7 @@ pub(crate) fn map_online_status(status: OnlineStatus) -> DiscordPresence {
         OnlineStatus::DoNotDisturb => DiscordPresence::DoNotDisturb,
         // The explicit arm documents intent; the `_` catch-all below handles
         // any future #[non_exhaustive] variants identically (equivalent mutant).
-        OnlineStatus::Offline | OnlineStatus::Invisible => DiscordPresence::Offline,
-        _ => DiscordPresence::Offline,
+        OnlineStatus::Offline | OnlineStatus::Invisible | _ => DiscordPresence::Offline,
     }
 }
 

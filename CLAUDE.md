@@ -172,6 +172,15 @@ Exclusions must be as specific as possible to avoid accidentally hiding real tes
 
 Prefer `#[mutants::skip]` over config-file exclusions when the entire function should be skipped — it keeps the rationale next to the code. Use config-file exclusions for specific mutation patterns within otherwise-testable functions.
 
+### Scrutinising "equivalent" mutants
+
+Most surviving mutants are **not** truly equivalent — they indicate real test gaps. Before classifying a mutant as equivalent:
+
+1. **Trace the mutation manually** through at least two concrete inputs, including edge cases. Show that the mutated code produces identical observable output for every reachable path, not just the common case.
+2. **Consider writing a test first.** If you can construct any input where the mutation changes the output, it is not equivalent — write that test.
+3. **Consider a code change.** If a guard or condition is genuinely redundant (e.g., `end > 0` when `end >= 1` is guaranteed by a prior check), removing the redundant code eliminates the mutant target entirely and is preferable to adding an exclusion.
+4. **Exclusion is a last resort.** Only exclude after exhausting both "write a test" and "simplify the code" options, and document the reasoning in the exclusion comment with enough detail that a reviewer can verify the equivalence claim.
+
 ## When to commit
 
 Commit at these natural boundaries — not before:

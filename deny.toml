@@ -7,6 +7,14 @@ ignore = [
     # rustls-webpki 0.102.8 is pinned by serenity's transitive dep tokio-tungstenite 0.21 → rustls 0.22.
     # We cannot upgrade without a serenity release. Limited impact (requires compromised CA).
     { id = "RUSTSEC-2026-0049", reason = "transitive dep pinned by serenity; awaiting upstream update" },
+    # rustls-pemfile is a dev-only transitive dep (testcontainers → bollard → rustls-pemfile).
+    # Advisory is "unmaintained" only — no CVE. Users are encouraged to migrate to rustls-pki-types;
+    # we cannot do so until testcontainers or bollard upgrades their dependency.
+    { id = "RUSTSEC-2025-0134", reason = "dev-only transitive dep via testcontainers; unmaintained but no CVE" },
+    # tokio-tar PAX header smuggling — dev-only transitive dep (testcontainers → bollard → tokio-tar).
+    # Only reachable when pulling Docker images in e2e tests; tarballs originate from our local Docker
+    # daemon, not untrusted input. No fix available upstream (tokio-tar v0.3.1 is the latest).
+    { id = "RUSTSEC-2025-0111", reason = "dev-only transitive dep via testcontainers; only processes Docker-daemon tarballs in e2e tests" },
 ]
 
 [licenses]

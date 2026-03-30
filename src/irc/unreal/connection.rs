@@ -1013,4 +1013,117 @@ mod tests {
             "expected {count} PRIVMSG lines, got {delivered}"
         );
     }
+
+    // ── Additional integration tests ─────────────────────────────────────
+
+    /// Uplink drops the connection (EOF) before completing the handshake.
+    #[tokio::test]
+    async fn handshake_eof_before_completion_returns_err() {
+        let (mut client_r, mut client_w, uplink_r, uplink_w) = make_pair(65_536);
+
+        // Read the 5 credential lines then close without sending SERVER.
+        tokio::spawn(async move {
+            let mut reader = LineReader::new(uplink_r);
+            for _ in 0..5 {
+                reader.next_line().await.unwrap();
+            }
+            drop(reader);
+            drop(uplink_w);
+        });
+
+        let result = do_handshake(&mut client_r, &mut client_w, &test_config()).await;
+        assert!(
+            result.is_err(),
+            "expected Err from do_handshake on EOF, got Ok"
+        );
+    }
+
+    /// Uplink sends ERROR during the session — run_session returns Err.
+    #[tokio::test]
+    async fn session_uplink_sends_error_returns_err() {
+        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+
+        tokio::spawn(async move {
+            uplink_w.write_all(b"ERROR :Link closed\r\n").await.unwrap();
+            drop(uplink_w);
+            drop(uplink_r);
+        });
+
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+        let _keep = cmd_tx;
+
+        let result = run_session(
+            client_r,
+            client_w,
+            default_hs(),
+            &mut cmd_rx,
+            &event_tx,
+            "002",
+            SessionTimings::production(),
+        )
+        .await;
+
+        assert!(result.is_err(), "expected Err on ERROR command");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("ERROR") || msg.contains("Link closed"),
+            "error should mention ERROR or reason, got: {msg}"
+        );
+    }
+
+    /// Inbound UID command emits S2SEvent::UserIntroduced with correct fields.
+    #[tokio::test]
+    async fn session_inbound_uid_emits_user_introduced() {
+        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+
+        tokio::spawn(async move {
+            uplink_w
+                .write_all(
+                    b":001 UID Alice 1 1700000000 alice discord.invalid \
+                      001AAAAAA 0 +i * * * :Alice Smith\r\n",
+                )
+                .await
+                .unwrap();
+            drop(uplink_w);
+            drop(uplink_r);
+        });
+
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+        let (event_tx, mut event_rx) = mpsc::channel::<S2SEvent>(16);
+        let _keep = cmd_tx;
+
+        let _ = run_session(
+            client_r,
+            client_w,
+            default_hs(),
+            &mut cmd_rx,
+            &event_tx,
+            "002",
+            SessionTimings::production(),
+        )
+        .await;
+
+        let event = event_rx
+            .try_recv()
+            .expect("expected a UserIntroduced event");
+        match event {
+            S2SEvent::UserIntroduced {
+                uid,
+                nick,
+                ident,
+                host,
+                server_sid,
+                realname,
+            } => {
+                assert_eq!(uid, "001AAAAAA");
+                assert_eq!(nick, "Alice");
+                assert_eq!(ident, "alice");
+                assert_eq!(host, "discord.invalid");
+                assert_eq!(server_sid, "001");
+                assert_eq!(realname, "Alice Smith");
+            }
+            other => panic!("expected UserIntroduced, got {other:?}"),
+        }
+    }
 }

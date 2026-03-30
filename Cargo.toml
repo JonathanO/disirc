@@ -6,7 +6,9 @@ license = "MIT"
 
 [dev-dependencies]
 proptest = "1"
+serde_json = "1"
 tracing-test = "0.2"
+wiremock = "0.6"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

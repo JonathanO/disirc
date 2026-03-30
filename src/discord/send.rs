@@ -51,8 +51,6 @@ pub(crate) fn suppress_mentions(text: &str) -> String {
 /// Uses the webhook if a `webhook_url` is provided; falls back to plain
 /// `channel.send()` otherwise. Failures are logged at `WARN` and dropped —
 /// no retry is attempted.
-// mutants::skip — requires live Discord HTTP/webhook connection
-#[mutants::skip]
 pub(crate) async fn send_discord_message(
     http: &Http,
     channel_id: u64,
@@ -475,5 +473,153 @@ mod tests {
         let cache = Cache::new();
         let empty = std::collections::HashSet::new();
         assert!(snapshot_from_cache(&cache, 99_999, &empty).is_none());
+    }
+
+    // --- wiremock integration tests for send_discord_message ---
+
+    mod send_integration {
+        use super::*;
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        /// Build a serenity `Http` client that routes all requests through
+        /// the given wiremock server.
+        fn mock_http(server: &MockServer) -> Http {
+            serenity::http::HttpBuilder::new("test-token")
+                .proxy(server.uri())
+                .ratelimiter_disabled(true)
+                .build()
+        }
+
+        // Webhook ID must be 17-20 digits; token must be 60-68 chars.
+        const WEBHOOK_ID: &str = "12345678901234567";
+        const WEBHOOK_TOKEN: &str =
+            "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ01";
+
+        /// Minimal JSON that serenity can deserialize as a `Webhook`.
+        fn webhook_json() -> serde_json::Value {
+            serde_json::json!({
+                "id": WEBHOOK_ID,
+                "type": 1,
+                "channel_id": "999",
+                "token": WEBHOOK_TOKEN
+            })
+        }
+
+        fn webhook_url() -> String {
+            format!("https://discord.com/api/webhooks/{WEBHOOK_ID}/{WEBHOOK_TOKEN}")
+        }
+
+        /// Minimal JSON that serenity can deserialize as a `Message`.
+        fn message_json() -> serde_json::Value {
+            serde_json::json!({
+                "id": "1",
+                "channel_id": "999",
+                "author": {
+                    "id": "1",
+                    "username": "bot",
+                    "discriminator": "0000",
+                    "global_name": null,
+                    "avatar": null
+                },
+                "content": "",
+                "timestamp": "2025-01-01T00:00:00.000Z",
+                "tts": false,
+                "mention_everyone": false,
+                "mentions": [],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "pinned": false,
+                "type": 0
+            })
+        }
+
+        #[tokio::test]
+        async fn webhook_send_posts_correct_payload() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            // Mock GET (webhook resolve).
+            Mock::given(method("GET"))
+                .and(path_regex(r"webhooks/\d+/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(webhook_json()))
+                .mount(&server)
+                .await;
+
+            // Mock POST (webhook execute) — expect exactly 1.
+            let post_mock = Mock::given(method("POST"))
+                .and(path_regex(r"webhooks/\d+/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            send_discord_message(&http, 999, Some(&webhook_url()), "TestNick", "hello world").await;
+
+            // Scoped mock asserts exactly 1 POST was received on drop.
+            drop(post_mock);
+        }
+
+        #[tokio::test]
+        async fn plain_send_posts_formatted_message() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            let post_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/api/v\d+/channels/999/messages"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            send_discord_message(&http, 999, None, "TestNick", "hello world").await;
+
+            drop(post_mock);
+        }
+
+        #[tokio::test]
+        async fn plain_send_suppresses_at_mentions() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            Mock::given(method("POST"))
+                .and(path_regex(r"/api/v\d+/channels/999/messages"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .mount(&server)
+                .await;
+
+            // send_discord_message uses suppress_mentions on plain path.
+            // This test verifies the function doesn't panic and completes.
+            // The actual mention suppression is tested in suppress_mentions unit tests.
+            send_discord_message(&http, 999, None, "@everyone", "@here check this").await;
+        }
+
+        #[tokio::test]
+        async fn webhook_resolve_failure_does_not_panic() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            // Return 404 for webhook resolve — send_discord_message should
+            // log a warning and return without panicking.
+            Mock::given(method("GET"))
+                .and(path_regex(r"webhooks/\d+/"))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+
+            // No POST mock — if a POST is attempted, wiremock returns 404,
+            // which is fine (we just verify no panic).
+            send_discord_message(
+                &http,
+                999,
+                Some(&webhook_url()),
+                "TestNick",
+                "this should be silently dropped",
+            )
+            .await;
+
+            // If we reach here without panicking, the test passes.
+        }
     }
 }

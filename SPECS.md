@@ -12,6 +12,7 @@ Tracks implementation status for each spec file.
 | [`specs/05-formatting/spec.md`](specs/05-formatting/spec.md) | Message formatting & transforms | Implemented |
 | [`specs/06-pseudoclients/spec.md`](specs/06-pseudoclients/spec.md) | Pseudoclient lifecycle & identity | Implemented |
 | [`specs/07-irc-message-types/spec.md`](specs/07-irc-message-types/spec.md) | Typed IRC message representation | Implemented |
+| [`specs/08-e2e-testing/spec.md`](specs/08-e2e-testing/spec.md) | End-to-end testing strategy | In Progress |
 
 ## Statuses
 

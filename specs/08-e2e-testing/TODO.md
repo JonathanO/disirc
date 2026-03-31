@@ -10,7 +10,7 @@
 - [x] Write test: Discord→IRC message relay (`e2e_discord_to_irc_message_relay`)
 - [x] Write test: IRC→Discord message relay (`e2e_irc_to_discord_message_relay`)
 - [x] Write test: pseudoclient appears for Discord user (`e2e_pseudoclient_appears_on_irc`)
-- [ ] CI: GitHub Actions job with Docker (testcontainers manages container; just needs Docker daemon)
+- [x] CI: GitHub Actions job with Docker (testcontainers manages container; just needs Docker daemon)
 - [ ] Run tests against live Docker and verify all 4 pass
 
 ## Layer 4: Full e2e

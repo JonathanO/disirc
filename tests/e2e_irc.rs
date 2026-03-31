@@ -10,9 +10,9 @@
 mod helpers;
 
 use std::path::Path;
-use std::sync::OnceLock;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
+use tracing_test::traced_test;
 
 use disirc::bridge::run_bridge;
 use disirc::config::{BridgeEntry, Config, DiscordConfig, IrcConfig, PseudoclientConfig};
@@ -24,21 +24,6 @@ use disirc::signal::ControlEvent;
 // ---------------------------------------------------------------------------
 // Test infrastructure
 // ---------------------------------------------------------------------------
-
-/// Initialise a `tracing` subscriber once per process so bridge log output
-/// (including S2S connection attempts) is visible with `--nocapture`.
-fn init_tracing() {
-    static INIT: OnceLock<()> = OnceLock::new();
-    INIT.get_or_init(|| {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("disirc=debug")),
-            )
-            .with_test_writer()
-            .try_init();
-    });
-}
 
 /// Build a test config pointing at the given S2S port, with a single bridge
 /// entry mapping Discord channel 111 ↔ IRC channel `#e2e-test`.
@@ -206,8 +191,8 @@ async fn wait_for_bridge_in_links(
 /// The bridge's server name (`bridge.test.net`) should appear in LINKS.
 #[tokio::test]
 #[ignore]
+#[traced_test]
 async fn e2e_bridge_connects_to_unrealircd() {
-    init_tracing();
     let irc = helpers::start_unrealircd().await;
     let config = e2e_config(&irc.host, irc.s2s_port);
     let tasks = spawn_bridge(config);
@@ -218,6 +203,25 @@ async fn e2e_bridge_connects_to_unrealircd() {
 
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
+    logs_assert(|lines: &[&str]| {
+        let problems: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("WARN") || line.contains("ERROR"))
+            .collect();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected no WARN/ERROR logs, found {}:\n{}",
+                problems.len(),
+                problems
+                    .iter()
+                    .map(|l| format!("  {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))
+        }
+    });
     drop(tasks);
 }
 
@@ -225,8 +229,8 @@ async fn e2e_bridge_connects_to_unrealircd() {
 /// PRIVMSG in the bridged channel.
 #[tokio::test]
 #[ignore]
+#[traced_test]
 async fn e2e_discord_to_irc_message_relay() {
-    init_tracing();
     let irc = helpers::start_unrealircd().await;
     let config = e2e_config(&irc.host, irc.s2s_port);
     let tasks = spawn_bridge(config);
@@ -278,6 +282,25 @@ async fn e2e_discord_to_irc_message_relay() {
         .expect_privmsg("Alice", "hello from discord", Duration::from_secs(10))
         .await;
 
+    logs_assert(|lines: &[&str]| {
+        let problems: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("WARN") || line.contains("ERROR"))
+            .collect();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected no WARN/ERROR logs, found {}:\n{}",
+                problems.len(),
+                problems
+                    .iter()
+                    .map(|l| format!("  {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))
+        }
+    });
     drop(tasks);
 }
 
@@ -285,8 +308,8 @@ async fn e2e_discord_to_irc_message_relay() {
 /// `DiscordCommand::SendMessage` for the bridged Discord channel.
 #[tokio::test]
 #[ignore]
+#[traced_test]
 async fn e2e_irc_to_discord_message_relay() {
-    init_tracing();
     let irc = helpers::start_unrealircd().await;
     let config = e2e_config(&irc.host, irc.s2s_port);
     let mut tasks = spawn_bridge(config);
@@ -327,14 +350,33 @@ async fn e2e_irc_to_discord_message_relay() {
         .expect_send_message("hello from irc", Duration::from_secs(10))
         .await;
 
+    logs_assert(|lines: &[&str]| {
+        let problems: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("WARN") || line.contains("ERROR"))
+            .collect();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected no WARN/ERROR logs, found {}:\n{}",
+                problems.len(),
+                problems
+                    .iter()
+                    .map(|l| format!("  {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))
+        }
+    });
     drop(tasks);
 }
 
 /// Inject a `MemberSnapshot` and verify the pseudoclient's nick appears on IRC.
 #[tokio::test]
 #[ignore]
+#[traced_test]
 async fn e2e_pseudoclient_appears_on_irc() {
-    init_tracing();
     let irc = helpers::start_unrealircd().await;
     let config = e2e_config(&irc.host, irc.s2s_port);
     let tasks = spawn_bridge(config);
@@ -365,5 +407,24 @@ async fn e2e_pseudoclient_appears_on_irc() {
         .expect_line_containing("TestUser", Duration::from_secs(10))
         .await;
 
+    logs_assert(|lines: &[&str]| {
+        let problems: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("WARN") || line.contains("ERROR"))
+            .collect();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected no WARN/ERROR logs, found {}:\n{}",
+                problems.len(),
+                problems
+                    .iter()
+                    .map(|l| format!("  {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))
+        }
+    });
     drop(tasks);
 }

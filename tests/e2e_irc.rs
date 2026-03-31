@@ -82,7 +82,32 @@ struct BridgeTasks {
 }
 
 impl BridgeTasks {
-    fn abort(self) {
+    /// Wait for a `DiscordCommand::SendMessage` whose `text` contains `needle`.
+    /// Ignores other commands. Panics on timeout.
+    async fn expect_send_message(&mut self, needle: &str, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or(Duration::ZERO);
+            if remaining.is_zero() {
+                panic!("timed out waiting for DiscordCommand::SendMessage containing {needle:?}");
+            }
+            match tokio::time::timeout(remaining, self.discord_cmd_rx.recv()).await {
+                Ok(Some(DiscordCommand::SendMessage { text, .. })) if text.contains(needle) => {
+                    return;
+                }
+                Ok(Some(_)) => continue,
+                _ => panic!(
+                    "discord_cmd_rx closed before receiving SendMessage containing {needle:?}"
+                ),
+            }
+        }
+    }
+}
+
+impl Drop for BridgeTasks {
+    fn drop(&mut self) {
         self.bridge_handle.abort();
         self.conn_handle.abort();
     }
@@ -193,7 +218,7 @@ async fn e2e_bridge_connects_to_unrealircd() {
 
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    tasks.abort();
+    drop(tasks);
 }
 
 /// Inject a Discord message and verify the IRC client sees the corresponding
@@ -229,7 +254,8 @@ async fn e2e_discord_to_irc_message_relay() {
         .await
         .unwrap();
 
-    // Wait for Alice's pseudoclient to JOIN #e2e-test.
+    // Wait for any line mentioning Alice (NICK intro, JOIN, etc.) to confirm
+    // her pseudoclient has been introduced to the network.
     client
         .expect_line_containing("Alice", Duration::from_secs(10))
         .await;
@@ -252,7 +278,7 @@ async fn e2e_discord_to_irc_message_relay() {
         .expect_privmsg("Alice", "hello from discord", Duration::from_secs(10))
         .await;
 
-    tasks.abort();
+    drop(tasks);
 }
 
 /// Send a PRIVMSG from a test IRC client and verify the bridge emits a
@@ -297,26 +323,11 @@ async fn e2e_irc_to_discord_message_relay() {
     client.send_privmsg("#e2e-test", "hello from irc").await;
 
     // The bridge should produce a DiscordCommand::SendMessage for channel 111.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let remaining = deadline
-            .checked_duration_since(tokio::time::Instant::now())
-            .unwrap_or(Duration::ZERO);
-        if remaining.is_zero() {
-            panic!("timed out waiting for DiscordCommand::SendMessage");
-        }
-        match tokio::time::timeout(remaining, tasks.discord_cmd_rx.recv()).await {
-            Ok(Some(DiscordCommand::SendMessage { text, .. }))
-                if text.contains("hello from irc") =>
-            {
-                break;
-            }
-            Ok(Some(_)) => continue, // ignore other commands
-            _ => panic!("discord_cmd_rx closed or timed out before receiving SendMessage"),
-        }
-    }
+    tasks
+        .expect_send_message("hello from irc", Duration::from_secs(10))
+        .await;
 
-    tasks.abort();
+    drop(tasks);
 }
 
 /// Inject a `MemberSnapshot` and verify the pseudoclient's nick appears on IRC.
@@ -354,5 +365,5 @@ async fn e2e_pseudoclient_appears_on_irc() {
         .expect_line_containing("TestUser", Duration::from_secs(10))
         .await;
 
-    tasks.abort();
+    drop(tasks);
 }

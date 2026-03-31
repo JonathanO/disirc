@@ -10,6 +10,7 @@
 mod helpers;
 
 use std::path::Path;
+use std::sync::OnceLock;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 
@@ -24,15 +25,30 @@ use disirc::signal::ControlEvent;
 // Test infrastructure
 // ---------------------------------------------------------------------------
 
+/// Initialise a `tracing` subscriber once per process so bridge log output
+/// (including S2S connection attempts) is visible with `--nocapture`.
+fn init_tracing() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("disirc=debug")),
+            )
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 /// Build a test config pointing at the given S2S port, with a single bridge
 /// entry mapping Discord channel 111 ↔ IRC channel `#e2e-test`.
-fn e2e_config(s2s_port: u16) -> Config {
+fn e2e_config(host: &str, s2s_port: u16) -> Config {
     Config {
         discord: DiscordConfig {
             token: "fake-token".into(),
         },
         irc: IrcConfig {
-            uplink: "127.0.0.1".into(),
+            uplink: host.to_string(),
             port: s2s_port,
             tls: false,
             link_name: "bridge.test.net".into(),
@@ -60,6 +76,9 @@ struct BridgeTasks {
     discord_cmd_rx: mpsc::Receiver<DiscordCommand>,
     bridge_handle: tokio::task::JoinHandle<()>,
     conn_handle: tokio::task::JoinHandle<()>,
+    /// Kept alive to prevent the bridge from treating a closed control channel
+    /// as a shutdown signal. Dropped when `abort()` is called.
+    _control_tx: mpsc::Sender<ControlEvent>,
 }
 
 impl BridgeTasks {
@@ -77,8 +96,9 @@ fn spawn_bridge(config: Config) -> BridgeTasks {
     let (irc_cmd_tx, irc_cmd_rx) = mpsc::channel::<S2SCommand>(256);
     let (discord_event_tx, discord_event_rx) = mpsc::channel::<DiscordEvent>(256);
     let (discord_cmd_tx, discord_cmd_rx) = mpsc::channel::<DiscordCommand>(256);
-    // Drop the control sender immediately — no reload events in e2e tests.
-    let (_control_tx, control_rx) = mpsc::channel::<ControlEvent>(4);
+    // Keep the control sender alive for the duration of the test — dropping it
+    // causes `run_bridge` to treat the closed channel as a shutdown signal.
+    let (control_tx, control_rx) = mpsc::channel::<ControlEvent>(4);
 
     let config_for_bridge = config.clone();
     let bridge_handle = tokio::spawn(async move {
@@ -104,6 +124,7 @@ fn spawn_bridge(config: Config) -> BridgeTasks {
         discord_cmd_rx,
         bridge_handle,
         conn_handle,
+        _control_tx: control_tx,
     }
 }
 
@@ -161,12 +182,14 @@ async fn wait_for_bridge_in_links(
 #[tokio::test]
 #[ignore]
 async fn e2e_bridge_connects_to_unrealircd() {
+    init_tracing();
     let irc = helpers::start_unrealircd().await;
-    let config = e2e_config(irc.s2s_port);
+    let config = e2e_config(&irc.host, irc.s2s_port);
     let tasks = spawn_bridge(config);
 
     let mut client =
-        helpers::TestIrcClient::connect(&format!("127.0.0.1:{}", irc.client_port), "testbot").await;
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
 
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
@@ -178,12 +201,14 @@ async fn e2e_bridge_connects_to_unrealircd() {
 #[tokio::test]
 #[ignore]
 async fn e2e_discord_to_irc_message_relay() {
+    init_tracing();
     let irc = helpers::start_unrealircd().await;
-    let config = e2e_config(irc.s2s_port);
+    let config = e2e_config(&irc.host, irc.s2s_port);
     let tasks = spawn_bridge(config);
 
     let mut client =
-        helpers::TestIrcClient::connect(&format!("127.0.0.1:{}", irc.client_port), "testbot").await;
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
     client.join("#e2e-test").await;
 
     // Wait for the S2S link to be established.
@@ -235,12 +260,14 @@ async fn e2e_discord_to_irc_message_relay() {
 #[tokio::test]
 #[ignore]
 async fn e2e_irc_to_discord_message_relay() {
+    init_tracing();
     let irc = helpers::start_unrealircd().await;
-    let config = e2e_config(irc.s2s_port);
+    let config = e2e_config(&irc.host, irc.s2s_port);
     let mut tasks = spawn_bridge(config);
 
     let mut client =
-        helpers::TestIrcClient::connect(&format!("127.0.0.1:{}", irc.client_port), "testbot").await;
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
     client.join("#e2e-test").await;
 
     // Introduce a pseudoclient so the bridge has a presence in #e2e-test and
@@ -296,12 +323,14 @@ async fn e2e_irc_to_discord_message_relay() {
 #[tokio::test]
 #[ignore]
 async fn e2e_pseudoclient_appears_on_irc() {
+    init_tracing();
     let irc = helpers::start_unrealircd().await;
-    let config = e2e_config(irc.s2s_port);
+    let config = e2e_config(&irc.host, irc.s2s_port);
     let tasks = spawn_bridge(config);
 
     let mut client =
-        helpers::TestIrcClient::connect(&format!("127.0.0.1:{}", irc.client_port), "testbot").await;
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
     client.join("#e2e-test").await;
 
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;

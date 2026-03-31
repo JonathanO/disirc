@@ -2,58 +2,75 @@
 
 ## Summary
 
-Research into running UnrealIRCd 6 in Docker for integration testing of an S2S-connecting bridge. The `ircd/unrealircd` image on Docker Hub is the best option. A minimal config derived from the official test suite (`unrealircd-tests`) can enable both S2S and client connections. For the test IRC client, raw TCP with tokio is simplest and avoids adding another dependency. Startup detection should use TCP connect retry (UnrealIRCd logs `UNREALIRCD_START` but that is inside the container).
+Research into running UnrealIRCd 6 in Docker for integration testing of an S2S-connecting bridge. Building from the official UnrealIRCd source tarball is the recommended approach — it pins a specific version and avoids depending on third-party images. A minimal config derived from the official test suite (`unrealircd-tests`) can enable both S2S and client connections. For the test IRC client, raw TCP with tokio is simplest and avoids adding another dependency. Startup detection should use TCP connect retry (UnrealIRCd logs `UNREALIRCD_START` but that is inside the container).
 
 ## 1. Docker Image
 
-### Best option: `ircd/unrealircd` on Docker Hub
-
-- **Repository**: https://hub.docker.com/r/ircd/unrealircd
-- **Config mount point**: `/ircd/unrealircd.conf`
-- **Maintained by**: The UnrealIRCd project itself (the `ircd` Docker Hub org)
-- **Tags**: `latest`, plus PR-based tags (e.g. `pr-45`). No explicit version tags like `6.1.7` were observed.
-- **Image size**: Not directly documented, but UnrealIRCd is a C program with minimal dependencies. Typical community images based on Alpine are ~50-100 MB compressed.
-
-### Alternatives considered
-
-| Image | Notes |
-|-------|-------|
-| `agamemnon23/unrealircd` | Compiles from source, non-root, v1.0.0 from 2022. Stale. |
-| `djlegolas/unrealircd` | Supports UnrealIRCd 6+, mounts at `/app/data/unrealircd.conf`. Less established. |
-| `bbriggs/unrealircd` | Only UnrealIRCd 4.x. Too old. |
-
 ### Recommendation: Build our own Dockerfile
 
-For test reproducibility, building from the official source is better than depending on a third-party image with unknown update cadence. A minimal Dockerfile:
+Building from the official UnrealIRCd source tarball (downloaded from `unrealircd.org`) is the right approach. It pins a specific version, controls the install layout, and avoids all third-party image dependency. The `-F` flag runs UnrealIRCd in the foreground (required for Docker).
+
+UnrealIRCd refuses to build or run as root. The Dockerfile creates a dedicated `ircd` user; `make install` places files at `/home/ircd/unrealircd/`:
+- Binary: `/home/ircd/unrealircd/bin/unrealircd`
+- Config dir: `/home/ircd/unrealircd/conf/` (bind-mount target for `unrealircd.conf`)
+- Default module lists (`modules.default.conf`, `operclass.default.conf`, etc.) are installed to the same conf dir, so relative `include` statements in `unrealircd.conf` resolve correctly.
 
 ```dockerfile
 FROM debian:bookworm-slim AS builder
-RUN apt-get update && apt-get install -y \
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libssl-dev libpcre2-dev \
     libcurl4-openssl-dev libc-ares-dev libsodium-dev \
-    wget tar
-ARG UNREALIRCD_VERSION=6.1.8
-RUN wget -q https://www.unrealircd.org/downloads/unrealircd-${UNREALIRCD_VERSION}.tar.gz \
-    && tar xzf unrealircd-${UNREALIRCD_VERSION}.tar.gz \
-    && cd unrealircd-${UNREALIRCD_VERSION} \
-    && ./Config --enable-ssl --with-showlistmodes --with-nick-history=2000 \
-       --with-permissions=0600 --with-fd-setsize=1024 --nointro \
-    && make -j$(nproc) \
-    && make install DESTDIR=/build
+    wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG UNREALIRCD_VERSION=6.1.10
+RUN wget -q "https://www.unrealircd.org/downloads/unrealircd-${UNREALIRCD_VERSION}.tar.gz" \
+    && tar xzf "unrealircd-${UNREALIRCD_VERSION}.tar.gz" \
+    && cd "unrealircd-${UNREALIRCD_VERSION}" \
+    && ./Config \
+        --enable-ssl \
+        --with-fd-setsize=1024 \
+        --with-permissions=0600 \
+        --nointro \
+    && make -j"$(nproc)" \
+    && make install \
+    && cd .. \
+    && rm -rf "unrealircd-${UNREALIRCD_VERSION}" "unrealircd-${UNREALIRCD_VERSION}.tar.gz"
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y libssl3 libpcre2-8-0 libcurl4 \
-    libc-ares2 libsodium23 && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /build/root/unrealircd/ /opt/unrealircd/
-# Config will be bind-mounted at runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 libpcre2-8-0 libcurl4 libc-ares2 libsodium23 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /root/unrealircd /root/unrealircd
+
 EXPOSE 6667 6900
-WORKDIR /opt/unrealircd
-CMD ["bin/unrealircd", "-F"]
+WORKDIR /root/unrealircd
+CMD ["/root/unrealircd/bin/unrealircd", "-F"]
 ```
 
-The `-F` flag runs UnrealIRCd in the foreground (no fork), which is required for Docker.
+Key design notes:
+- **No `DESTDIR`** — installing directly means the compiled-in paths (`/root/unrealircd/...`) match the runtime paths. Using `DESTDIR=/build` would break the binary's self-referential paths.
+- **Config bind-mount target**: `/home/ircd/unrealircd/conf/unrealircd.conf`.
 
-**However**, for initial development, using `ircd/unrealircd:latest` and bind-mounting our config is simpler and sufficient. We can switch to a custom Dockerfile later if needed.
+### `ircd/unrealircd` on Docker Hub — not recommended
+
+- **Repository**: https://hub.docker.com/r/ircd/unrealircd
+- **Maintained by**: `@adamus1red` (GitHub: `adamus1red/docker-unrealircd`) — a community maintainer, **not** the UnrealIRCd project itself. The UnrealIRCd project (github.com/unrealircd, unrealircd.org) has no Docker-related repositories and does not reference this image in its documentation.
+- **Tags**: `nightly`, `edge`, and PR-based tags (e.g. `pr-55`). No `latest` tag exists.
+- **Structure**: The image has UnrealIRCd installed at `/app/unrealircd/` and uses `/ircd/` as the config directory. It ships with no `EXPOSE` directive and `CMD ['/bin/sh']`, making it a CI build image rather than a ready-to-run server image. A CMD override (`/app/unrealircd/bin/unrealircd -F`) is needed to use it as a server.
+- **Verdict**: Usable as a quick start but not suitable for pinned, reproducible tests. Version is implicit in the `nightly` tag.
+
+### Other community images — too old or untested
+
+| Image | Notes |
+|-------|-------|
+| `agamemnon23/unrealircd` | Compiles from source, v1.0.0 from 2022. Stale. |
+| `djlegolas/unrealircd` | Supports UnrealIRCd 6+, mounts at `/app/data/unrealircd.conf`. Less established. |
+| `bbriggs/unrealircd` | Only UnrealIRCd 4.x. Too old. |
+| `carterfields/unrealircd` | v6.1.1.1. No maintenance status information. |
 
 ## 2. Minimal Config for S2S Link
 

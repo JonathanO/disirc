@@ -6,7 +6,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-_(none)_
+- **E2E testing (spec 08)** — Layer 3 tests written; need live Docker run to verify. See [specs/08-e2e-testing/TODO.md](specs/08-e2e-testing/TODO.md).
 
 ## Spec status
 

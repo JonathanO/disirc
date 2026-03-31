@@ -534,17 +534,31 @@ fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseErr
             }))
         }
         "SJOIN" => {
-            // No warn_extra_params: extra params between modes and the member list are
-            // valid mode parameters (e.g. "+l 10 :@UID"), so excess is intentional.
-            let mut p = take_params("SJOIN", params, 4, usize::MAX)?;
+            // UnrealIRCd may omit the modes parameter when no channel modes are
+            // set, so accept 3 or more parameters.  With 3: timestamp, channel,
+            // trailing members.  With 4+: timestamp, channel, modes, trailing
+            // members (extra params between modes and trailing are mode params
+            // like "+l 10 :@UID").
+            let param_count = params.len();
+            let mut p = take_params("SJOIN", params, 3, usize::MAX)?;
             let timestamp = p.next_parse();
             let channel = p.next();
-            let modes = p.next();
-            let members: Vec<String> = p
-                .trailing()
-                .split_whitespace()
-                .map(str::to_string)
-                .collect();
+            let (modes, members) = if param_count >= 4 {
+                let m = p.next();
+                let members: Vec<String> = p
+                    .trailing()
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+                (m, members)
+            } else {
+                let members: Vec<String> = p
+                    .trailing()
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+                (String::new(), members)
+            };
             Ok(IrcCommand::Sjoin(SjoinParams {
                 timestamp,
                 channel,
@@ -739,7 +753,9 @@ fn write_command(cmd: &IrcCommand, out: &mut String) -> Result<(), SerializeErro
             let ts = p.timestamp.to_string();
             append_param(out, &ts, 0)?;
             append_param(out, &p.channel, 1)?;
-            append_param(out, &p.modes, 2)?;
+            if !p.modes.is_empty() {
+                append_param(out, &p.modes, 2)?;
+            }
             let members = p.members.join(" ");
             append_trailing(out, &members);
         }
@@ -962,13 +978,13 @@ mod tests {
 
     #[test]
     fn parse_sjoin_too_few_params_is_error() {
-        let result = IrcMessage::parse("SJOIN 12345 #test +");
+        let result = IrcMessage::parse("SJOIN 12345 #test");
         assert_eq!(
             result,
             Err(ParseError::MissingParams {
                 command: "SJOIN".to_string(),
-                required: 4,
-                got: 3
+                required: 3,
+                got: 2
             })
         );
     }
@@ -1190,6 +1206,38 @@ mod tests {
         let msg = IrcMessage::parse(line).unwrap();
         if let IrcCommand::Sjoin(p) = msg.command {
             assert_eq!(p.members, vec!["ABC000001"]);
+        } else {
+            panic!("expected Sjoin");
+        }
+    }
+
+    /// UnrealIRCd omits the modes parameter when no channel modes are set.
+    /// The parser must accept 3 parameters (timestamp, channel, trailing members).
+    #[test]
+    fn parse_sjoin_without_modes() {
+        let line = ":001 SJOIN 1700000000 #general :@ABC000001";
+        let msg = IrcMessage::parse(line).unwrap();
+        if let IrcCommand::Sjoin(p) = msg.command {
+            assert_eq!(p.timestamp, 1_700_000_000);
+            assert_eq!(p.channel, "#general");
+            assert_eq!(p.modes, "");
+            assert_eq!(p.members, vec!["@ABC000001"]);
+        } else {
+            panic!("expected Sjoin");
+        }
+    }
+
+    /// Same as above but with tags, matching the exact format seen from
+    /// UnrealIRCd in e2e tests.
+    #[test]
+    fn parse_sjoin_without_modes_with_tags() {
+        let line = "@msgid=abc123;time=2026-03-31T16:04:39.364Z :001 SJOIN 1774973079 #e2e-test :@0013XNP01";
+        let msg = IrcMessage::parse(line).unwrap();
+        if let IrcCommand::Sjoin(p) = msg.command {
+            assert_eq!(p.timestamp, 1_774_973_079);
+            assert_eq!(p.channel, "#e2e-test");
+            assert_eq!(p.modes, "");
+            assert_eq!(p.members, vec!["@0013XNP01"]);
         } else {
             panic!("expected Sjoin");
         }
@@ -1692,6 +1740,33 @@ mod tests {
             };
             let wire = original.to_wire().expect("should serialize");
             let parsed = IrcMessage::parse(&wire).expect("should parse back");
+            prop_assert_eq!(parsed, original);
+        }
+
+        /// SJOIN must roundtrip regardless of whether modes are present.
+        /// Empty modes means no modes parameter on the wire.
+        #[test]
+        fn proptest_sjoin_roundtrip(
+            ts in 0u64..=4_000_000_000u64,
+            channel in "#[a-zA-Z0-9]{1,20}",
+            modes in prop::option::of("\\+[ntsipmklr]{0,5}"),
+            member_count in 1usize..=5,
+        ) {
+            let members: Vec<String> = (0..member_count)
+                .map(|i| format!("ABC{i:06}"))
+                .collect();
+            let original = IrcMessage {
+                tags: vec![],
+                prefix: Some("001".to_string()),
+                command: IrcCommand::Sjoin(SjoinParams {
+                    timestamp: ts,
+                    channel,
+                    modes: modes.unwrap_or_default(),
+                    members,
+                }),
+            };
+            let wire = original.to_wire().expect("valid sjoin should serialize");
+            let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
             prop_assert_eq!(parsed, original);
         }
     }

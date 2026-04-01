@@ -466,8 +466,12 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
         .await
         .unwrap();
 
+    // Wait for both pseudoclients to be introduced (two JOINs).
     client
-        .expect_line_containing("Alice", Duration::from_secs(10))
+        .expect_line_containing("JOIN", Duration::from_secs(10))
+        .await;
+    client
+        .expect_line_containing("JOIN", Duration::from_secs(10))
         .await;
 
     // Alice sends a message mentioning Bob by Discord ID, a channel, and a role.
@@ -484,13 +488,10 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
         .unwrap();
 
     // IRC should see resolved names, not raw IDs.
+    // Use expect_privmsg to match specifically on the PRIVMSG, not JOINs.
     let line = client
-        .expect_line_containing("Bob", Duration::from_secs(10))
+        .expect_line_containing("@Bob", Duration::from_secs(10))
         .await;
-    assert!(
-        line.contains("@Bob"),
-        "user mention <@5002> should resolve to @Bob; got: {line:?}"
-    );
     assert!(
         line.contains("#general"),
         "channel mention <#200> should resolve to #general; got: {line:?}"
@@ -547,7 +548,7 @@ async fn e2e_irc_mention_resolved_to_discord_id() {
         .await;
 
     let text = tasks
-        .expect_send_message("Bob", Duration::from_secs(10))
+        .expect_send_message("are you there", Duration::from_secs(10))
         .await;
     assert!(
         text.contains("<@6001>"),

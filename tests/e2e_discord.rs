@@ -108,6 +108,7 @@ fn full_config(secrets: &Secrets, host: &str, s2s_port: u16) -> Config {
             host_suffix: "discord.test.net".into(),
             ident: "discord".into(),
         },
+        formatting: disirc::config::FormattingConfig::default(),
         bridges: vec![
             BridgeEntry {
                 discord_channel_id: secrets.webhook_channel_id.to_string(),

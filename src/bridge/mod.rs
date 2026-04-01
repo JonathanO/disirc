@@ -141,6 +141,7 @@ pub async fn run_bridge(
                         if let Some(cmd) = route_irc_to_discord(
                             &pm, &bridge_map, &irc_state,
                             from_uid, target, text, false, &resolver,
+                            current_config.formatting.irc_nick_colon_mention,
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
                         }
@@ -153,6 +154,7 @@ pub async fn run_bridge(
                         if let Some(cmd) = route_irc_to_discord(
                             &pm, &bridge_map, &irc_state,
                             from_uid, target, text, true, &resolver,
+                            current_config.formatting.irc_nick_colon_mention,
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
                         }
@@ -314,6 +316,7 @@ mod tests {
                 host_suffix: "test.net".into(),
                 ident: "discord".into(),
             },
+            formatting: crate::config::FormattingConfig::default(),
             bridges: vec![BridgeEntry {
                 discord_channel_id: "111".into(),
                 irc_channel: "#test".into(),

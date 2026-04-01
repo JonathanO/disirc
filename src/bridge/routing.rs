@@ -62,6 +62,7 @@ pub fn route_irc_to_discord(
     text: &str,
     is_notice: bool,
     resolver: &dyn IrcMentionResolver,
+    irc_nick_colon_mention: bool,
 ) -> Option<DiscordCommand> {
     if pm.is_our_uid(from_uid) {
         return None;
@@ -75,6 +76,7 @@ pub fn route_irc_to_discord(
         text,
         is_notice,
         resolver,
+        irc_nick_colon_mention,
     ))
 }
 
@@ -349,6 +351,7 @@ mod tests {
             "hello",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(result.is_none(), "own pseudoclient UID must be filtered");
     }
@@ -367,6 +370,7 @@ mod tests {
             "hello",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(result.is_none());
     }
@@ -387,6 +391,7 @@ mod tests {
             "hi there",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(result.is_some());
         if let Some(DiscordCommand::SendMessage {
@@ -421,6 +426,7 @@ mod tests {
             "msg",
             false,
             &NullIrcResolver,
+            false,
         );
         if let Some(DiscordCommand::SendMessage { sender_nick, .. }) = result {
             assert_eq!(sender_nick, "002ZZZZZ");

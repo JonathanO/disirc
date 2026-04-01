@@ -88,9 +88,11 @@ pub fn irc_to_discord_command(
     text: &str,
     is_notice: bool,
     resolver: &dyn IrcMentionResolver,
+    irc_nick_colon_mention: bool,
 ) -> DiscordCommand {
     use crate::formatting::{
-        convert_irc_mentions, irc_to_discord_formatting, ping_fix_nick, truncate_for_discord,
+        convert_irc_mentions, convert_nick_colon_mention, irc_to_discord_formatting, ping_fix_nick,
+        truncate_for_discord,
     };
 
     let use_webhook = webhook_url.is_some();
@@ -106,7 +108,10 @@ pub fn irc_to_discord_command(
     } else {
         // Regular PRIVMSG or NOTICE
         let fmt = irc_to_discord_formatting(text);
-        let with_mentions = convert_irc_mentions(&fmt, resolver);
+        let mut with_mentions = convert_irc_mentions(&fmt, resolver);
+        if irc_nick_colon_mention {
+            with_mentions = convert_nick_colon_mention(&with_mentions, resolver);
+        }
         let content = if is_notice {
             format!("*{with_mentions}*")
         } else {
@@ -261,6 +266,7 @@ mod tests {
             "hello",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(matches!(
             &cmd,
@@ -270,7 +276,8 @@ mod tests {
 
     #[test]
     fn privmsg_plain_path_formats_with_bracket_prefix() {
-        let cmd = irc_to_discord_command(42, None, "alice", "hello", false, &NullIrcResolver);
+        let cmd =
+            irc_to_discord_command(42, None, "alice", "hello", false, &NullIrcResolver, false);
         assert!(matches!(
             &cmd,
             DiscordCommand::SendMessage { webhook_url: None, text, .. }
@@ -287,6 +294,7 @@ mod tests {
             "server restart soon",
             true,
             &NullIrcResolver,
+            false,
         );
         assert!(matches!(
             &cmd,
@@ -297,7 +305,7 @@ mod tests {
 
     #[test]
     fn notice_plain_path_wraps_in_italics_and_has_bracket_prefix() {
-        let cmd = irc_to_discord_command(42, None, "bob", "ping", true, &NullIrcResolver);
+        let cmd = irc_to_discord_command(42, None, "bob", "ping", true, &NullIrcResolver, false);
         assert!(matches!(
             &cmd,
             DiscordCommand::SendMessage { text, .. }
@@ -314,6 +322,7 @@ mod tests {
             "\x01ACTION waves\x01",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(matches!(
             &cmd,
@@ -337,6 +346,7 @@ mod tests {
             "\x01ACTION waves\x01",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(matches!(
             &cmd,
@@ -354,6 +364,7 @@ mod tests {
             "\x01ACTION dances",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(matches!(
             &cmd,
@@ -371,6 +382,7 @@ mod tests {
             "hi",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(matches!(
             &cmd,
@@ -381,7 +393,7 @@ mod tests {
 
     #[test]
     fn ping_fix_applied_to_nick_in_plain_path_text() {
-        let cmd = irc_to_discord_command(42, None, "alice", "hi", false, &NullIrcResolver);
+        let cmd = irc_to_discord_command(42, None, "alice", "hi", false, &NullIrcResolver, false);
         assert!(matches!(
             &cmd,
             DiscordCommand::SendMessage { text, .. }
@@ -391,7 +403,7 @@ mod tests {
 
     #[test]
     fn plain_path_nick_field_is_unfixed_original() {
-        let cmd = irc_to_discord_command(42, None, "alice", "hi", false, &NullIrcResolver);
+        let cmd = irc_to_discord_command(42, None, "alice", "hi", false, &NullIrcResolver, false);
         // For the plain path the send layer doesn't use sender_nick as a webhook
         // username, so we store the original nick (no ping-fix).
         assert!(matches!(
@@ -403,7 +415,15 @@ mod tests {
     #[test]
     fn channel_id_and_webhook_url_propagated() {
         let url = "https://discord.com/api/webhooks/99/secret";
-        let cmd = irc_to_discord_command(1234, Some(url), "eve", "test", false, &NullIrcResolver);
+        let cmd = irc_to_discord_command(
+            1234,
+            Some(url),
+            "eve",
+            "test",
+            false,
+            &NullIrcResolver,
+            false,
+        );
         assert!(matches!(
             &cmd,
             DiscordCommand::SendMessage { channel_id: 1234, webhook_url: Some(u), .. }
@@ -420,6 +440,7 @@ mod tests {
             "\x02bold\x02",
             false,
             &NullIrcResolver,
+            false,
         );
         assert!(matches!(
             &cmd,
@@ -431,8 +452,15 @@ mod tests {
 
     #[test]
     fn plain_path_text_has_exactly_one_nick_prefix() {
-        let cmd =
-            irc_to_discord_command(42, None, "testbot", "hello world", false, &NullIrcResolver);
+        let cmd = irc_to_discord_command(
+            42,
+            None,
+            "testbot",
+            "hello world",
+            false,
+            &NullIrcResolver,
+            false,
+        );
         let DiscordCommand::SendMessage { text, .. } = &cmd else {
             panic!("expected SendMessage");
         };
@@ -450,8 +478,15 @@ mod tests {
 
     #[test]
     fn plain_path_text_exact_format() {
-        let cmd =
-            irc_to_discord_command(42, None, "testbot", "hello world", false, &NullIrcResolver);
+        let cmd = irc_to_discord_command(
+            42,
+            None,
+            "testbot",
+            "hello world",
+            false,
+            &NullIrcResolver,
+            false,
+        );
         let DiscordCommand::SendMessage { text, .. } = &cmd else {
             panic!("expected SendMessage");
         };
@@ -476,6 +511,7 @@ mod tests {
             "hello world",
             false,
             &NullIrcResolver,
+            false,
         );
         let DiscordCommand::SendMessage { text, .. } = &cmd else {
             panic!("expected SendMessage");

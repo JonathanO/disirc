@@ -70,6 +70,8 @@ pub struct Config {
     pub irc: IrcConfig,
     #[serde(default)]
     pub pseudoclients: PseudoclientConfig,
+    #[serde(default)]
+    pub formatting: FormattingConfig,
     #[serde(rename = "bridge")]
     pub bridges: Vec<BridgeEntry>,
 }
@@ -102,10 +104,29 @@ pub struct PseudoclientConfig {
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
+pub struct FormattingConfig {
+    /// Convert leading `nick:` or `nick,` in IRC messages to Discord mentions.
+    #[serde(default = "default_true")]
+    pub irc_nick_colon_mention: bool,
+}
+
+impl Default for FormattingConfig {
+    fn default() -> Self {
+        Self {
+            irc_nick_colon_mention: true,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct BridgeEntry {
     pub discord_channel_id: String,
     pub irc_channel: String,
     pub webhook_url: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------

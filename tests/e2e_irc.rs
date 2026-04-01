@@ -45,6 +45,7 @@ fn e2e_config(host: &str, s2s_port: u16) -> Config {
             host_suffix: "discord.test.net".into(),
             ident: "discord".into(),
         },
+        formatting: disirc::config::FormattingConfig::default(),
         bridges: vec![BridgeEntry {
             discord_channel_id: "111".into(),
             irc_channel: "#e2e-test".into(),

@@ -49,8 +49,9 @@ pub use discord_to_irc::{
     DiscordResolver, discord_to_irc, markdown_to_irc, resolve_mentions, split_for_irc,
 };
 pub use irc_to_discord::{
-    IrcMentionResolver, convert_irc_mentions, irc_to_discord_formatting, irc_to_discord_plain,
-    irc_to_discord_webhook, ping_fix_nick, truncate_for_discord,
+    IrcMentionResolver, convert_irc_mentions, convert_nick_colon_mention,
+    irc_to_discord_formatting, irc_to_discord_plain, irc_to_discord_webhook, ping_fix_nick,
+    truncate_for_discord,
 };
 
 // ---------------------------------------------------------------------------

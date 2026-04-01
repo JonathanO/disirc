@@ -35,29 +35,37 @@ pub use state::{DiscordState, IrcState, apply_discord_event, apply_irc_event};
 // Bridge loop helpers
 // ---------------------------------------------------------------------------
 
-/// Null resolver: no IRC mention conversion.
-struct NoopIrcResolver;
-// mutants::skip — trivial test-only stub returning None
-#[mutants::skip]
-impl IrcMentionResolver for NoopIrcResolver {
-    fn resolve_nick(&self, _: &str) -> Option<String> {
-        None
+/// Resolves IRC `@nick` to Discord `<@user_id>` mentions using the
+/// pseudoclient manager's `nick→discord_id` mapping.
+struct BridgeIrcResolver<'a> {
+    pm: &'a PseudoclientManager,
+}
+
+impl IrcMentionResolver for BridgeIrcResolver<'_> {
+    fn resolve_nick(&self, nick: &str) -> Option<String> {
+        let state = self.pm.get_by_nick(nick)?;
+        Some(state.discord_user_id.to_string())
     }
 }
 
-/// Null resolver: no Discord mention conversion.
-struct NoopDiscordResolver;
-// mutants::skip — trivial test-only stub returning None
-#[mutants::skip]
-impl DiscordResolver for NoopDiscordResolver {
-    fn resolve_user(&self, _: &str) -> Option<String> {
-        None
+/// Resolves Discord mentions (`<@id>`, `<#id>`, `<@&id>`) to display names
+/// using the bridge's cached guild data.
+struct BridgeDiscordResolver<'a> {
+    discord_state: &'a DiscordState,
+}
+
+impl DiscordResolver for BridgeDiscordResolver<'_> {
+    fn resolve_user(&self, id: &str) -> Option<String> {
+        let uid: u64 = id.parse().ok()?;
+        self.discord_state.display_names.get(&uid).cloned()
     }
-    fn resolve_channel(&self, _: &str) -> Option<String> {
-        None
+    fn resolve_channel(&self, id: &str) -> Option<String> {
+        let cid: u64 = id.parse().ok()?;
+        self.discord_state.channel_names.get(&cid).cloned()
     }
-    fn resolve_role(&self, _: &str) -> Option<String> {
-        None
+    fn resolve_role(&self, id: &str) -> Option<String> {
+        let rid: u64 = id.parse().ok()?;
+        self.discord_state.role_names.get(&rid).cloned()
     }
 }
 
@@ -129,9 +137,10 @@ pub async fn run_bridge(
                         burst_sent = false;
                     }
                     S2SEvent::MessageReceived { from_uid, target, text, timestamp } => {
+                        let resolver = BridgeIrcResolver { pm: &pm };
                         if let Some(cmd) = route_irc_to_discord(
                             &pm, &bridge_map, &irc_state,
-                            from_uid, target, text, false, &NoopIrcResolver,
+                            from_uid, target, text, false, &resolver,
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
                         }
@@ -140,9 +149,10 @@ pub async fn run_bridge(
                         let _ = timestamp;
                     }
                     S2SEvent::NoticeReceived { from_uid, target, text } => {
+                        let resolver = BridgeIrcResolver { pm: &pm };
                         if let Some(cmd) = route_irc_to_discord(
                             &pm, &bridge_map, &irc_state,
-                            from_uid, target, text, true, &NoopIrcResolver,
+                            from_uid, target, text, true, &resolver,
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
                         }
@@ -171,10 +181,11 @@ pub async fn run_bridge(
                 } = &event
                 {
                     let now = unix_now();
+                    let resolver = BridgeDiscordResolver { discord_state: &discord_state };
                     let cmds = route_discord_to_irc(
                         &mut pm, &bridge_map, &discord_state, &irc_state,
                         *channel_id, *author_id, author_name, content, attachments,
-                        None, now, &NoopDiscordResolver,
+                        None, now, &resolver,
                     );
                     for cmd in cmds {
                         let _ = irc_cmd_tx.send(cmd).await;
@@ -368,6 +379,8 @@ mod tests {
                     presence: DiscordPresence::Online,
                 }],
                 channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
             })
             .await
             .unwrap();
@@ -435,6 +448,8 @@ mod tests {
                     presence: DiscordPresence::Online,
                 }],
                 channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
             })
             .await
             .unwrap();

@@ -237,6 +237,8 @@ async fn e2e_discord_to_irc_message_relay() {
                 presence: DiscordPresence::Online,
             }],
             channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
         })
         .await
         .unwrap();
@@ -298,6 +300,8 @@ async fn e2e_irc_to_discord_message_relay() {
                 presence: DiscordPresence::Online,
             }],
             channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
         })
         .await
         .unwrap();
@@ -361,6 +365,8 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
                 presence: DiscordPresence::Online,
             }],
             channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
         })
         .await
         .unwrap();
@@ -404,6 +410,8 @@ async fn e2e_pseudoclient_appears_on_irc() {
                 presence: DiscordPresence::Online,
             }],
             channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
         })
         .await
         .unwrap();

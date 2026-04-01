@@ -270,7 +270,12 @@ async fn e2e_irc_to_discord_webhook() {
     client.join(&secrets.webhook_irc_channel).await;
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // Wait for a pseudoclient to join the channel — this confirms the bridge
+    // has processed the Discord MemberSnapshot and has presence in the IRC
+    // channel, so it will see our PRIVMSG.
+    client
+        .expect_line_containing("JOIN", Duration::from_secs(15))
+        .await;
 
     let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
     let anchor = discord.latest_message_id().await;
@@ -379,7 +384,12 @@ async fn e2e_irc_to_discord_plain() {
     client.join(&secrets.plain_irc_channel).await;
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // Wait for a pseudoclient to join the channel — this confirms the bridge
+    // has processed the Discord MemberSnapshot and has presence in the IRC
+    // channel, so it will see our PRIVMSG.
+    client
+        .expect_line_containing("JOIN", Duration::from_secs(15))
+        .await;
 
     let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
     let anchor = discord.latest_message_id().await;

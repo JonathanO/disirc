@@ -8,8 +8,10 @@ use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
-/// Tag used for the locally-built test image.
-const TEST_IMAGE: &str = "disirc-unrealircd-test";
+/// Pre-built image published to ghcr.io by the `docker-test-image.yml` workflow.
+/// Contains the compiled UnrealIRCd binary and a self-signed TLS cert.
+/// The test config is injected at runtime via `with_copy_to`.
+const TEST_IMAGE: &str = "ghcr.io/jonathano/disirc-unrealircd-test";
 const TEST_IMAGE_TAG: &str = "latest";
 
 /// The test config is compiled into the test binary and copied into the
@@ -35,16 +37,14 @@ pub struct IrcContainer {
 
 /// Start a fresh `UnrealIRCd` container and wait for it to be fully ready.
 ///
-/// Builds the local test image on first call (Docker layer cache makes
-/// subsequent calls fast). Requires Docker to be running.
+/// Pulls the pre-built image from ghcr.io (Docker caches it locally after
+/// the first pull). Requires Docker to be running.
 /// The container is automatically cleaned up when the returned
 /// [`IrcContainer`] is dropped.
 ///
 /// The test config is copied into the container at startup via the Docker
 /// API (no bind mount required).
 pub async fn start_unrealircd() -> IrcContainer {
-    ensure_test_image_built();
-
     let container = GenericImage::new(TEST_IMAGE, TEST_IMAGE_TAG)
         .with_exposed_port(6667u16.tcp())
         .with_exposed_port(6900u16.tcp())
@@ -78,36 +78,4 @@ pub async fn start_unrealircd() -> IrcContainer {
         client_port,
         _container: container,
     }
-}
-
-/// Build the test Docker image from `tests/fixtures/Dockerfile` if it has not
-/// been built yet in this process. The Docker layer cache makes rebuilds fast
-/// when nothing has changed.
-///
-/// Uses a [`std::sync::OnceLock`] so parallel test threads only build once.
-fn ensure_test_image_built() {
-    static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    BUILT.get_or_init(|| {
-        let fixtures = std::fs::canonicalize("tests/fixtures")
-            .expect("tests/fixtures not found — run from repo root");
-
-        // Normalise for Docker on Windows (strip \\?\ prefix, forward slashes).
-        let fixtures_str = fixtures.to_str().unwrap();
-        let fixtures_docker = fixtures_str
-            .strip_prefix(r"\\?\")
-            .unwrap_or(fixtures_str)
-            .replace('\\', "/");
-
-        let status = std::process::Command::new("docker")
-            .args([
-                "build",
-                "-t",
-                &format!("{TEST_IMAGE}:{TEST_IMAGE_TAG}"),
-                &fixtures_docker,
-            ])
-            .status()
-            .expect("failed to run `docker build` — is Docker installed?");
-
-        assert!(status.success(), "docker build for test image failed");
-    });
 }

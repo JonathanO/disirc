@@ -55,18 +55,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build UnrealIRCd test image
-        uses: docker/build-push-action@v6
-        with:
-          context: tests/fixtures
-          load: true
-          tags: disirc-unrealircd-test:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Run Layer 3 e2e tests
         run: cargo test --test e2e_irc -- --include-ignored --nocapture
 
@@ -81,18 +69,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build UnrealIRCd test image
-        uses: docker/build-push-action@v6
-        with:
-          context: tests/fixtures
-          load: true
-          tags: disirc-unrealircd-test:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Run Layer 4 e2e tests
         env:

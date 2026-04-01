@@ -318,6 +318,55 @@ async fn e2e_irc_to_discord_message_relay() {
     drop(tasks);
 }
 
+/// Regression test: inject a `MemberSnapshot` **before** the S2S link is
+/// established and verify the pseudoclient still appears on IRC via the burst.
+///
+/// Previously, pre-link commands were queued ahead of the burst, causing
+/// UnrealIRCd to receive duplicate UID introductions and SQUIT the bridge.
+/// After the fix the bridge suppresses live-introduce commands when the link
+/// is down; `produce_burst_commands` on `LinkUp` is the sole introduction path.
+#[tokio::test]
+#[ignore]
+async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
+    let capture = init_capture_tracing();
+    let irc = helpers::start_unrealircd().await;
+    let config = e2e_config(&irc.host, irc.s2s_port);
+    let tasks = spawn_bridge(config);
+
+    let mut client =
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
+    client.join("#e2e-test").await;
+
+    // Inject MemberSnapshot immediately — before the S2S link is established.
+    // The bridge has not yet seen LinkUp so it must not send UID/SJOIN now.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MemberSnapshot {
+            guild_id: 999,
+            members: vec![MemberInfo {
+                user_id: 3001,
+                display_name: "EarlyUser".into(),
+                presence: DiscordPresence::Online,
+            }],
+            channel_ids: vec![111],
+        })
+        .await
+        .unwrap();
+
+    // Now wait for the link to come up (this triggers the burst).
+    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
+
+    // EarlyUser must appear via the burst even though the snapshot arrived
+    // before the link was established.
+    client
+        .expect_line_containing("EarlyUser", Duration::from_secs(10))
+        .await;
+
+    capture.assert_no_warnings_or_errors();
+    drop(tasks);
+}
+
 /// Inject a `MemberSnapshot` and verify the pseudoclient's nick appears on IRC.
 #[tokio::test]
 #[ignore]

@@ -360,5 +360,78 @@ async fn e2e_discord_suite() {
         );
     }
 
+    // --- Discord → IRC mention resolution ---
+    //
+    // The test bot sends a message containing its own user mention `<@id>`.
+    // The bridge should resolve it to the bot's display name on IRC.
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
+        // Send a probe message to discover the test bot's user ID.
+        let probe = discord.send_message("mention-probe").await;
+        let test_bot_id = &probe.author.id;
+        let test_bot_name = &probe.author.username;
+        client
+            .expect_line_containing("mention-probe", Duration::from_secs(10))
+            .await;
+
+        // Now send a message that mentions the test bot by ID.
+        discord
+            .send_message(&format!("hello <@{test_bot_id}>!"))
+            .await;
+
+        let line = client
+            .expect_line_containing("hello", Duration::from_secs(10))
+            .await;
+        // The mention should be resolved to @name, not the raw <@id>.
+        assert!(
+            !line.contains(&format!("<@{test_bot_id}>")),
+            "raw mention <@{test_bot_id}> should be resolved, not passed through; got: {line:?}"
+        );
+        assert!(
+            line.contains(&format!("@{test_bot_name}")),
+            "mention should resolve to @{test_bot_name}; got: {line:?}"
+        );
+    }
+
+    // --- IRC → Discord mention resolution ---
+    //
+    // The IRC client sends `@PseudoclientNick` and the bridge should convert
+    // it to a Discord `<@user_id>` mention.  We use the test bot's pseudoclient
+    // since it has a known Discord user ID.
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
+        // Discover the test bot's pseudoclient nick by sending a probe and
+        // checking what JOIN'd the channel.  The test bot's Discord user should
+        // have a pseudoclient from the guild_create snapshot.
+        let probe = discord.send_message("nick-probe").await;
+        let test_bot_id = &probe.author.id;
+        client
+            .expect_line_containing("nick-probe", Duration::from_secs(10))
+            .await;
+
+        // Find the pseudoclient's nick.  It's based on the test bot's username
+        // with a ping-fix ZWSP after the first character.  For mentioning from
+        // IRC, we use the original username (without ZWSP) — the resolver does
+        // case-insensitive matching.
+        let test_bot_name = &probe.author.username;
+
+        let anchor = discord.latest_message_id().await;
+        client
+            .send_privmsg(
+                &secrets.plain_irc_channel,
+                &format!("hey @{test_bot_name} are you there?"),
+            )
+            .await;
+
+        let msg = discord
+            .poll_messages_containing(&anchor, "are you there", Duration::from_secs(10))
+            .await;
+        assert!(
+            msg.content.contains(&format!("<@{test_bot_id}>")),
+            "IRC @{test_bot_name} should resolve to <@{test_bot_id}> in Discord; got: {:?}",
+            msg.content
+        );
+    }
+
     capture.assert_no_warnings_or_errors();
 }

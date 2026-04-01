@@ -424,3 +424,141 @@ async fn e2e_pseudoclient_appears_on_irc() {
     capture.assert_no_warnings_or_errors();
     drop(tasks);
 }
+
+/// Discord→IRC: a message containing `<@user_id>` should arrive on IRC with
+/// the user's display name instead of the raw ID.
+#[tokio::test]
+#[ignore]
+async fn e2e_discord_mention_resolved_to_nick_on_irc() {
+    let capture = init_capture_tracing();
+    let irc = helpers::start_unrealircd().await;
+    let config = e2e_config(&irc.host, irc.s2s_port);
+    let tasks = spawn_bridge(config);
+
+    let mut client =
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
+    client.join("#e2e-test").await;
+    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
+
+    // Introduce two users: Alice (who will send) and Bob (who will be mentioned).
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MemberSnapshot {
+            guild_id: 999,
+            members: vec![
+                MemberInfo {
+                    user_id: 5001,
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                },
+                MemberInfo {
+                    user_id: 5002,
+                    display_name: "Bob".into(),
+                    presence: DiscordPresence::Online,
+                },
+            ],
+            channel_ids: vec![111],
+            // Include a channel and role for testing those mention types too.
+            channel_names: [(200, "general".to_string())].into_iter().collect(),
+            role_names: [(300, "Moderator".to_string())].into_iter().collect(),
+        })
+        .await
+        .unwrap();
+
+    client
+        .expect_line_containing("Alice", Duration::from_secs(10))
+        .await;
+
+    // Alice sends a message mentioning Bob by Discord ID, a channel, and a role.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MessageReceived {
+            channel_id: 111,
+            author_id: 5001,
+            author_name: "Alice".into(),
+            content: "hey <@5002> check <#200> and <@&300>".into(),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    // IRC should see resolved names, not raw IDs.
+    let line = client
+        .expect_line_containing("Bob", Duration::from_secs(10))
+        .await;
+    assert!(
+        line.contains("@Bob"),
+        "user mention <@5002> should resolve to @Bob; got: {line:?}"
+    );
+    assert!(
+        line.contains("#general"),
+        "channel mention <#200> should resolve to #general; got: {line:?}"
+    );
+    assert!(
+        line.contains("@Moderator"),
+        "role mention <@&300> should resolve to @Moderator; got: {line:?}"
+    );
+
+    capture.assert_no_warnings_or_errors();
+    drop(tasks);
+}
+
+/// IRC→Discord: a message containing `@Nick` should be converted to a Discord
+/// `<@user_id>` mention if the nick matches a pseudoclient.
+#[tokio::test]
+#[ignore]
+async fn e2e_irc_mention_resolved_to_discord_id() {
+    let capture = init_capture_tracing();
+    let irc = helpers::start_unrealircd().await;
+    let config = e2e_config(&irc.host, irc.s2s_port);
+    let mut tasks = spawn_bridge(config);
+
+    let mut client =
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
+    client.join("#e2e-test").await;
+    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
+
+    // Introduce Bob as a pseudoclient.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MemberSnapshot {
+            guild_id: 999,
+            members: vec![MemberInfo {
+                user_id: 6001,
+                display_name: "Bob".into(),
+                presence: DiscordPresence::Online,
+            }],
+            channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+
+    client
+        .expect_line_containing("Bob", Duration::from_secs(10))
+        .await;
+
+    // IRC user mentions @Bob — should resolve to <@6001> in the Discord command.
+    client
+        .send_privmsg("#e2e-test", "hey @Bob are you there?")
+        .await;
+
+    let text = tasks
+        .expect_send_message("Bob", Duration::from_secs(10))
+        .await;
+    assert!(
+        text.contains("<@6001>"),
+        "IRC @Bob should resolve to <@6001> in Discord text; got: {text:?}"
+    );
+    // The plain @Bob should NOT appear as literal text (it was converted).
+    assert!(
+        !text.contains("@Bob"),
+        "@Bob should be converted to <@6001>, not left as literal; got: {text:?}"
+    );
+
+    capture.assert_no_warnings_or_errors();
+    drop(tasks);
+}

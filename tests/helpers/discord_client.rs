@@ -19,6 +19,7 @@ pub struct DiscordMessage {
 /// Minimal author info within a Discord message.
 #[derive(Debug, Deserialize)]
 pub struct DiscordAuthor {
+    pub id: String,
     pub username: String,
     /// True when the message was sent via a webhook.
     #[serde(default)]

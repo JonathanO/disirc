@@ -479,4 +479,99 @@ mod tests {
             "deferred burst must include IntroduceUser for Bob; got: {cmds:?}"
         );
     }
+
+    // --- BridgeIrcResolver ---
+
+    #[test]
+    fn irc_resolver_finds_pseudoclient_by_nick() {
+        use crate::formatting::IrcMentionResolver;
+        use crate::pseudoclients::PseudoclientManager;
+        let mut pm = PseudoclientManager::new("002", "bridge", "test.net");
+        pm.introduce(42, "alice", "Alice", &["#test".to_string()], 1000);
+        let resolver = super::BridgeIrcResolver { pm: &pm };
+        assert_eq!(resolver.resolve_nick("alice"), Some("42".to_string()));
+    }
+
+    #[test]
+    fn irc_resolver_case_insensitive() {
+        use crate::formatting::IrcMentionResolver;
+        use crate::pseudoclients::PseudoclientManager;
+        let mut pm = PseudoclientManager::new("002", "bridge", "test.net");
+        pm.introduce(42, "Alice", "Alice", &["#test".to_string()], 1000);
+        let resolver = super::BridgeIrcResolver { pm: &pm };
+        assert_eq!(resolver.resolve_nick("alice"), Some("42".to_string()));
+    }
+
+    #[test]
+    fn irc_resolver_unknown_nick_returns_none() {
+        use crate::formatting::IrcMentionResolver;
+        use crate::pseudoclients::PseudoclientManager;
+        let pm = PseudoclientManager::new("002", "bridge", "test.net");
+        let resolver = super::BridgeIrcResolver { pm: &pm };
+        assert_eq!(resolver.resolve_nick("nobody"), None);
+    }
+
+    // --- BridgeDiscordResolver ---
+
+    #[test]
+    fn discord_resolver_finds_user_by_id() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.display_names.insert(42, "Alice".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_user("42"), Some("Alice".to_string()));
+    }
+
+    #[test]
+    fn discord_resolver_unknown_user_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let ds = super::DiscordState::default();
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_user("999"), None);
+    }
+
+    #[test]
+    fn discord_resolver_finds_channel_by_id() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.channel_names.insert(100, "general".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_channel("100"), Some("general".to_string()));
+    }
+
+    #[test]
+    fn discord_resolver_unknown_channel_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let ds = super::DiscordState::default();
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_channel("999"), None);
+    }
+
+    #[test]
+    fn discord_resolver_finds_role_by_id() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.role_names.insert(200, "Moderator".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_role("200"), Some("Moderator".to_string()));
+    }
+
+    #[test]
+    fn discord_resolver_unknown_role_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let ds = super::DiscordState::default();
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_role("999"), None);
+    }
+
+    #[test]
+    fn discord_resolver_invalid_id_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.display_names.insert(42, "Alice".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_user("notanumber"), None);
+        assert_eq!(resolver.resolve_channel("notanumber"), None);
+        assert_eq!(resolver.resolve_role("notanumber"), None);
+    }
 }

@@ -33,7 +33,9 @@ use disirc::irc::unreal::run_connection;
 use disirc::irc::{S2SCommand, S2SEvent};
 use disirc::signal::ControlEvent;
 
-use helpers::discord_client::DiscordTestClient;
+#[path = "helpers/discord_client.rs"]
+mod discord_client;
+use discord_client::DiscordTestClient;
 
 // ---------------------------------------------------------------------------
 // Environment-based configuration

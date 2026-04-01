@@ -1,7 +1,5 @@
 //! Shared helpers for e2e tests.
 
-#[allow(dead_code)] // Only used by e2e_discord, not e2e_irc.
-pub mod discord_client;
 pub mod irc_client;
 
 pub use irc_client::TestIrcClient;

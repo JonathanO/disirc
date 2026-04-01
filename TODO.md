@@ -6,7 +6,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-- **E2E testing (spec 08)** — Layer 3 tests written; need live Docker run to verify. See [specs/08-e2e-testing/TODO.md](specs/08-e2e-testing/TODO.md).
+None.
 
 ## Spec status
 
@@ -20,11 +20,20 @@ Updated by Claude at the start and end of each session, and whenever task status
 | [specs/05-formatting](specs/05-formatting/TODO.md) | ✅ Implemented | — |
 | [specs/06-pseudoclients](specs/06-pseudoclients/TODO.md) | ✅ Implemented | — |
 | [specs/07-irc-message-types](specs/07-irc-message-types/TODO.md) | ✅ Implemented | — |
+| [specs/08-e2e-testing](specs/08-e2e-testing/TODO.md) | ✅ Implemented | L3 + L4 tests, CI workflows, DEVELOPING.md docs |
 
 ## Future specs (deferred from v1)
 
 - **DM bridging** — IRC `PRIVMSG` to a pseudoclient UID forwarded as a Discord DM and vice versa. Architecture must not preclude this: route `PRIVMSG` to non-channel targets; do not discard Discord DM `MESSAGE_CREATE` events at the framework level.
 - **Mention resolution** — Wire serenity cache into `run_bridge` to implement `DiscordResolver` (convert `<@id>`, `<#id>`, `<@&id>` to names) and `IrcMentionResolver` (convert IRC nicks to Discord mentions). Currently using `NoopDiscordResolver` / `NoopIrcResolver` so mentions pass through unconverted.
+
+## Bugs fixed during integration
+
+- Missing `GUILDS` gateway intent — Discord never sent `GUILD_CREATE`, so pseudoclients were never created via the normal burst path
+- Double nick prefix on plain IRC→Discord path — `relay.rs` and `send.rs` both prepended `**[nick]**`
+- Pre-link duplicate UID race — Discord events arriving before IRC handshake completed produced commands that raced with the burst
+- Bots excluded from pseudoclients — Discord bots lack presence data and were treated as offline
+- SJOIN optional modes — UnrealIRCd omits channel modes parameter when none are set
 
 ## Completed milestones
 

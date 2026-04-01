@@ -11,7 +11,7 @@
 - [x] Write test: IRC→Discord message relay (`e2e_irc_to_discord_message_relay`)
 - [x] Write test: pseudoclient appears for Discord user (`e2e_pseudoclient_appears_on_irc`)
 - [x] CI: GitHub Actions job with Docker (testcontainers manages container; just needs Docker daemon)
-- [ ] Run tests against live Docker and verify all 4 pass
+- [x] Run tests against live Docker and verify all 4 pass
 
 ## Layer 4: Full e2e
 
@@ -20,5 +20,5 @@
 - [x] Write test: IRC→Discord via real Discord API (webhook + plain channels)
 - [x] Write test: formatting preserved across bridge (webhook + plain channels)
 - [x] CI: GitHub Actions job with secrets
-- [ ] Run tests against live Discord and verify all 6 pass
-- [ ] Document manual setup steps for test guild/bot
+- [x] Run tests against live Discord and verify all 6 pass
+- [x] Document manual setup steps for test guild/bot (see DEVELOPING.md)

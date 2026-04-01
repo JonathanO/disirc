@@ -27,7 +27,7 @@ ARG UNREALIRCD_VERSION=6.1.10
 RUN wget -q "https://www.unrealircd.org/downloads/unrealircd-${UNREALIRCD_VERSION}.tar.gz" \
     && tar xzf "unrealircd-${UNREALIRCD_VERSION}.tar.gz" \
     && cd "unrealircd-${UNREALIRCD_VERSION}" \
-    && ./Config \
+    && CFLAGS="-march=x86-64 -O2" ./Config \
         --enable-ssl \
         --with-fd-setsize=1024 \
         --with-permissions=0600 \

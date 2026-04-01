@@ -270,14 +270,17 @@ async fn e2e_irc_to_discord_webhook() {
     client.join(&secrets.webhook_irc_channel).await;
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    // Wait for a pseudoclient to join the channel — this confirms the bridge
-    // has processed the Discord MemberSnapshot and has presence in the IRC
-    // channel, so it will see our PRIVMSG.
+    // Send a warmup message from the test bot to trigger on-demand
+    // pseudoclient creation.  guild_create may not fire reliably in test
+    // environments (rapid reconnects), so we force channel presence by having
+    // a Discord user speak — the bridge introduces their pseudoclient and
+    // JOINs the IRC channel on-demand.
+    let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
+    discord.send_message("warmup").await;
     client
         .expect_line_containing("JOIN", Duration::from_secs(15))
         .await;
 
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
     let anchor = discord.latest_message_id().await;
 
     client
@@ -384,14 +387,14 @@ async fn e2e_irc_to_discord_plain() {
     client.join(&secrets.plain_irc_channel).await;
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    // Wait for a pseudoclient to join the channel — this confirms the bridge
-    // has processed the Discord MemberSnapshot and has presence in the IRC
-    // channel, so it will see our PRIVMSG.
+    // Send a warmup message to trigger on-demand pseudoclient creation
+    // (guild_create may not fire reliably in rapid-reconnect test environments).
+    let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
+    discord.send_message("warmup").await;
     client
         .expect_line_containing("JOIN", Duration::from_secs(15))
         .await;
 
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
     let anchor = discord.latest_message_id().await;
 
     client

@@ -37,7 +37,8 @@ fn bridged_channel_ids(bridges: &[BridgeEntry]) -> HashSet<u64> {
 }
 
 const INTENTS: GatewayIntents = GatewayIntents::from_bits_truncate(
-    GatewayIntents::GUILD_MEMBERS.bits()
+    GatewayIntents::GUILDS.bits()
+        | GatewayIntents::GUILD_MEMBERS.bits()
         | GatewayIntents::GUILD_MESSAGES.bits()
         | GatewayIntents::GUILD_PRESENCES.bits()
         | GatewayIntents::MESSAGE_CONTENT.bits(),
@@ -189,6 +190,7 @@ mod tests {
 
     #[test]
     fn intents_include_all_required_flags() {
+        assert!(INTENTS.contains(GatewayIntents::GUILDS));
         assert!(INTENTS.contains(GatewayIntents::GUILD_MEMBERS));
         assert!(INTENTS.contains(GatewayIntents::GUILD_MESSAGES));
         assert!(INTENTS.contains(GatewayIntents::GUILD_PRESENCES));

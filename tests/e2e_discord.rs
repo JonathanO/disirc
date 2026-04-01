@@ -232,7 +232,6 @@ async fn wait_for_bridge_in_links(
 ///
 /// Starts one UnrealIRCd container and one bridge (IRC + Discord + bridge
 /// processor) and runs all assertion blocks against the shared infrastructure.
-/// The single Discord Gateway connection ensures GUILD_CREATE fires reliably.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
 async fn e2e_discord_suite() {
@@ -249,9 +248,9 @@ async fn e2e_discord_suite() {
     client.join(&secrets.plain_irc_channel).await;
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    // Wait for guild_create → MemberSnapshot → pseudoclient JOIN.
-    // This proves the Discord Gateway delivered GUILD_CREATE and the bridge
-    // created pseudoclients via the deferred burst.
+    // Wait for guild_create → MemberSnapshot → deferred burst → pseudoclient
+    // JOIN.  This proves the Discord Gateway delivered GUILD_CREATE (which
+    // requires the GUILDS intent) and the bridge created pseudoclients.
     client
         .expect_line_containing("JOIN", Duration::from_secs(30))
         .await;

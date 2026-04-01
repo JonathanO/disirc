@@ -54,34 +54,32 @@ struct Secrets {
     plain_irc_channel: String,
 }
 
-/// Read all required secrets from environment variables.
-/// Returns `None` if any are missing (test should skip, not fail).
-fn read_secrets() -> Option<Secrets> {
-    let bridge_token = std::env::var("DISCORD_BRIDGE_BOT_TOKEN").ok()?;
-    let test_token = std::env::var("DISCORD_TEST_BOT_TOKEN").ok()?;
-    let guild_id: u64 = std::env::var("DISCORD_TEST_GUILD_ID").ok()?.parse().ok()?;
-    let webhook_channel_id: u64 = std::env::var("DISCORD_TEST_CHANNEL_ID")
-        .ok()?
-        .parse()
-        .ok()?;
-    let webhook_irc_channel = std::env::var("DISCORD_TEST_IRC_CHANNEL").ok()?;
-    let webhook_url = std::env::var("DISCORD_TEST_WEBHOOK_URL").ok()?;
-    let plain_channel_id: u64 = std::env::var("DISCORD_TEST_PLAIN_CHANNEL_ID")
-        .ok()?
-        .parse()
-        .ok()?;
-    let plain_irc_channel = std::env::var("DISCORD_TEST_PLAIN_IRC_CHANNEL").ok()?;
+/// Helper to read a required env var, panicking with a clear message if missing.
+fn required_env(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("required env var {name} is not set"))
+}
 
-    Some(Secrets {
-        bridge_token,
-        test_token,
-        guild_id,
-        webhook_channel_id,
-        webhook_irc_channel,
-        webhook_url,
-        plain_channel_id,
-        plain_irc_channel,
-    })
+/// Helper to read a required env var and parse it as `u64`.
+fn required_env_u64(name: &str) -> u64 {
+    required_env(name)
+        .parse()
+        .unwrap_or_else(|e| panic!("env var {name} is not a valid u64: {e}"))
+}
+
+/// Read all required environment variables. Panics if any are missing —
+/// these tests are gated behind a GitHub Environment with required
+/// reviewer approval, so missing vars indicates misconfiguration.
+fn read_secrets() -> Secrets {
+    Secrets {
+        bridge_token: required_env("DISCORD_BRIDGE_BOT_TOKEN"),
+        test_token: required_env("DISCORD_TEST_BOT_TOKEN"),
+        guild_id: required_env_u64("DISCORD_TEST_GUILD_ID"),
+        webhook_channel_id: required_env_u64("DISCORD_TEST_CHANNEL_ID"),
+        webhook_irc_channel: required_env("DISCORD_TEST_IRC_CHANNEL"),
+        webhook_url: required_env("DISCORD_TEST_WEBHOOK_URL"),
+        plain_channel_id: required_env_u64("DISCORD_TEST_PLAIN_CHANNEL_ID"),
+        plain_irc_channel: required_env("DISCORD_TEST_PLAIN_IRC_CHANNEL"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,10 +251,7 @@ fn assert_no_warnings_or_errors(lines: &[&str]) -> Result<(), String> {
 #[ignore = "requires Docker + Discord credentials"]
 #[traced_test]
 async fn e2e_discord_to_irc_webhook() {
-    let Some(secrets) = read_secrets() else {
-        eprintln!("skipping: Discord secrets not set");
-        return;
-    };
+    let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
     let _bridge = spawn_full_bridge(&config);
@@ -285,10 +280,7 @@ async fn e2e_discord_to_irc_webhook() {
 #[ignore = "requires Docker + Discord credentials"]
 #[traced_test]
 async fn e2e_irc_to_discord_webhook() {
-    let Some(secrets) = read_secrets() else {
-        eprintln!("skipping: Discord secrets not set");
-        return;
-    };
+    let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
     let _bridge = spawn_full_bridge(&config);
@@ -330,10 +322,7 @@ async fn e2e_irc_to_discord_webhook() {
 #[ignore = "requires Docker + Discord credentials"]
 #[traced_test]
 async fn e2e_formatting_webhook() {
-    let Some(secrets) = read_secrets() else {
-        eprintln!("skipping: Discord secrets not set");
-        return;
-    };
+    let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
     let _bridge = spawn_full_bridge(&config);
@@ -371,10 +360,7 @@ async fn e2e_formatting_webhook() {
 #[ignore = "requires Docker + Discord credentials"]
 #[traced_test]
 async fn e2e_discord_to_irc_plain() {
-    let Some(secrets) = read_secrets() else {
-        eprintln!("skipping: Discord secrets not set");
-        return;
-    };
+    let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
     let _bridge = spawn_full_bridge(&config);
@@ -403,10 +389,7 @@ async fn e2e_discord_to_irc_plain() {
 #[ignore = "requires Docker + Discord credentials"]
 #[traced_test]
 async fn e2e_irc_to_discord_plain() {
-    let Some(secrets) = read_secrets() else {
-        eprintln!("skipping: Discord secrets not set");
-        return;
-    };
+    let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
     let _bridge = spawn_full_bridge(&config);
@@ -446,10 +429,7 @@ async fn e2e_irc_to_discord_plain() {
 #[ignore = "requires Docker + Discord credentials"]
 #[traced_test]
 async fn e2e_formatting_plain() {
-    let Some(secrets) = read_secrets() else {
-        eprintln!("skipping: Discord secrets not set");
-        return;
-    };
+    let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
     let _bridge = spawn_full_bridge(&config);

@@ -242,8 +242,26 @@ impl EventHandler for DiscordHandler {
                 .collect()
         };
 
+        tracing::debug!(
+            guild_id = guild.id.get(),
+            total_members = raw.len(),
+            total_presences = presences.len(),
+            bridged_channels = guild_channel_ids.len(),
+            guild_channels = guild.channels.len(),
+            "guild_create received"
+        );
+
         let event =
             build_member_snapshot_event(guild.id.get(), &raw, &presences, guild_channel_ids);
+
+        if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
+            tracing::debug!(
+                guild_id = guild.id.get(),
+                online_members = members.len(),
+                "emitting MemberSnapshot"
+            );
+        }
+
         let _ = self.event_tx.send(event).await;
     }
 

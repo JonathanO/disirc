@@ -1,6 +1,7 @@
 # Test-only UnrealIRCd image built from the official source tarball.
 # Contains only the compiled binary and a self-signed TLS cert.
 # The test config (unrealircd.conf) is injected at runtime by testcontainers.
+# Published to ghcr.io by the docker-test-image.yml workflow.
 #
 # Client port: 6667  TLS: 6697  S2S port: 6900
 #
@@ -58,7 +59,9 @@ RUN useradd -m -s /bin/sh ircd
 COPY --from=builder /home/ircd/unrealircd /home/ircd/unrealircd
 
 EXPOSE 6667 6697 6900
-USER ircd
 WORKDIR /home/ircd/unrealircd
-# -F runs in the foreground (no fork), required for Docker.
-CMD ["/home/ircd/unrealircd/bin/unrealircd", "-F"]
+# Fix ownership of any files injected by testcontainers (with_copy_to
+# writes as root, but UnrealIRCd requires config files owned by ircd),
+# then exec as the ircd user. -F runs in the foreground (no fork).
+CMD chown -R ircd:ircd /home/ircd/unrealircd/conf && \
+    exec su -s /bin/sh ircd -c "/home/ircd/unrealircd/bin/unrealircd -F"

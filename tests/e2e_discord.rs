@@ -1,10 +1,13 @@
 //! Layer 4 e2e tests: real `UnrealIRCd` + real Discord Gateway.
 //!
-//! All tests are `#[ignore = "requires Docker + Discord credentials"]` — they require Docker AND Discord bot credentials.
-//! Run them explicitly with:
+//! Uses a **single** bridge instance (one UnrealIRCd container, one Discord
+//! Gateway connection) shared across all assertion blocks.  This avoids
+//! rapid gateway reconnections that cause Discord to throttle GUILD_CREATE.
+//!
+//! Run explicitly with:
 //!
 //! ```text
-//! cargo test --test e2e_discord -- --include-ignored --nocapture --test-threads=1
+//! cargo test --test e2e_discord -- --include-ignored --nocapture
 //! ```
 //!
 //! Required environment variables (all read at runtime, never committed):
@@ -222,13 +225,17 @@ async fn wait_for_bridge_in_links(
 }
 
 // ---------------------------------------------------------------------------
-// Tests — Webhook channel
+// Test suite
 // ---------------------------------------------------------------------------
 
-/// Test bot sends a message in the webhook channel; IRC client sees the PRIVMSG.
+/// Full Layer 4 e2e test suite.
+///
+/// Starts one UnrealIRCd container and one bridge (IRC + Discord + bridge
+/// processor) and runs all assertion blocks against the shared infrastructure.
+/// The single Discord Gateway connection ensures GUILD_CREATE fires reliably.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
-async fn e2e_discord_to_irc_webhook() {
+async fn e2e_discord_suite() {
     let capture = init_capture_tracing();
     let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
@@ -239,211 +246,102 @@ async fn e2e_discord_to_irc_webhook() {
         helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
             .await;
     client.join(&secrets.webhook_irc_channel).await;
-    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
-
-    // Allow time for Discord Gateway to connect and member snapshot to propagate.
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
-    discord.send_message("layer4-webhook-d2i-test").await;
-
-    client
-        .expect_line_containing("layer4-webhook-d2i-test", Duration::from_secs(10))
-        .await;
-
-    capture.assert_no_warnings_or_errors();
-}
-
-/// IRC client sends a PRIVMSG; test bot polls and finds the webhook message.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires Docker + Discord credentials"]
-async fn e2e_irc_to_discord_webhook() {
-    let capture = init_capture_tracing();
-    let secrets = read_secrets();
-    let irc = helpers::start_unrealircd().await;
-    let config = full_config(&secrets, &irc.host, irc.s2s_port);
-    let _bridge = spawn_full_bridge(&config);
-
-    let mut client =
-        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
-            .await;
-    client.join(&secrets.webhook_irc_channel).await;
-    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
-
-    // Send a warmup message from the test bot to trigger on-demand
-    // pseudoclient creation.  guild_create may not fire reliably in test
-    // environments (rapid reconnects), so we force channel presence by having
-    // a Discord user speak — the bridge introduces their pseudoclient and
-    // JOINs the IRC channel on-demand.
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
-    discord.send_message("warmup").await;
-    client
-        .expect_line_containing("JOIN", Duration::from_secs(15))
-        .await;
-
-    let anchor = discord.latest_message_id().await;
-
-    client
-        .send_privmsg(&secrets.webhook_irc_channel, "layer4-webhook-i2d-test")
-        .await;
-
-    let msg = discord
-        .poll_messages_containing(&anchor, "layer4-webhook-i2d-test", Duration::from_secs(10))
-        .await;
-
-    // Webhook messages should use the IRC nick as the webhook username.
-    assert!(
-        msg.author.bot,
-        "expected webhook message (bot=true), got bot=false"
-    );
-    assert_eq!(
-        msg.author.username, "testbot",
-        "webhook username should match IRC nick"
-    );
-
-    capture.assert_no_warnings_or_errors();
-}
-
-/// Formatting: test bot sends bold/italic/code; IRC client verifies control codes.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires Docker + Discord credentials"]
-async fn e2e_formatting_webhook() {
-    let capture = init_capture_tracing();
-    let secrets = read_secrets();
-    let irc = helpers::start_unrealircd().await;
-    let config = full_config(&secrets, &irc.host, irc.s2s_port);
-    let _bridge = spawn_full_bridge(&config);
-
-    let mut client =
-        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
-            .await;
-    client.join(&secrets.webhook_irc_channel).await;
-    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
-
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
-    discord.send_message("**bold** *italic* `code`").await;
-
-    // IRC bold = \x02, italic = \x1D, monospace = \x11
-    // Verify at least bold (\x02) arrives in the IRC message.
-    let line = client
-        .expect_line_containing("bold", Duration::from_secs(10))
-        .await;
-    assert!(
-        line.contains('\x02'),
-        "expected IRC bold control code (\\x02) in: {line:?}"
-    );
-
-    capture.assert_no_warnings_or_errors();
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Plain channel (no webhook)
-// ---------------------------------------------------------------------------
-
-/// Test bot sends a message in the plain channel; IRC client sees the PRIVMSG.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires Docker + Discord credentials"]
-async fn e2e_discord_to_irc_plain() {
-    let capture = init_capture_tracing();
-    let secrets = read_secrets();
-    let irc = helpers::start_unrealircd().await;
-    let config = full_config(&secrets, &irc.host, irc.s2s_port);
-    let _bridge = spawn_full_bridge(&config);
-
-    let mut client =
-        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
-            .await;
     client.join(&secrets.plain_irc_channel).await;
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
-    discord.send_message("layer4-plain-d2i-test").await;
-
+    // Wait for guild_create → MemberSnapshot → pseudoclient JOIN.
+    // This proves the Discord Gateway delivered GUILD_CREATE and the bridge
+    // created pseudoclients via the deferred burst.
     client
-        .expect_line_containing("layer4-plain-d2i-test", Duration::from_secs(10))
+        .expect_line_containing("JOIN", Duration::from_secs(30))
         .await;
 
-    capture.assert_no_warnings_or_errors();
-}
-
-/// IRC client sends a PRIVMSG; test bot polls plain channel and finds
-/// the `**[nick]** text` format (no webhook username).
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires Docker + Discord credentials"]
-async fn e2e_irc_to_discord_plain() {
-    let capture = init_capture_tracing();
-    let secrets = read_secrets();
-    let irc = helpers::start_unrealircd().await;
-    let config = full_config(&secrets, &irc.host, irc.s2s_port);
-    let _bridge = spawn_full_bridge(&config);
-
-    let mut client =
-        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+    // --- Discord → IRC (webhook channel) ---
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
+        discord.send_message("suite-webhook-d2i").await;
+        client
+            .expect_line_containing("suite-webhook-d2i", Duration::from_secs(10))
             .await;
-    client.join(&secrets.plain_irc_channel).await;
-    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
+    }
 
-    // Send a warmup message to trigger on-demand pseudoclient creation
-    // (guild_create may not fire reliably in rapid-reconnect test environments).
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
-    discord.send_message("warmup").await;
-    client
-        .expect_line_containing("JOIN", Duration::from_secs(15))
-        .await;
+    // --- IRC → Discord (webhook channel) ---
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
+        let anchor = discord.latest_message_id().await;
 
-    let anchor = discord.latest_message_id().await;
-
-    client
-        .send_privmsg(&secrets.plain_irc_channel, "layer4-plain-i2d-test")
-        .await;
-
-    let msg = discord
-        .poll_messages_containing(&anchor, "layer4-plain-i2d-test", Duration::from_secs(10))
-        .await;
-
-    // Plain path uses **[nick]** format, sent by the bridge bot itself.
-    assert!(
-        msg.content.contains("**[testbot]**"),
-        "expected **[testbot]** prefix in plain message, got: {:?}",
-        msg.content
-    );
-
-    capture.assert_no_warnings_or_errors();
-}
-
-/// Formatting: test bot sends bold/italic/code in plain channel; IRC client
-/// verifies control codes arrive.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires Docker + Discord credentials"]
-async fn e2e_formatting_plain() {
-    let capture = init_capture_tracing();
-    let secrets = read_secrets();
-    let irc = helpers::start_unrealircd().await;
-    let config = full_config(&secrets, &irc.host, irc.s2s_port);
-    let _bridge = spawn_full_bridge(&config);
-
-    let mut client =
-        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+        client
+            .send_privmsg(&secrets.webhook_irc_channel, "suite-webhook-i2d")
             .await;
-    client.join(&secrets.plain_irc_channel).await;
-    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+        let msg = discord
+            .poll_messages_containing(&anchor, "suite-webhook-i2d", Duration::from_secs(10))
+            .await;
+        assert!(
+            msg.author.bot,
+            "expected webhook message (bot=true), got bot=false"
+        );
+        assert_eq!(
+            msg.author.username, "testbot",
+            "webhook username should match IRC nick"
+        );
+    }
 
-    let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
-    discord.send_message("**bold** *italic* `code`").await;
+    // --- Formatting (webhook channel) ---
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
+        discord.send_message("**bold** *italic* `code`").await;
 
-    let line = client
-        .expect_line_containing("bold", Duration::from_secs(10))
-        .await;
-    assert!(
-        line.contains('\x02'),
-        "expected IRC bold control code (\\x02) in: {line:?}"
-    );
+        let line = client
+            .expect_line_containing("bold", Duration::from_secs(10))
+            .await;
+        assert!(
+            line.contains('\x02'),
+            "expected IRC bold control code (\\x02) in: {line:?}"
+        );
+    }
+
+    // --- Discord → IRC (plain channel) ---
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
+        discord.send_message("suite-plain-d2i").await;
+        client
+            .expect_line_containing("suite-plain-d2i", Duration::from_secs(10))
+            .await;
+    }
+
+    // --- IRC → Discord (plain channel) ---
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
+        let anchor = discord.latest_message_id().await;
+
+        client
+            .send_privmsg(&secrets.plain_irc_channel, "suite-plain-i2d")
+            .await;
+
+        let msg = discord
+            .poll_messages_containing(&anchor, "suite-plain-i2d", Duration::from_secs(10))
+            .await;
+        assert!(
+            msg.content.contains("**[testbot]**"),
+            "expected **[testbot]** prefix in plain message, got: {:?}",
+            msg.content
+        );
+    }
+
+    // --- Formatting (plain channel) ---
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.plain_channel_id);
+        discord.send_message("**bold** *italic* `code`").await;
+
+        let line = client
+            .expect_line_containing("bold", Duration::from_secs(10))
+            .await;
+        assert!(
+            line.contains('\x02'),
+            "expected IRC bold control code (\\x02) in: {line:?}"
+        );
+    }
 
     capture.assert_no_warnings_or_errors();
 }

@@ -222,28 +222,11 @@ impl DiscordHandler {
 #[mutants::skip] // Serenity EventHandler shims — require live Discord Gateway to exercise
 impl EventHandler for DiscordHandler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
-        tracing::info!(
-            guilds = ready.guilds.len(),
-            "READY received, guilds in payload"
-        );
         self.handle_ready(ready.user.id.get(), &ready.user.tag())
             .await;
     }
 
-    async fn cache_ready(&self, _ctx: Context, guilds: Vec<GuildId>) {
-        tracing::info!(
-            guild_count = guilds.len(),
-            guild_ids = ?guilds.iter().map(|g| g.get()).collect::<Vec<_>>(),
-            "cache_ready fired"
-        );
-    }
-
     async fn guild_create(&self, _ctx: Context, guild: Guild, _is_new: Option<bool>) {
-        tracing::info!(
-            guild_id = guild.id.get(),
-            guild_name = %guild.name,
-            "guild_create handler entered"
-        );
         let presences: HashMap<u64, DiscordPresence> = guild
             .presences
             .iter()
@@ -273,20 +256,20 @@ impl EventHandler for DiscordHandler {
                 .collect()
         };
 
-        tracing::info!(
+        tracing::debug!(
             guild_id = guild.id.get(),
             total_members = raw.len(),
             total_presences = presences.len(),
             bridged_channels = guild_channel_ids.len(),
             guild_channels = guild.channels.len(),
-            "guild_create processing"
+            "guild_create received"
         );
 
         let event =
             build_member_snapshot_event(guild.id.get(), &raw, &presences, guild_channel_ids);
 
         if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
-            tracing::info!(
+            tracing::debug!(
                 guild_id = guild.id.get(),
                 online_members = members.len(),
                 "emitting MemberSnapshot"

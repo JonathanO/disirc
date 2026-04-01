@@ -1,5 +1,6 @@
 //! Shared helpers for e2e tests.
 
+#[allow(dead_code)] // Only used by e2e_discord, not e2e_irc.
 pub mod discord_client;
 pub mod irc_client;
 
@@ -44,12 +45,12 @@ pub async fn start_unrealircd() -> IrcContainer {
     let container = GenericImage::new(TEST_IMAGE, TEST_IMAGE_TAG)
         .with_exposed_port(6667u16.tcp())
         .with_exposed_port(6900u16.tcp())
-        // Wait until `UnrealIRCd` logs "`UnrealIRCd` started." to stderr — this
+        // Wait until UnrealIRCd logs "UnrealIRCd started." to stderr — this
         // confirms all modules are loaded and the server is ready for connections.
-        .with_wait_for(WaitFor::message_on_stderr("`UnrealIRCd` started."))
+        .with_wait_for(WaitFor::message_on_stderr("UnrealIRCd started."))
         .start()
         .await
-        .expect("Failed to start `UnrealIRCd` container (is Docker running?)");
+        .expect("Failed to start UnrealIRCd container (is Docker running?)");
 
     // On Docker Desktop (Windows/macOS), containers may not be reachable on
     // 127.0.0.1 — use get_host() to get the correct address.

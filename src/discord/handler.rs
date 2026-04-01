@@ -222,8 +222,20 @@ impl DiscordHandler {
 #[mutants::skip] // Serenity EventHandler shims — require live Discord Gateway to exercise
 impl EventHandler for DiscordHandler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
+        tracing::info!(
+            guilds = ready.guilds.len(),
+            "READY received, guilds in payload"
+        );
         self.handle_ready(ready.user.id.get(), &ready.user.tag())
             .await;
+    }
+
+    async fn cache_ready(&self, _ctx: Context, guilds: Vec<GuildId>) {
+        tracing::info!(
+            guild_count = guilds.len(),
+            guild_ids = ?guilds.iter().map(|g| g.get()).collect::<Vec<_>>(),
+            "cache_ready fired"
+        );
     }
 
     async fn guild_create(&self, _ctx: Context, guild: Guild, _is_new: Option<bool>) {

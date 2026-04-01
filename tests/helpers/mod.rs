@@ -6,11 +6,16 @@ pub use irc_client::TestIrcClient;
 
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage};
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 /// Tag used for the locally-built test image.
 const TEST_IMAGE: &str = "disirc-unrealircd-test";
 const TEST_IMAGE_TAG: &str = "latest";
+
+/// The test config is compiled into the test binary and copied into the
+/// container at startup. This avoids bind-mount path issues on Windows
+/// and means config changes don't require an image rebuild.
+const UNREALIRCD_CONF: &[u8] = include_bytes!("../fixtures/unrealircd.conf");
 
 /// Handle to a running `UnrealIRCd` Docker container.
 ///
@@ -35,8 +40,8 @@ pub struct IrcContainer {
 /// The container is automatically cleaned up when the returned
 /// [`IrcContainer`] is dropped.
 ///
-/// The test config is baked into the image (see `tests/fixtures/Dockerfile`),
-/// so no bind-mount is required. This avoids Windows host-path issues.
+/// The test config is copied into the container at startup via the Docker
+/// API (no bind mount required).
 pub async fn start_unrealircd() -> IrcContainer {
     ensure_test_image_built();
 
@@ -46,6 +51,11 @@ pub async fn start_unrealircd() -> IrcContainer {
         // Wait until UnrealIRCd logs "UnrealIRCd started." to stderr — this
         // confirms all modules are loaded and the server is ready for connections.
         .with_wait_for(WaitFor::message_on_stderr("UnrealIRCd started."))
+        // Copy the test config into the container (no bind mount needed).
+        .with_copy_to(
+            "/home/ircd/unrealircd/conf/unrealircd.conf",
+            UNREALIRCD_CONF.to_vec(),
+        )
         .start()
         .await
         .expect("Failed to start UnrealIRCd container (is Docker running?)");

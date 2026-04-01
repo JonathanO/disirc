@@ -76,13 +76,10 @@ pub(crate) async fn send_discord_message(
             warn!(error = %e, channel_id, "Webhook execute failed; dropping message");
         }
     } else {
-        // Plain send: prepend nick and apply mention suppression to both nick and body.
-        // A malicious IRC nick like "@everyone" must not trigger pings.
-        let safe_text = format!(
-            "**[{}]** {}",
-            suppress_mentions(sender_nick),
-            suppress_mentions(text)
-        );
+        // Plain send: the text already contains the "**[nick]** content" prefix
+        // (formatted by relay.rs with ping-fixed nick).  Only suppress @everyone
+        // / @here mentions — do NOT re-wrap with the nick.
+        let safe_text = suppress_mentions(text);
         let msg = CreateMessage::new().content(safe_text);
         if let Err(e) = ChannelId::new(channel_id).send_message(http, msg).await {
             warn!(error = %e, channel_id, "Channel send failed; dropping message");

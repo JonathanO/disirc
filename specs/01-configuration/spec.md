@@ -29,6 +29,12 @@ host_suffix    = "users.discord.example.net"
 # Ident field for all pseudoclients
 ident          = "discord"
 
+[formatting]
+# Convert leading "nick:" or "nick," in IRC messages to Discord mentions.
+# IRC users conventionally address messages this way; enabling this makes
+# those addresses ping the Discord user.  Default: true.
+irc_nick_colon_mention = true
+
 [[bridge]]
 discord_channel_id = "123456789012345678"
 irc_channel        = "#general"
@@ -61,6 +67,7 @@ irc_channel        = "#dev"
 | `irc.description` | `"Discord bridge"` | Server description shown in `/links` and `/map` |
 | `pseudoclients.host_suffix` | `"discord"` | Hostname suffix for pseudoclient hostmasks |
 | `pseudoclients.ident` | `"discord"` | Ident (username) field for all pseudoclients |
+| `formatting.irc_nick_colon_mention` | `true` | Convert leading `nick:` / `nick,` in IRC messages to Discord `<@id>` mentions |
 | `bridge[].webhook_url` | _(none)_ | Discord webhook URL for this channel. When set, IRC messages are delivered via webhook so each IRC user appears with their own nick and avatar. Falls back to plain `channel.send()` if absent or on failure. |
 
 ## Validation rules

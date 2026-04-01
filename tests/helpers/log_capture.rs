@@ -37,6 +37,8 @@ impl LogCapture {
         let lines = self.lines();
         let problems: Vec<_> = lines
             .iter()
+            // Only check disirc's own logs, not third-party crate warnings.
+            .filter(|line| line.contains("disirc"))
             .filter(|line| line.contains(" WARN ") || line.contains(" ERROR "))
             .collect();
         assert!(
@@ -92,7 +94,7 @@ pub fn init_capture_tracing() -> LogCapture {
         .get_or_init(|| {
             let capture = LogCapture::new();
             let filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("disirc=trace"));
+                .unwrap_or_else(|_| EnvFilter::new("disirc=trace,serenity=debug"));
             tracing_subscriber::fmt()
                 .with_env_filter(filter)
                 .with_writer(capture.clone())

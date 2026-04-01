@@ -24,6 +24,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 ## Future specs (deferred from v1)
 
 - **DM bridging** — IRC `PRIVMSG` to a pseudoclient UID forwarded as a Discord DM and vice versa. Architecture must not preclude this: route `PRIVMSG` to non-channel targets; do not discard Discord DM `MESSAGE_CREATE` events at the framework level.
+- **Mention resolution** — Wire serenity cache into `run_bridge` to implement `DiscordResolver` (convert `<@id>`, `<#id>`, `<@&id>` to names) and `IrcMentionResolver` (convert IRC nicks to Discord mentions). Currently using `NoopDiscordResolver` / `NoopIrcResolver` so mentions pass through unconverted.
 
 ## Completed milestones
 

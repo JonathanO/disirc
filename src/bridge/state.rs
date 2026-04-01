@@ -11,8 +11,14 @@ use crate::pseudoclients::{PseudoclientManager, sanitize_nick};
 /// Tracks the uid→nick map for all external IRC users and the creation
 /// timestamp of every channel we have seen in a `ChannelBurst`.  Both tables
 /// are cleared on `LinkDown` / `PseudoclientManager::reset`.
+///
+/// Also tracks whether the S2S link is currently established so that the
+/// bridge loop can suppress live-introduce commands when the link is down;
+/// they would race with the burst that fires on `LinkUp`.
 #[derive(Debug, Default)]
 pub struct IrcState {
+    /// `true` after `LinkUp`, `false` before first connect and after `LinkDown`.
+    link_up: bool,
     /// uid → current nick for every non-pseudoclient IRC user.
     nicks: std::collections::HashMap<String, String>,
     /// channel name (lowercased) → creation timestamp.
@@ -20,6 +26,12 @@ pub struct IrcState {
 }
 
 impl IrcState {
+    /// Returns `true` while the S2S link is established.
+    #[must_use]
+    pub fn is_link_up(&self) -> bool {
+        self.link_up
+    }
+
     /// Look up the current nick for a UID.
     #[must_use]
     pub fn nick_of(&self, uid: &str) -> Option<&str> {
@@ -34,6 +46,7 @@ impl IrcState {
 
     /// Reset all tracked state (call on link loss).
     pub fn reset(&mut self) {
+        self.link_up = false;
         self.nicks.clear();
         self.channel_ts.clear();
     }
@@ -42,18 +55,22 @@ impl IrcState {
 /// Apply one `S2SEvent` to the bridge's IRC-side state.
 ///
 /// Updates `state` and `pm` in place; never fails.  Events that carry no
-/// meaningful state update (e.g. `LinkUp`, `BurstComplete`, message events)
+/// meaningful state update (e.g. `BurstComplete`, message events)
 /// are accepted and silently ignored so the caller can forward every event
 /// here without filtering.
 pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event: &S2SEvent) {
     match event {
+        S2SEvent::LinkUp => {
+            state.link_up = true;
+        }
+
         S2SEvent::LinkDown { .. } => {
             // Reset IRC-side state: external nick map and channel timestamps are
             // no longer valid after a link loss.  PseudoclientManager is NOT
             // reset here — its state survives so the burst on the next LinkUp
             // can re-introduce all known Discord pseudoclients without waiting
             // for a fresh MemberSnapshot.
-            state.reset();
+            state.reset(); // also sets link_up = false
         }
 
         S2SEvent::UserIntroduced { uid, nick, .. } => {
@@ -103,8 +120,7 @@ pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event
         }
 
         // These events require no IrcState / PseudoclientManager update.
-        S2SEvent::LinkUp
-        | S2SEvent::BurstComplete
+        S2SEvent::BurstComplete
         | S2SEvent::ServerIntroduced { .. }
         | S2SEvent::ServerQuit { .. }
         | S2SEvent::MessageReceived { .. }
@@ -395,6 +411,30 @@ mod tests {
             },
         );
         assert_eq!(state.nick_of("001AAAAAA"), None);
+    }
+
+    #[test]
+    fn link_up_sets_link_up_flag() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        assert!(!state.is_link_up(), "starts false");
+        apply_irc_event(&mut state, &mut pm, &S2SEvent::LinkUp);
+        assert!(state.is_link_up(), "true after LinkUp");
+    }
+
+    #[test]
+    fn link_down_clears_link_up_flag() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &S2SEvent::LinkUp);
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::LinkDown {
+                reason: "gone".to_string(),
+            },
+        );
+        assert!(!state.is_link_up(), "false after LinkDown");
     }
 
     #[test]

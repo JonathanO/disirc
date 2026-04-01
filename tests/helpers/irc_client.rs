@@ -13,7 +13,7 @@ pub struct TestIrcClient {
 }
 
 impl TestIrcClient {
-    /// Connect to `addr`, register as `nick`, and wait for RPL_WELCOME (001).
+    /// Connect to `addr`, register as `nick`, and wait for `RPL_WELCOME` (001).
     /// Handles PING challenges during registration automatically.
     pub async fn connect(addr: &str, nick: &str) -> Self {
         let stream = TcpStream::connect(addr)
@@ -44,16 +44,43 @@ impl TestIrcClient {
     pub async fn read_line_timeout(&mut self, dur: Duration) -> Option<String> {
         let mut line = String::new();
         match timeout(dur, self.reader.read_line(&mut line)).await {
-            Ok(Ok(0)) | Err(_) => None,
+            Ok(Ok(0) | Err(_)) | Err(_) => None,
             Ok(Ok(_)) => Some(line.trim_end_matches(['\r', '\n']).to_string()),
-            Ok(Err(_)) => None,
         }
     }
 
-    /// JOIN `channel` and wait for RPL_ENDOFNAMES (366).
+    /// JOIN `channel` and wait for `RPL_ENDOFNAMES` (366).
+    /// Panics immediately if the server responds with an error numeric (4xx/5xx).
     pub async fn join(&mut self, channel: &str) {
         self.send(&format!("JOIN {channel}")).await;
-        self.expect_code("366", Duration::from_secs(10)).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or(Duration::ZERO);
+            let line = self
+                .read_line_timeout(remaining)
+                .await
+                .unwrap_or_else(|| panic!("timed out waiting for JOIN {channel} response (366)"));
+            if let Some(token) = line.strip_prefix("PING :") {
+                self.send(&format!("PONG :{token}")).await;
+                continue;
+            }
+            // IRC format: :server NNN nick ...
+            let parts: Vec<&str> = line.splitn(4, ' ').collect();
+            if let Some(numeric) = parts.get(1) {
+                if *numeric == "366" {
+                    return;
+                }
+                // JOIN-specific error numerics (RFC 2812 + UnrealIRCd extensions).
+                // 400-level numerics like 422 (no MOTD) are unrelated to JOIN.
+                if let Ok(n) = numeric.parse::<u16>() {
+                    if matches!(n, 403 | 405 | 437 | 448 | 471..=480 | 520) {
+                        panic!("JOIN {channel} failed with error {n}: {line}");
+                    }
+                }
+            }
+        }
     }
 
     /// Send `PRIVMSG target :text`.
@@ -69,9 +96,10 @@ impl TestIrcClient {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                panic!("timed out waiting for line containing {needle:?}");
-            }
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for line containing {needle:?}"
+            );
             let line = self
                 .read_line_timeout(remaining)
                 .await
@@ -89,6 +117,7 @@ impl TestIrcClient {
     /// Read lines until a PRIVMSG is found where the prefix contains
     /// `nick_fragment` and the message text contains `text_fragment`.
     /// Panics if `timeout_dur` elapses first.
+    #[allow(dead_code)] // Used by e2e_irc but not e2e_discord.
     pub async fn expect_privmsg(
         &mut self,
         nick_fragment: &str,
@@ -100,12 +129,11 @@ impl TestIrcClient {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                panic!(
-                    "timed out waiting for PRIVMSG from nick~={nick_fragment:?} \
-                     with text~={text_fragment:?}"
-                );
-            }
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for PRIVMSG from nick~={nick_fragment:?} \
+                 with text~={text_fragment:?}"
+            );
             let line = self
                 .read_line_timeout(remaining)
                 .await

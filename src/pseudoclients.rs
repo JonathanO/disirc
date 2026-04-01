@@ -493,6 +493,12 @@ impl PseudoclientManager {
         self.by_discord_id.len()
     }
 
+    /// Returns `true` if no pseudoclients have been introduced.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_discord_id.is_empty()
+    }
+
     /// Return the ident used for all pseudoclients.
     #[must_use]
     pub fn ident(&self) -> &str {

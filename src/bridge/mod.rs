@@ -103,6 +103,9 @@ pub async fn run_bridge(
     );
     let mut irc_state = IrcState::default();
     let mut discord_state = DiscordState::default();
+    // Track whether we have sent the initial S2S burst for this link.
+    // Reset on LinkDown so the next LinkUp can burst again.
+    let mut burst_sent = false;
 
     loop {
         tokio::select! {
@@ -111,10 +114,19 @@ pub async fn run_bridge(
 
                 match &event {
                     S2SEvent::LinkUp => {
-                        let now = unix_now();
-                        for cmd in produce_burst_commands(&pm, &irc_state, now) {
-                            let _ = irc_cmd_tx.send(cmd).await;
+                        // Burst only if we already have Discord member data.
+                        // If guild_create hasn't arrived yet, `pm` is empty and
+                        // we defer the burst until the first MemberSnapshot.
+                        if !pm.is_empty() {
+                            let now = unix_now();
+                            for cmd in produce_burst_commands(&pm, &irc_state, now) {
+                                let _ = irc_cmd_tx.send(cmd).await;
+                            }
+                            burst_sent = true;
                         }
+                    }
+                    S2SEvent::LinkDown { .. } => {
+                        burst_sent = false;
                     }
                     S2SEvent::MessageReceived { from_uid, target, text, timestamp } => {
                         if let Some(cmd) = route_irc_to_discord(
@@ -171,9 +183,30 @@ pub async fn run_bridge(
 
                 let now = unix_now();
                 let cmds = apply_discord_event(&mut discord_state, &mut pm, &irc_state, &event, now);
-                for cmd in cmds {
-                    let _ = irc_cmd_tx.send(cmd).await;
+
+                if irc_state.is_link_up() {
+                    // If this is the first MemberSnapshot and we deferred the
+                    // burst (because the link came up before guild_create), send
+                    // the burst now — it includes all the members we just learned
+                    // about.  The `cmds` from apply_discord_event are individual
+                    // introduces; the burst is a superset, so we skip `cmds` and
+                    // burst instead to avoid duplicates.
+                    if matches!(&event, DiscordEvent::MemberSnapshot { .. }) && !burst_sent {
+                        let now = unix_now();
+                        for cmd in produce_burst_commands(&pm, &irc_state, now) {
+                            let _ = irc_cmd_tx.send(cmd).await;
+                        }
+                        burst_sent = true;
+                    } else {
+                        // Normal path: forward live commands.
+                        for cmd in cmds {
+                            let _ = irc_cmd_tx.send(cmd).await;
+                        }
+                    }
                 }
+                // If link is not up, commands are suppressed.  pm state was
+                // already updated by apply_discord_event; produce_burst_commands
+                // will include these members when the link comes up.
             }
 
             maybe_ctrl = control_rx.recv() => {
@@ -233,5 +266,202 @@ pub async fn run_bridge(
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use tokio::sync::mpsc;
+    use tokio::time::Duration;
+
+    use crate::config::{BridgeEntry, Config, DiscordConfig, IrcConfig, PseudoclientConfig};
+    use crate::discord::{DiscordEvent, DiscordPresence, MemberInfo};
+    use crate::irc::{S2SCommand, S2SEvent};
+    use crate::signal::ControlEvent;
+
+    use super::run_bridge;
+
+    fn test_config() -> Config {
+        Config {
+            discord: DiscordConfig { token: "x".into() },
+            irc: IrcConfig {
+                uplink: "localhost".into(),
+                port: 6667,
+                tls: false,
+                link_name: "bridge.test".into(),
+                link_password: "pw".into(),
+                sid: "002".into(),
+                description: "test".into(),
+            },
+            pseudoclients: PseudoclientConfig {
+                host_suffix: "test.net".into(),
+                ident: "discord".into(),
+            },
+            bridges: vec![BridgeEntry {
+                discord_channel_id: "111".into(),
+                irc_channel: "#test".into(),
+                webhook_url: None,
+            }],
+        }
+    }
+
+    /// Helper: spin up `run_bridge` and return the channel ends, keeping the
+    /// join handle alive for the duration of the test.
+    fn spawn_bridge() -> (
+        mpsc::Sender<S2SEvent>,
+        mpsc::Receiver<S2SCommand>,
+        mpsc::Sender<DiscordEvent>,
+        mpsc::Sender<ControlEvent>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (irc_event_tx, irc_event_rx) = mpsc::channel::<S2SEvent>(64);
+        let (irc_cmd_tx, irc_cmd_rx) = mpsc::channel::<S2SCommand>(64);
+        let (discord_event_tx, discord_event_rx) = mpsc::channel::<DiscordEvent>(64);
+        let (discord_cmd_tx, _discord_cmd_rx) = mpsc::channel(64);
+        let (control_tx, control_rx) = mpsc::channel::<ControlEvent>(4);
+
+        let config = test_config();
+        let handle = tokio::spawn(async move {
+            run_bridge(
+                &config,
+                Path::new("/dev/null"),
+                irc_event_rx,
+                irc_cmd_tx,
+                discord_event_rx,
+                discord_cmd_tx,
+                control_rx,
+            )
+            .await;
+        });
+
+        (
+            irc_event_tx,
+            irc_cmd_rx,
+            discord_event_tx,
+            control_tx,
+            handle,
+        )
+    }
+
+    /// Discord `MemberSnapshot` arriving before `LinkUp` must NOT produce any
+    /// IRC commands (no `IntroduceUser` / `JoinChannel`).  The burst on
+    /// `LinkUp` is the canonical introduction path; sending commands before the
+    /// session starts would create duplicate UID introductions that UnrealIRCd
+    /// would reject.
+    #[tokio::test]
+    async fn discord_snapshot_before_link_up_produces_no_irc_commands() {
+        let (irc_event_tx, mut irc_cmd_rx, discord_event_tx, _ctrl, _handle) = spawn_bridge();
+
+        // Send a MemberSnapshot with an online member — link is still down.
+        discord_event_tx
+            .send(DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 1001,
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+            })
+            .await
+            .unwrap();
+
+        // Give the bridge a moment to process the event.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // No IRC commands should have been emitted yet.
+        assert!(
+            irc_cmd_rx.try_recv().is_err(),
+            "expected no IRC commands before LinkUp, but one was sent"
+        );
+
+        // Now bring the link up — the burst MUST include Alice.
+        irc_event_tx.send(S2SEvent::LinkUp).await.unwrap();
+
+        // Collect all commands until BurstComplete.
+        let mut cmds = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or(Duration::ZERO);
+            assert!(!remaining.is_zero(), "timed out waiting for BurstComplete");
+            match tokio::time::timeout(remaining, irc_cmd_rx.recv()).await {
+                Ok(Some(cmd)) => {
+                    let done = matches!(cmd, S2SCommand::BurstComplete);
+                    cmds.push(cmd);
+                    if done {
+                        break;
+                    }
+                }
+                _ => panic!("channel closed before BurstComplete"),
+            }
+        }
+
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "burst must include IntroduceUser for Alice; got: {cmds:?}"
+        );
+    }
+
+    /// When `LinkUp` fires with no member data, the burst is deferred.
+    /// A subsequent `MemberSnapshot` triggers the deferred burst.
+    #[tokio::test]
+    async fn link_up_with_empty_pm_defers_burst_until_snapshot() {
+        let (irc_event_tx, mut irc_cmd_rx, discord_event_tx, _ctrl, _handle) = spawn_bridge();
+
+        // Bring the link up with no member data — burst should be deferred.
+        irc_event_tx.send(S2SEvent::LinkUp).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            irc_cmd_rx.try_recv().is_err(),
+            "no burst should fire when pm is empty on LinkUp"
+        );
+
+        // Now send a snapshot with Bob — this triggers the deferred burst.
+        discord_event_tx
+            .send(DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 1002,
+                    display_name: "Bob".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+            })
+            .await
+            .unwrap();
+
+        // The deferred burst must include Bob and end with BurstComplete.
+        let mut cmds = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or(Duration::ZERO);
+            assert!(!remaining.is_zero(), "timed out waiting for BurstComplete");
+            match tokio::time::timeout(remaining, irc_cmd_rx.recv()).await {
+                Ok(Some(cmd)) => {
+                    let done = matches!(cmd, S2SCommand::BurstComplete);
+                    cmds.push(cmd);
+                    if done {
+                        break;
+                    }
+                }
+                _ => panic!("channel closed before BurstComplete"),
+            }
+        }
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "deferred burst must include IntroduceUser for Bob; got: {cmds:?}"
+        );
     }
 }

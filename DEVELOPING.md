@@ -159,6 +159,120 @@ cargo mutants --file src/<module>.rs
 
 See `CLAUDE.md` section "Closing out a spec" for the full policy.
 
+## End-to-end tests
+
+### Layer 3: Real UnrealIRCd, mocked Discord
+
+Requires Docker. Pulls a pre-built UnrealIRCd image from `ghcr.io/jonathano/disirc-unrealircd-test` (cached locally after first pull).
+
+```sh
+cargo test --test e2e_irc -- --include-ignored --nocapture
+```
+
+### Layer 4: Real UnrealIRCd + real Discord
+
+Requires Docker and two Discord bots. See the setup guide below, then:
+
+```sh
+cargo test --test e2e_discord -- --include-ignored --nocapture --test-threads=1
+```
+
+### Discord bot setup (Layer 4)
+
+Layer 4 tests need two Discord bots and a test guild. This is a one-time manual setup.
+
+#### Create the bots
+
+In the [Discord Developer Portal](https://discord.com/developers/applications), create two Applications:
+
+1. **Bridge bot** — connects via Gateway, relays messages.
+2. **Test harness bot** — used by tests to send and poll messages via REST.
+
+For each, go to Bot tab and create a bot user. Copy each bot's token.
+
+#### Enable privileged intents (bridge bot only)
+
+In Developer Portal > bridge bot Application > Bot > Privileged Gateway Intents, enable:
+
+- **Server Members Intent** — for member snapshots (pseudoclients)
+- **Message Content Intent** — to read message text
+- **Presence Intent** — for online/offline status tracking
+
+The test harness bot does not need privileged intents.
+
+#### Invite both bots to the test guild
+
+Open these OAuth2 URLs in a browser while logged into Discord.
+
+**Bridge bot** (Gateway + webhooks):
+```
+https://discord.com/oauth2/authorize?client_id=BRIDGE_BOT_CLIENT_ID&scope=bot&permissions=536874048
+```
+Permissions: View Channels, Send Messages, Read Message History, Manage Webhooks.
+
+**Test harness bot** (REST only):
+```
+https://discord.com/oauth2/authorize?client_id=TEST_BOT_CLIENT_ID&scope=bot&permissions=68608
+```
+Permissions: View Channels, Send Messages, Read Message History.
+
+Replace the `client_id` values with Application IDs from the Developer Portal.
+
+#### Create test channels
+
+In the test guild, create two text channels:
+
+- **Webhook channel** (e.g. `#e2e-webhook`) — create a webhook in Channel Settings > Integrations > Webhooks. Copy the webhook URL.
+- **Plain channel** (e.g. `#e2e-plain`) — no webhook. Tests the plain bot message path.
+
+Both bots must have Send Messages and Read Message History in both channels.
+
+#### Set environment variables
+
+| Variable | Type | Example |
+|----------|------|---------|
+| `DISCORD_BRIDGE_BOT_TOKEN` | Secret | `MTQ4ODgyMDU3M...` |
+| `DISCORD_TEST_BOT_TOKEN` | Secret | `MTQ5MDEyMzQ1N...` |
+| `DISCORD_TEST_WEBHOOK_URL` | Secret | `https://discord.com/api/webhooks/123/abc...` |
+| `DISCORD_TEST_GUILD_ID` | ID | `1234567890123456` |
+| `DISCORD_TEST_CHANNEL_ID` | ID | `1234567890123457` |
+| `DISCORD_TEST_IRC_CHANNEL` | Name | `#e2e-webhook` |
+| `DISCORD_TEST_PLAIN_CHANNEL_ID` | ID | `1234567890123458` |
+| `DISCORD_TEST_PLAIN_IRC_CHANNEL` | Name | `#e2e-plain` |
+
+IRC channel names **must** include the `#` prefix.
+
+To get IDs: enable Developer Mode in Discord (User Settings > Advanced > Developer Mode), then right-click a channel or guild name and Copy ID.
+
+#### Run locally
+
+```sh
+export DISCORD_BRIDGE_BOT_TOKEN="..."
+export DISCORD_TEST_BOT_TOKEN="..."
+export DISCORD_TEST_WEBHOOK_URL="..."
+export DISCORD_TEST_GUILD_ID="..."
+export DISCORD_TEST_CHANNEL_ID="..."
+export DISCORD_TEST_IRC_CHANNEL="#e2e-webhook"
+export DISCORD_TEST_PLAIN_CHANNEL_ID="..."
+export DISCORD_TEST_PLAIN_IRC_CHANNEL="#e2e-plain"
+
+cargo test --test e2e_discord -- --include-ignored --nocapture --test-threads=1
+```
+
+### CI configuration
+
+Layer 4 tests run in a GitHub Environment called `discord-e2e` with required reviewer approval. This prevents accidental secret exposure and rate limit burn.
+
+In repo Settings > Environments > `discord-e2e`:
+
+**Secrets** (3): `DISCORD_BRIDGE_BOT_TOKEN`, `DISCORD_TEST_BOT_TOKEN`, `DISCORD_TEST_WEBHOOK_URL`
+
+**Variables** (5): `DISCORD_TEST_GUILD_ID`, `DISCORD_TEST_CHANNEL_ID`, `DISCORD_TEST_IRC_CHANNEL`, `DISCORD_TEST_PLAIN_CHANNEL_ID`, `DISCORD_TEST_PLAIN_IRC_CHANNEL`
+
+### UnrealIRCd test image
+
+Published to `ghcr.io/jonathano/disirc-unrealircd-test` by the `docker-test-image.yml` workflow. Auto-rebuilds when `tests/fixtures/Dockerfile` changes on main. Manual rebuild: Actions tab > "Publish UnrealIRCd test image" > Run workflow.
+
 ## Project structure
 
 See `LAYOUT.md` for a detailed map of every source module. The high-level architecture:

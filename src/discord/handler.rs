@@ -135,6 +135,8 @@ pub(crate) fn build_member_snapshot_event(
     members: &[RawMemberData<'_>],
     presences: &HashMap<u64, DiscordPresence>,
     channel_ids: Vec<u64>,
+    channel_names: HashMap<u64, String>,
+    role_names: HashMap<u64, String>,
 ) -> DiscordEvent {
     // Only include non-offline members in the burst.  Offline members are
     // excluded to keep the initial IRC channel population small; they will be
@@ -166,6 +168,8 @@ pub(crate) fn build_member_snapshot_event(
         guild_id,
         members: member_infos,
         channel_ids,
+        channel_names,
+        role_names,
     }
 }
 
@@ -256,17 +260,36 @@ impl EventHandler for DiscordHandler {
                 .collect()
         };
 
+        // Extract channel and role names for mention resolution.
+        let channel_names: HashMap<u64, String> = guild
+            .channels
+            .iter()
+            .map(|(cid, ch)| (cid.get(), ch.name.clone()))
+            .collect();
+        let role_names: HashMap<u64, String> = guild
+            .roles
+            .iter()
+            .map(|(rid, role)| (rid.get(), role.name.clone()))
+            .collect();
+
         tracing::debug!(
             guild_id = guild.id.get(),
             total_members = raw.len(),
             total_presences = presences.len(),
             bridged_channels = guild_channel_ids.len(),
             guild_channels = guild.channels.len(),
+            guild_roles = role_names.len(),
             "guild_create received"
         );
 
-        let event =
-            build_member_snapshot_event(guild.id.get(), &raw, &presences, guild_channel_ids);
+        let event = build_member_snapshot_event(
+            guild.id.get(),
+            &raw,
+            &presences,
+            guild_channel_ids,
+            channel_names,
+            role_names,
+        );
 
         if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
             tracing::debug!(
@@ -526,7 +549,14 @@ mod tests {
         presences.insert(1u64, DiscordPresence::Online);
         // user 2 absent from presences → Offline → must be excluded
 
-        let ev = build_member_snapshot_event(99, &members, &presences, vec![]);
+        let ev = build_member_snapshot_event(
+            99,
+            &members,
+            &presences,
+            vec![],
+            HashMap::new(),
+            HashMap::new(),
+        );
         let DiscordEvent::MemberSnapshot {
             guild_id,
             members: infos,
@@ -550,7 +580,14 @@ mod tests {
             username: "u",
             bot: false,
         }];
-        let ev = build_member_snapshot_event(10, &members, &HashMap::new(), vec![]);
+        let ev = build_member_snapshot_event(
+            10,
+            &members,
+            &HashMap::new(),
+            vec![],
+            HashMap::new(),
+            HashMap::new(),
+        );
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
         };
@@ -583,7 +620,14 @@ mod tests {
         presences.insert(10u64, DiscordPresence::Idle);
         presences.insert(11u64, DiscordPresence::DoNotDisturb);
 
-        let ev = build_member_snapshot_event(1, &members, &presences, vec![]);
+        let ev = build_member_snapshot_event(
+            1,
+            &members,
+            &presences,
+            vec![],
+            HashMap::new(),
+            HashMap::new(),
+        );
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
         };
@@ -611,7 +655,14 @@ mod tests {
             },
         ];
         // No presences for either member.
-        let ev = build_member_snapshot_event(50, &members, &HashMap::new(), vec![]);
+        let ev = build_member_snapshot_event(
+            50,
+            &members,
+            &HashMap::new(),
+            vec![],
+            HashMap::new(),
+            HashMap::new(),
+        );
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
         };

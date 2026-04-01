@@ -35,29 +35,37 @@ pub use state::{DiscordState, IrcState, apply_discord_event, apply_irc_event};
 // Bridge loop helpers
 // ---------------------------------------------------------------------------
 
-/// Null resolver: no IRC mention conversion.
-struct NoopIrcResolver;
-// mutants::skip — trivial test-only stub returning None
-#[mutants::skip]
-impl IrcMentionResolver for NoopIrcResolver {
-    fn resolve_nick(&self, _: &str) -> Option<String> {
-        None
+/// Resolves IRC `@nick` to Discord `<@user_id>` mentions using the
+/// pseudoclient manager's `nick→discord_id` mapping.
+struct BridgeIrcResolver<'a> {
+    pm: &'a PseudoclientManager,
+}
+
+impl IrcMentionResolver for BridgeIrcResolver<'_> {
+    fn resolve_nick(&self, nick: &str) -> Option<String> {
+        let state = self.pm.get_by_nick(nick)?;
+        Some(state.discord_user_id.to_string())
     }
 }
 
-/// Null resolver: no Discord mention conversion.
-struct NoopDiscordResolver;
-// mutants::skip — trivial test-only stub returning None
-#[mutants::skip]
-impl DiscordResolver for NoopDiscordResolver {
-    fn resolve_user(&self, _: &str) -> Option<String> {
-        None
+/// Resolves Discord mentions (`<@id>`, `<#id>`, `<@&id>`) to display names
+/// using the bridge's cached guild data.
+struct BridgeDiscordResolver<'a> {
+    discord_state: &'a DiscordState,
+}
+
+impl DiscordResolver for BridgeDiscordResolver<'_> {
+    fn resolve_user(&self, id: &str) -> Option<String> {
+        let uid: u64 = id.parse().ok()?;
+        self.discord_state.display_names.get(&uid).cloned()
     }
-    fn resolve_channel(&self, _: &str) -> Option<String> {
-        None
+    fn resolve_channel(&self, id: &str) -> Option<String> {
+        let cid: u64 = id.parse().ok()?;
+        self.discord_state.channel_names.get(&cid).cloned()
     }
-    fn resolve_role(&self, _: &str) -> Option<String> {
-        None
+    fn resolve_role(&self, id: &str) -> Option<String> {
+        let rid: u64 = id.parse().ok()?;
+        self.discord_state.role_names.get(&rid).cloned()
     }
 }
 
@@ -129,9 +137,10 @@ pub async fn run_bridge(
                         burst_sent = false;
                     }
                     S2SEvent::MessageReceived { from_uid, target, text, timestamp } => {
+                        let resolver = BridgeIrcResolver { pm: &pm };
                         if let Some(cmd) = route_irc_to_discord(
                             &pm, &bridge_map, &irc_state,
-                            from_uid, target, text, false, &NoopIrcResolver,
+                            from_uid, target, text, false, &resolver,
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
                         }
@@ -140,9 +149,10 @@ pub async fn run_bridge(
                         let _ = timestamp;
                     }
                     S2SEvent::NoticeReceived { from_uid, target, text } => {
+                        let resolver = BridgeIrcResolver { pm: &pm };
                         if let Some(cmd) = route_irc_to_discord(
                             &pm, &bridge_map, &irc_state,
-                            from_uid, target, text, true, &NoopIrcResolver,
+                            from_uid, target, text, true, &resolver,
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
                         }
@@ -171,10 +181,11 @@ pub async fn run_bridge(
                 } = &event
                 {
                     let now = unix_now();
+                    let resolver = BridgeDiscordResolver { discord_state: &discord_state };
                     let cmds = route_discord_to_irc(
                         &mut pm, &bridge_map, &discord_state, &irc_state,
                         *channel_id, *author_id, author_name, content, attachments,
-                        None, now, &NoopDiscordResolver,
+                        None, now, &resolver,
                     );
                     for cmd in cmds {
                         let _ = irc_cmd_tx.send(cmd).await;
@@ -368,6 +379,8 @@ mod tests {
                     presence: DiscordPresence::Online,
                 }],
                 channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
             })
             .await
             .unwrap();
@@ -435,6 +448,8 @@ mod tests {
                     presence: DiscordPresence::Online,
                 }],
                 channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
             })
             .await
             .unwrap();
@@ -463,5 +478,100 @@ mod tests {
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
             "deferred burst must include IntroduceUser for Bob; got: {cmds:?}"
         );
+    }
+
+    // --- BridgeIrcResolver ---
+
+    #[test]
+    fn irc_resolver_finds_pseudoclient_by_nick() {
+        use crate::formatting::IrcMentionResolver;
+        use crate::pseudoclients::PseudoclientManager;
+        let mut pm = PseudoclientManager::new("002", "bridge", "test.net");
+        pm.introduce(42, "alice", "Alice", &["#test".to_string()], 1000);
+        let resolver = super::BridgeIrcResolver { pm: &pm };
+        assert_eq!(resolver.resolve_nick("alice"), Some("42".to_string()));
+    }
+
+    #[test]
+    fn irc_resolver_case_insensitive() {
+        use crate::formatting::IrcMentionResolver;
+        use crate::pseudoclients::PseudoclientManager;
+        let mut pm = PseudoclientManager::new("002", "bridge", "test.net");
+        pm.introduce(42, "Alice", "Alice", &["#test".to_string()], 1000);
+        let resolver = super::BridgeIrcResolver { pm: &pm };
+        assert_eq!(resolver.resolve_nick("alice"), Some("42".to_string()));
+    }
+
+    #[test]
+    fn irc_resolver_unknown_nick_returns_none() {
+        use crate::formatting::IrcMentionResolver;
+        use crate::pseudoclients::PseudoclientManager;
+        let pm = PseudoclientManager::new("002", "bridge", "test.net");
+        let resolver = super::BridgeIrcResolver { pm: &pm };
+        assert_eq!(resolver.resolve_nick("nobody"), None);
+    }
+
+    // --- BridgeDiscordResolver ---
+
+    #[test]
+    fn discord_resolver_finds_user_by_id() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.display_names.insert(42, "Alice".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_user("42"), Some("Alice".to_string()));
+    }
+
+    #[test]
+    fn discord_resolver_unknown_user_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let ds = super::DiscordState::default();
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_user("999"), None);
+    }
+
+    #[test]
+    fn discord_resolver_finds_channel_by_id() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.channel_names.insert(100, "general".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_channel("100"), Some("general".to_string()));
+    }
+
+    #[test]
+    fn discord_resolver_unknown_channel_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let ds = super::DiscordState::default();
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_channel("999"), None);
+    }
+
+    #[test]
+    fn discord_resolver_finds_role_by_id() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.role_names.insert(200, "Moderator".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_role("200"), Some("Moderator".to_string()));
+    }
+
+    #[test]
+    fn discord_resolver_unknown_role_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let ds = super::DiscordState::default();
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_role("999"), None);
+    }
+
+    #[test]
+    fn discord_resolver_invalid_id_returns_none() {
+        use crate::formatting::DiscordResolver;
+        let mut ds = super::DiscordState::default();
+        ds.display_names.insert(42, "Alice".to_string());
+        let resolver = super::BridgeDiscordResolver { discord_state: &ds };
+        assert_eq!(resolver.resolve_user("notanumber"), None);
+        assert_eq!(resolver.resolve_channel("notanumber"), None);
+        assert_eq!(resolver.resolve_role("notanumber"), None);
     }
 }

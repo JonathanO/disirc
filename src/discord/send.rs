@@ -189,6 +189,11 @@ pub(crate) fn snapshot_from_cache(
         guild_id: guild_id.get(),
         members,
         channel_ids,
+        // ReloadBridges path: channel/role names are not available from the
+        // cache lookup.  This is acceptable because the initial guild_create
+        // already populated them; this snapshot only adds new members.
+        channel_names: std::collections::HashMap::new(),
+        role_names: std::collections::HashMap::new(),
     })
 }
 

@@ -72,7 +72,7 @@ pub enum DiscordEvent {
     /// A member left or was removed from a guild.
     MemberRemoved { user_id: u64, guild_id: u64 },
     /// Initial member snapshot delivered once per guild after `guild_create`.
-    /// Used to populate the IRC burst.
+    /// Used to populate the IRC burst and mention resolution lookup tables.
     MemberSnapshot {
         guild_id: u64,
         members: Vec<MemberInfo>,
@@ -80,6 +80,10 @@ pub enum DiscordEvent {
         /// Supplied so the bridge loop can derive the IRC channel list for this
         /// guild without needing direct access to the Discord cache.
         channel_ids: Vec<u64>,
+        /// Discord channel ID → channel name, for mention resolution.
+        channel_names: std::collections::HashMap<u64, String>,
+        /// Discord role ID → role name, for mention resolution.
+        role_names: std::collections::HashMap<u64, String>,
     },
 }
 

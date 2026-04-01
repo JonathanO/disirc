@@ -148,6 +148,10 @@ pub struct DiscordState {
     pub display_names: std::collections::HashMap<u64, String>,
     /// Discord guild ID → IRC channel names served by this guild.
     pub guild_irc_channels: std::collections::HashMap<u64, Vec<String>>,
+    /// Discord channel ID → channel name (for mention resolution).
+    pub channel_names: std::collections::HashMap<u64, String>,
+    /// Discord role ID → role name (for mention resolution).
+    pub role_names: std::collections::HashMap<u64, String>,
 }
 
 /// Apply one `DiscordEvent` to the bridge's Discord-side state.
@@ -167,7 +171,17 @@ pub fn apply_discord_event(
             guild_id,
             members,
             channel_ids: _,
+            channel_names,
+            role_names,
         } => {
+            // Store channel/role names for mention resolution.
+            discord_state
+                .channel_names
+                .extend(channel_names.iter().map(|(&k, v)| (k, v.clone())));
+            discord_state
+                .role_names
+                .extend(role_names.iter().map(|(&k, v)| (k, v.clone())));
+
             let channels = discord_state
                 .guild_irc_channels
                 .get(guild_id)
@@ -698,6 +712,8 @@ mod tests {
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
                 channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
                 members: vec![
                     member(10, "alice", DiscordPresence::Online),
                     member(20, "bob", DiscordPresence::Offline),
@@ -734,6 +750,8 @@ mod tests {
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
                 channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -759,6 +777,8 @@ mod tests {
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
                 channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
                 members: vec![member(10, "alice", DiscordPresence::Idle)],
             },
             1000,
@@ -784,6 +804,8 @@ mod tests {
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
                 channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -832,6 +854,8 @@ mod tests {
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
                 channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -1058,6 +1082,8 @@ mod tests {
             &DiscordEvent::MemberSnapshot {
                 guild_id: 1,
                 channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             9_999,

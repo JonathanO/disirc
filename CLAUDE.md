@@ -38,7 +38,7 @@ Do not batch `TODO.md` updates to the end of a session — update them in place 
 - Focus on understanding the problem requirements and implementing the correct algorithm. Tests verify correctness, not define the solution. Provide principled implementations that follow best practices and software design principles.
 - If a task is unreasonable or infeasible, or if any tests are incorrect, inform me rather than working around them. Solutions should be robust, maintainable, and extendable.
 - If you intend to call multiple tools and there are no dependencies between the tool calls, make all of the independent tool calls in parallel. Prioritize calling tools simultaneously whenever the actions can be done in parallel rather than sequentially. Never use placeholders or guess missing parameters in tool calls.
-- Tests should be written first for bug fixes. For functions with edge-case-prone inputs, write a **property-based test** that captures the class of bug before writing a unit test for the specific instance. The property test should fail on the unfixed code. Then add a targeted unit test for the exact regression case. Only then fix the code and verify both tests pass.
+- **Tests are mandatory.** For new features: write unit tests for new functions/traits (before or after implementation, but always before considering the task done). For bug fixes: write a **property-based test** that captures the class of bug before writing a unit test for the specific instance. The property test should fail on the unfixed code. Then add a targeted unit test for the exact regression case. Only then fix the code and verify both tests pass. Run `cargo mutants` on changed modules before considering a task done.
 
 ## Spec-driven development workflow
 

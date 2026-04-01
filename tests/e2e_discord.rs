@@ -226,7 +226,7 @@ async fn wait_for_bridge_in_links(
 // ---------------------------------------------------------------------------
 
 /// Test bot sends a message in the webhook channel; IRC client sees the PRIVMSG.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
 async fn e2e_discord_to_irc_webhook() {
     let capture = init_capture_tracing();
@@ -255,7 +255,7 @@ async fn e2e_discord_to_irc_webhook() {
 }
 
 /// IRC client sends a PRIVMSG; test bot polls and finds the webhook message.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
 async fn e2e_irc_to_discord_webhook() {
     let capture = init_capture_tracing();
@@ -302,7 +302,7 @@ async fn e2e_irc_to_discord_webhook() {
 }
 
 /// Formatting: test bot sends bold/italic/code; IRC client verifies control codes.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
 async fn e2e_formatting_webhook() {
     let capture = init_capture_tracing();
@@ -340,7 +340,7 @@ async fn e2e_formatting_webhook() {
 // ---------------------------------------------------------------------------
 
 /// Test bot sends a message in the plain channel; IRC client sees the PRIVMSG.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
 async fn e2e_discord_to_irc_plain() {
     let capture = init_capture_tracing();
@@ -369,7 +369,7 @@ async fn e2e_discord_to_irc_plain() {
 
 /// IRC client sends a PRIVMSG; test bot polls plain channel and finds
 /// the `**[nick]** text` format (no webhook username).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
 async fn e2e_irc_to_discord_plain() {
     let capture = init_capture_tracing();
@@ -414,7 +414,7 @@ async fn e2e_irc_to_discord_plain() {
 
 /// Formatting: test bot sends bold/italic/code in plain channel; IRC client
 /// verifies control codes arrive.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]
 async fn e2e_formatting_plain() {
     let capture = init_capture_tracing();

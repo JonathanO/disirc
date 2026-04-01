@@ -1,6 +1,7 @@
 //! Shared helpers for e2e tests.
 
 pub mod irc_client;
+pub mod log_capture;
 
 pub use irc_client::TestIrcClient;
 

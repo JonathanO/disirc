@@ -20,10 +20,10 @@
 
 mod helpers;
 
+use helpers::log_capture::init_capture_tracing;
 use std::path::Path;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
-use tracing_test::traced_test;
 
 use disirc::bridge::run_bridge;
 use disirc::config::{BridgeEntry, Config, DiscordConfig, IrcConfig, PseudoclientConfig};
@@ -221,27 +221,6 @@ async fn wait_for_bridge_in_links(
     }
 }
 
-/// Shared log assertion closure: no WARN/ERROR in `traced_test` output.
-fn assert_no_warnings_or_errors(lines: &[&str]) -> Result<(), String> {
-    let problems: Vec<_> = lines
-        .iter()
-        .filter(|line| line.contains("WARN") || line.contains("ERROR"))
-        .collect();
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "expected no WARN/ERROR logs, found {}:\n{}",
-            problems.len(),
-            problems
-                .iter()
-                .map(|l| format!("  {l}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ))
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests — Webhook channel
 // ---------------------------------------------------------------------------
@@ -249,8 +228,8 @@ fn assert_no_warnings_or_errors(lines: &[&str]) -> Result<(), String> {
 /// Test bot sends a message in the webhook channel; IRC client sees the PRIVMSG.
 #[tokio::test]
 #[ignore = "requires Docker + Discord credentials"]
-#[traced_test]
 async fn e2e_discord_to_irc_webhook() {
+    let capture = init_capture_tracing();
     let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
@@ -272,14 +251,14 @@ async fn e2e_discord_to_irc_webhook() {
         .expect_line_containing("layer4-webhook-d2i-test", Duration::from_secs(10))
         .await;
 
-    logs_assert(assert_no_warnings_or_errors);
+    capture.assert_no_warnings_or_errors();
 }
 
 /// IRC client sends a PRIVMSG; test bot polls and finds the webhook message.
 #[tokio::test]
 #[ignore = "requires Docker + Discord credentials"]
-#[traced_test]
 async fn e2e_irc_to_discord_webhook() {
+    let capture = init_capture_tracing();
     let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
@@ -314,14 +293,14 @@ async fn e2e_irc_to_discord_webhook() {
         "webhook username should match IRC nick"
     );
 
-    logs_assert(assert_no_warnings_or_errors);
+    capture.assert_no_warnings_or_errors();
 }
 
 /// Formatting: test bot sends bold/italic/code; IRC client verifies control codes.
 #[tokio::test]
 #[ignore = "requires Docker + Discord credentials"]
-#[traced_test]
 async fn e2e_formatting_webhook() {
+    let capture = init_capture_tracing();
     let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
@@ -348,7 +327,7 @@ async fn e2e_formatting_webhook() {
         "expected IRC bold control code (\\x02) in: {line:?}"
     );
 
-    logs_assert(assert_no_warnings_or_errors);
+    capture.assert_no_warnings_or_errors();
 }
 
 // ---------------------------------------------------------------------------
@@ -358,8 +337,8 @@ async fn e2e_formatting_webhook() {
 /// Test bot sends a message in the plain channel; IRC client sees the PRIVMSG.
 #[tokio::test]
 #[ignore = "requires Docker + Discord credentials"]
-#[traced_test]
 async fn e2e_discord_to_irc_plain() {
+    let capture = init_capture_tracing();
     let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
@@ -380,15 +359,15 @@ async fn e2e_discord_to_irc_plain() {
         .expect_line_containing("layer4-plain-d2i-test", Duration::from_secs(10))
         .await;
 
-    logs_assert(assert_no_warnings_or_errors);
+    capture.assert_no_warnings_or_errors();
 }
 
 /// IRC client sends a PRIVMSG; test bot polls plain channel and finds
 /// the `**[nick]** text` format (no webhook username).
 #[tokio::test]
 #[ignore = "requires Docker + Discord credentials"]
-#[traced_test]
 async fn e2e_irc_to_discord_plain() {
+    let capture = init_capture_tracing();
     let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
@@ -420,15 +399,15 @@ async fn e2e_irc_to_discord_plain() {
         msg.content
     );
 
-    logs_assert(assert_no_warnings_or_errors);
+    capture.assert_no_warnings_or_errors();
 }
 
 /// Formatting: test bot sends bold/italic/code in plain channel; IRC client
 /// verifies control codes arrive.
 #[tokio::test]
 #[ignore = "requires Docker + Discord credentials"]
-#[traced_test]
 async fn e2e_formatting_plain() {
+    let capture = init_capture_tracing();
     let secrets = read_secrets();
     let irc = helpers::start_unrealircd().await;
     let config = full_config(&secrets, &irc.host, irc.s2s_port);
@@ -453,5 +432,5 @@ async fn e2e_formatting_plain() {
         "expected IRC bold control code (\\x02) in: {line:?}"
     );
 
-    logs_assert(assert_no_warnings_or_errors);
+    capture.assert_no_warnings_or_errors();
 }

@@ -50,9 +50,37 @@ impl TestIrcClient {
     }
 
     /// JOIN `channel` and wait for `RPL_ENDOFNAMES` (366).
+    /// Panics immediately if the server responds with an error numeric (4xx/5xx).
     pub async fn join(&mut self, channel: &str) {
         self.send(&format!("JOIN {channel}")).await;
-        self.expect_code("366", Duration::from_secs(10)).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or(Duration::ZERO);
+            let line = self
+                .read_line_timeout(remaining)
+                .await
+                .unwrap_or_else(|| panic!("timed out waiting for JOIN {channel} response (366)"));
+            if let Some(token) = line.strip_prefix("PING :") {
+                self.send(&format!("PONG :{token}")).await;
+                continue;
+            }
+            // IRC format: :server NNN nick ...
+            let parts: Vec<&str> = line.splitn(4, ' ').collect();
+            if let Some(numeric) = parts.get(1) {
+                if *numeric == "366" {
+                    return;
+                }
+                // JOIN-specific error numerics (RFC 2812 + UnrealIRCd extensions).
+                // 400-level numerics like 422 (no MOTD) are unrelated to JOIN.
+                if let Ok(n) = numeric.parse::<u16>() {
+                    if matches!(n, 403 | 405 | 437 | 448 | 471..=480 | 520) {
+                        panic!("JOIN {channel} failed with error {n}: {line}");
+                    }
+                }
+            }
+        }
     }
 
     /// Send `PRIVMSG target :text`.

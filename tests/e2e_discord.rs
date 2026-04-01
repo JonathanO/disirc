@@ -284,6 +284,11 @@ async fn e2e_discord_suite() {
             msg.author.username, "testbot",
             "webhook username should match IRC nick"
         );
+        // Webhook path: message content is the raw text, no **[nick]** prefix.
+        assert_eq!(
+            msg.content, "suite-webhook-i2d",
+            "webhook message content should be exactly the IRC text, no nick prefix"
+        );
     }
 
     // --- Formatting (webhook channel) ---
@@ -321,9 +326,22 @@ async fn e2e_discord_suite() {
         let msg = discord
             .poll_messages_containing(&anchor, "suite-plain-i2d", Duration::from_secs(10))
             .await;
+        // Plain path: message has exactly one **[nick]** prefix followed by content.
+        // The nick is ping-fixed (ZWNJ after first char), so check structure not exact nick.
         assert!(
-            msg.content.contains("**[testbot]**"),
-            "expected **[testbot]** prefix in plain message, got: {:?}",
+            msg.content.starts_with("**["),
+            "plain message must start with **[nick]** prefix, got: {:?}",
+            msg.content
+        );
+        assert_eq!(
+            msg.content.matches("**[").count(),
+            1,
+            "plain message must have exactly one **[nick]** prefix (no duplication), got: {:?}",
+            msg.content
+        );
+        assert!(
+            msg.content.contains("suite-plain-i2d"),
+            "plain message must contain the original text, got: {:?}",
             msg.content
         );
     }

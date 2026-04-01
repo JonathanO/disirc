@@ -426,4 +426,61 @@ mod tests {
             DiscordCommand::SendMessage { text, .. } if text.contains("**bold**")
         ));
     }
+
+    // --- Regression: no duplicate nick prefix ---
+
+    #[test]
+    fn plain_path_text_has_exactly_one_nick_prefix() {
+        let cmd =
+            irc_to_discord_command(42, None, "testbot", "hello world", false, &NullIrcResolver);
+        let DiscordCommand::SendMessage { text, .. } = &cmd else {
+            panic!("expected SendMessage");
+        };
+        // The text should start with exactly one **[nick]** prefix.
+        assert!(
+            text.starts_with("**["),
+            "plain text must start with **[nick]** prefix; got: {text:?}"
+        );
+        assert_eq!(
+            text.matches("**[").count(),
+            1,
+            "plain text must contain exactly one **[nick]** prefix; got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn plain_path_text_exact_format() {
+        let cmd =
+            irc_to_discord_command(42, None, "testbot", "hello world", false, &NullIrcResolver);
+        let DiscordCommand::SendMessage { text, .. } = &cmd else {
+            panic!("expected SendMessage");
+        };
+        // ping_fix_nick inserts a ZWSP after the first char, so "testbot" becomes "t\u{200B}estbot"
+        let expected_prefix = "**[t\u{200B}estbot]** ";
+        assert!(
+            text.starts_with(expected_prefix),
+            "expected text to start with {expected_prefix:?}; got: {text:?}"
+        );
+        assert!(
+            text.ends_with("hello world"),
+            "expected text to end with message content; got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn webhook_path_text_has_no_nick_prefix() {
+        let cmd = irc_to_discord_command(
+            42,
+            Some("https://discord.com/api/webhooks/1/tok"),
+            "testbot",
+            "hello world",
+            false,
+            &NullIrcResolver,
+        );
+        let DiscordCommand::SendMessage { text, .. } = &cmd else {
+            panic!("expected SendMessage");
+        };
+        // Webhook path: text is just the message content, no **[nick]** prefix.
+        assert_eq!(text, "hello world");
+    }
 }

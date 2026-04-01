@@ -68,8 +68,9 @@ struct BridgeTasks {
 
 impl BridgeTasks {
     /// Wait for a `DiscordCommand::SendMessage` whose `text` contains `needle`.
+    /// Returns the full `text` field for further assertions.
     /// Ignores other commands. Panics on timeout.
-    async fn expect_send_message(&mut self, needle: &str, timeout: Duration) {
+    async fn expect_send_message(&mut self, needle: &str, timeout: Duration) -> String {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let remaining = deadline
@@ -80,7 +81,7 @@ impl BridgeTasks {
             }
             match tokio::time::timeout(remaining, self.discord_cmd_rx.recv()).await {
                 Ok(Some(DiscordCommand::SendMessage { text, .. })) if text.contains(needle) => {
-                    return;
+                    return text;
                 }
                 Ok(Some(_)) => continue,
                 _ => panic!(
@@ -310,9 +311,19 @@ async fn e2e_irc_to_discord_message_relay() {
     client.send_privmsg("#e2e-test", "hello from irc").await;
 
     // The bridge should produce a DiscordCommand::SendMessage for channel 111.
-    tasks
+    // Plain path (no webhook): text is "**[nick]** content" with exactly one prefix.
+    let text = tasks
         .expect_send_message("hello from irc", Duration::from_secs(10))
         .await;
+    assert!(
+        text.starts_with("**["),
+        "plain message text must start with **[nick]** prefix; got: {text:?}"
+    );
+    assert_eq!(
+        text.matches("**[").count(),
+        1,
+        "plain message text must have exactly one **[nick]** prefix; got: {text:?}"
+    );
 
     capture.assert_no_warnings_or_errors();
     drop(tasks);

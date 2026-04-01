@@ -13,7 +13,7 @@ pub struct TestIrcClient {
 }
 
 impl TestIrcClient {
-    /// Connect to `addr`, register as `nick`, and wait for RPL_WELCOME (001).
+    /// Connect to `addr`, register as `nick`, and wait for `RPL_WELCOME` (001).
     /// Handles PING challenges during registration automatically.
     pub async fn connect(addr: &str, nick: &str) -> Self {
         let stream = TcpStream::connect(addr)
@@ -44,13 +44,12 @@ impl TestIrcClient {
     pub async fn read_line_timeout(&mut self, dur: Duration) -> Option<String> {
         let mut line = String::new();
         match timeout(dur, self.reader.read_line(&mut line)).await {
-            Ok(Ok(0)) | Err(_) => None,
+            Ok(Ok(0) | Err(_)) | Err(_) => None,
             Ok(Ok(_)) => Some(line.trim_end_matches(['\r', '\n']).to_string()),
-            Ok(Err(_)) => None,
         }
     }
 
-    /// JOIN `channel` and wait for RPL_ENDOFNAMES (366).
+    /// JOIN `channel` and wait for `RPL_ENDOFNAMES` (366).
     pub async fn join(&mut self, channel: &str) {
         self.send(&format!("JOIN {channel}")).await;
         self.expect_code("366", Duration::from_secs(10)).await;
@@ -69,9 +68,10 @@ impl TestIrcClient {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                panic!("timed out waiting for line containing {needle:?}");
-            }
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for line containing {needle:?}"
+            );
             let line = self
                 .read_line_timeout(remaining)
                 .await
@@ -89,6 +89,7 @@ impl TestIrcClient {
     /// Read lines until a PRIVMSG is found where the prefix contains
     /// `nick_fragment` and the message text contains `text_fragment`.
     /// Panics if `timeout_dur` elapses first.
+    #[allow(dead_code)] // Used by e2e_irc but not e2e_discord.
     pub async fn expect_privmsg(
         &mut self,
         nick_fragment: &str,
@@ -100,12 +101,11 @@ impl TestIrcClient {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                panic!(
-                    "timed out waiting for PRIVMSG from nick~={nick_fragment:?} \
-                     with text~={text_fragment:?}"
-                );
-            }
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for PRIVMSG from nick~={nick_fragment:?} \
+                 with text~={text_fragment:?}"
+            );
             let line = self
                 .read_line_timeout(remaining)
                 .await

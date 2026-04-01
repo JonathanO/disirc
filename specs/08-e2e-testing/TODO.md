@@ -15,10 +15,10 @@
 
 ## Layer 4: Full e2e
 
-- [ ] Implement `DiscordTestClient` helper (reqwest REST)
-- [ ] Write test: Discord→IRC via real Discord API
-- [ ] Write test: IRC→Discord via real Discord API
-- [ ] Write test: formatting preserved across bridge
-- [ ] Write test: nick/username correct across bridge
-- [ ] CI: GitHub Actions job with secrets
+- [x] Implement `DiscordTestClient` helper (reqwest REST)
+- [x] Write test: Discord→IRC via real Discord API (webhook + plain channels)
+- [x] Write test: IRC→Discord via real Discord API (webhook + plain channels)
+- [x] Write test: formatting preserved across bridge (webhook + plain channels)
+- [x] CI: GitHub Actions job with secrets
+- [ ] Run tests against live Discord and verify all 6 pass
 - [ ] Document manual setup steps for test guild/bot

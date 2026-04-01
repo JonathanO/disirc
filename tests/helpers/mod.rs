@@ -1,5 +1,6 @@
 //! Shared helpers for e2e tests.
 
+pub mod discord_client;
 pub mod irc_client;
 
 pub use irc_client::TestIrcClient;
@@ -12,7 +13,7 @@ use testcontainers::{ContainerAsync, GenericImage};
 const TEST_IMAGE: &str = "disirc-unrealircd-test";
 const TEST_IMAGE_TAG: &str = "latest";
 
-/// Handle to a running UnrealIRCd Docker container.
+/// Handle to a running `UnrealIRCd` Docker container.
 ///
 /// Dropping this value stops and removes the container.
 pub struct IrcContainer {
@@ -28,7 +29,7 @@ pub struct IrcContainer {
     _container: ContainerAsync<GenericImage>,
 }
 
-/// Start a fresh UnrealIRCd container and wait for it to be fully ready.
+/// Start a fresh `UnrealIRCd` container and wait for it to be fully ready.
 ///
 /// Builds the local test image on first call (Docker layer cache makes
 /// subsequent calls fast). Requires Docker to be running.
@@ -43,12 +44,12 @@ pub async fn start_unrealircd() -> IrcContainer {
     let container = GenericImage::new(TEST_IMAGE, TEST_IMAGE_TAG)
         .with_exposed_port(6667u16.tcp())
         .with_exposed_port(6900u16.tcp())
-        // Wait until UnrealIRCd logs "UnrealIRCd started." to stderr — this
+        // Wait until `UnrealIRCd` logs "`UnrealIRCd` started." to stderr — this
         // confirms all modules are loaded and the server is ready for connections.
-        .with_wait_for(WaitFor::message_on_stderr("UnrealIRCd started."))
+        .with_wait_for(WaitFor::message_on_stderr("`UnrealIRCd` started."))
         .start()
         .await
-        .expect("Failed to start UnrealIRCd container (is Docker running?)");
+        .expect("Failed to start `UnrealIRCd` container (is Docker running?)");
 
     // On Docker Desktop (Windows/macOS), containers may not be reachable on
     // 127.0.0.1 — use get_host() to get the correct address.

@@ -227,6 +227,11 @@ impl EventHandler for DiscordHandler {
     }
 
     async fn guild_create(&self, _ctx: Context, guild: Guild, _is_new: Option<bool>) {
+        tracing::info!(
+            guild_id = guild.id.get(),
+            guild_name = %guild.name,
+            "guild_create handler entered"
+        );
         let presences: HashMap<u64, DiscordPresence> = guild
             .presences
             .iter()
@@ -256,20 +261,20 @@ impl EventHandler for DiscordHandler {
                 .collect()
         };
 
-        tracing::debug!(
+        tracing::info!(
             guild_id = guild.id.get(),
             total_members = raw.len(),
             total_presences = presences.len(),
             bridged_channels = guild_channel_ids.len(),
             guild_channels = guild.channels.len(),
-            "guild_create received"
+            "guild_create processing"
         );
 
         let event =
             build_member_snapshot_event(guild.id.get(), &raw, &presences, guild_channel_ids);
 
         if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
-            tracing::debug!(
+            tracing::info!(
                 guild_id = guild.id.get(),
                 online_members = members.len(),
                 "emitting MemberSnapshot"

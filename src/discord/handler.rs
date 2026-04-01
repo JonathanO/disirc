@@ -115,6 +115,10 @@ pub(crate) struct RawMemberData<'a> {
     pub nick: Option<&'a str>,
     pub global_name: Option<&'a str>,
     pub username: &'a str,
+    /// `true` when the Discord account is a bot.  Bots lack presence data but
+    /// can send and receive channel messages, so they are treated as always
+    /// online for pseudoclient purposes.
+    pub bot: bool,
 }
 
 /// Build a [`DiscordEvent::MemberSnapshot`] from raw member data.
@@ -122,6 +126,10 @@ pub(crate) struct RawMemberData<'a> {
 /// `presences` maps user IDs to their current [`DiscordPresence`].  Members
 /// absent from the map are treated as offline (common during large-guild
 /// chunking and on the REST fallback path).
+///
+/// Bot accounts are always treated as online — they lack Gateway presence data
+/// but can send and receive messages in channels, so they should have
+/// pseudoclients on IRC.
 pub(crate) fn build_member_snapshot_event(
     guild_id: u64,
     members: &[RawMemberData<'_>],
@@ -131,14 +139,19 @@ pub(crate) fn build_member_snapshot_event(
     // Only include non-offline members in the burst.  Offline members are
     // excluded to keep the initial IRC channel population small; they will be
     // introduced lazily when they come online (PRESENCE_UPDATE) or first speak
-    // (MESSAGE_CREATE).
+    // (MESSAGE_CREATE).  Bots have no presence data but are always included.
     let member_infos: Vec<MemberInfo> = members
         .iter()
         .filter_map(|m| {
-            let presence = presences
-                .get(&m.user_id)
-                .copied()
-                .unwrap_or(DiscordPresence::Offline);
+            let presence = if m.bot {
+                // Bots never appear in the presences map; treat them as Online.
+                DiscordPresence::Online
+            } else {
+                presences
+                    .get(&m.user_id)
+                    .copied()
+                    .unwrap_or(DiscordPresence::Offline)
+            };
             if !presence.is_non_offline() {
                 return None;
             }
@@ -228,6 +241,7 @@ impl EventHandler for DiscordHandler {
                 nick: m.nick.as_deref(),
                 global_name: m.user.global_name.as_deref(),
                 username: &m.user.name,
+                bot: m.user.bot,
             })
             .collect();
 
@@ -242,8 +256,26 @@ impl EventHandler for DiscordHandler {
                 .collect()
         };
 
+        tracing::debug!(
+            guild_id = guild.id.get(),
+            total_members = raw.len(),
+            total_presences = presences.len(),
+            bridged_channels = guild_channel_ids.len(),
+            guild_channels = guild.channels.len(),
+            "guild_create received"
+        );
+
         let event =
             build_member_snapshot_event(guild.id.get(), &raw, &presences, guild_channel_ids);
+
+        if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
+            tracing::debug!(
+                guild_id = guild.id.get(),
+                online_members = members.len(),
+                "emitting MemberSnapshot"
+            );
+        }
+
         let _ = self.event_tx.send(event).await;
     }
 
@@ -480,12 +512,14 @@ mod tests {
                 nick: None,
                 global_name: None,
                 username: "alice",
+                bot: false,
             },
             RawMemberData {
                 user_id: 2,
                 nick: None,
                 global_name: None,
                 username: "bob",
+                bot: false,
             },
         ];
         let mut presences = HashMap::new();
@@ -514,6 +548,7 @@ mod tests {
             nick: Some("N"),
             global_name: None,
             username: "u",
+            bot: false,
         }];
         let ev = build_member_snapshot_event(10, &members, &HashMap::new(), vec![]);
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
@@ -534,12 +569,14 @@ mod tests {
                 nick: None,
                 global_name: None,
                 username: "idler",
+                bot: false,
             },
             RawMemberData {
                 user_id: 11,
                 nick: None,
                 global_name: None,
                 username: "busy",
+                bot: false,
             },
         ];
         let mut presences = HashMap::new();
@@ -551,6 +588,40 @@ mod tests {
             panic!()
         };
         assert_eq!(infos.len(), 2, "idle and dnd members must be included");
+    }
+
+    #[test]
+    fn snapshot_bot_included_even_without_presence() {
+        // Bot accounts lack Gateway presence data; they must be treated as Online
+        // so they get pseudoclients and the bridge can be in the IRC channel.
+        let members = vec![
+            RawMemberData {
+                user_id: 20,
+                nick: None,
+                global_name: None,
+                username: "bridgebot",
+                bot: true,
+            },
+            RawMemberData {
+                user_id: 21,
+                nick: None,
+                global_name: None,
+                username: "offlineuser",
+                bot: false,
+            },
+        ];
+        // No presences for either member.
+        let ev = build_member_snapshot_event(50, &members, &HashMap::new(), vec![]);
+        let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
+            panic!()
+        };
+        assert_eq!(
+            infos.len(),
+            1,
+            "bot must be included; offline human must not"
+        );
+        assert_eq!(infos[0].user_id, 20);
+        assert_eq!(infos[0].presence, DiscordPresence::Online);
     }
 
     // ---------------------------------------------------------------------------

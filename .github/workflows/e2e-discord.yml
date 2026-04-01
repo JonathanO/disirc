@@ -1,0 +1,32 @@
+name: E2E Discord
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  e2e-discord:
+    name: E2E (Layer 4 — real Discord + IRC)
+    runs-on: ubuntu-latest
+    environment: discord-e2e
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run Layer 4 e2e tests
+        env:
+          DISCORD_BRIDGE_BOT_TOKEN: ${{ secrets.DISCORD_BRIDGE_BOT_TOKEN }}
+          DISCORD_TEST_BOT_TOKEN: ${{ secrets.DISCORD_TEST_BOT_TOKEN }}
+          DISCORD_TEST_WEBHOOK_URL: ${{ secrets.DISCORD_TEST_WEBHOOK_URL }}
+          DISCORD_TEST_GUILD_ID: ${{ vars.DISCORD_TEST_GUILD_ID }}
+          DISCORD_TEST_CHANNEL_ID: ${{ vars.DISCORD_TEST_CHANNEL_ID }}
+          DISCORD_TEST_IRC_CHANNEL: ${{ vars.DISCORD_TEST_IRC_CHANNEL }}
+          DISCORD_TEST_PLAIN_CHANNEL_ID: ${{ vars.DISCORD_TEST_PLAIN_CHANNEL_ID }}
+          DISCORD_TEST_PLAIN_IRC_CHANNEL: ${{ vars.DISCORD_TEST_PLAIN_IRC_CHANNEL }}
+        run: cargo test --test e2e_discord -- --include-ignored --nocapture --test-threads=1

@@ -56,7 +56,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run Layer 3 e2e tests
-        run: cargo test --test e2e_irc -- --include-ignored --nocapture
+        run: |
+          set -o pipefail
+          cargo test --test e2e_irc -- --include-ignored --nocapture 2>&1 \
+            | grep -v 'hyper_util\|h2::\|serenity::gateway::bridge'
 
   e2e-discord:
     name: E2E (Layer 4 — real Discord + IRC)
@@ -80,4 +83,7 @@ jobs:
           DISCORD_TEST_IRC_CHANNEL: ${{ vars.DISCORD_TEST_IRC_CHANNEL }}
           DISCORD_TEST_PLAIN_CHANNEL_ID: ${{ vars.DISCORD_TEST_PLAIN_CHANNEL_ID }}
           DISCORD_TEST_PLAIN_IRC_CHANNEL: ${{ vars.DISCORD_TEST_PLAIN_IRC_CHANNEL }}
-        run: cargo test --test e2e_discord -- --include-ignored --nocapture --test-threads=1
+        run: |
+          set -o pipefail
+          cargo test --test e2e_discord -- --include-ignored --nocapture --test-threads=1 2>&1 \
+            | grep -v 'hyper_util\|h2::\|serenity::gateway::bridge'

@@ -1,5 +1,6 @@
 # Test-only UnrealIRCd image built from the official source tarball.
-# The test config (unrealircd.conf from the same directory) is baked in.
+# Contains only the compiled binary and a self-signed TLS cert.
+# The test config (unrealircd.conf) is injected at runtime by testcontainers.
 #
 # Client port: 6667  TLS: 6697  S2S port: 6900
 #
@@ -55,10 +56,6 @@ RUN useradd -m -s /bin/sh ircd
 # Copy the compiled install. Paths are baked into the binary as
 # /home/ircd/unrealircd/..., so the layout must be preserved exactly.
 COPY --from=builder /home/ircd/unrealircd /home/ircd/unrealircd
-
-# Bake in the test config, overriding the default conf installed by make install.
-# This avoids bind-mount path issues on Windows hosts.
-COPY --chown=ircd:ircd unrealircd.conf /home/ircd/unrealircd/conf/unrealircd.conf
 
 EXPOSE 6667 6697 6900
 USER ircd

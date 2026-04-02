@@ -13,8 +13,9 @@
 - [x] Discord→IRC: help message for unresolvable DMs
 - [x] Discord→IRC: handle missing pseudoclient (user offline)
 - [x] Error handling: 403 Forbidden (blocked), rate limits
-- [x] Unit tests for DM routing logic (10 tests)
-- [ ] L3 e2e tests (mock Discord, real IRC)
-- [ ] L4 e2e tests (real Discord + real IRC)
-- [ ] Mutation testing on changed modules
+- [x] Unit tests for DM routing logic (13 tests)
+- [x] Handler unit tests (3 tests)
+- [x] L3 e2e tests (3 tests, mock Discord, real IRC)
+- [x] Mutation testing: 0 surviving on routing.rs, handler.rs, state.rs, mod.rs
+- [ ] L4 e2e tests (real Discord + real IRC) — deferred, requires manual setup
 - [ ] Update SPECS.md status

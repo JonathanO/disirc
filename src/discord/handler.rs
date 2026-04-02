@@ -491,6 +491,52 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
+    // --- handle_dm_event ---
+
+    #[tokio::test]
+    async fn dm_event_emits_dm_received() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[], &[]);
+        h.handle_dm_event(42, "alice".into(), "hello".into(), None)
+            .await;
+        let event = rx.try_recv().expect("expected DmReceived event");
+        assert!(matches!(
+            event,
+            DiscordEvent::DmReceived { author_id: 42, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn dm_from_self_is_dropped() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[], &[42]); // 42 is in self-filter
+        h.handle_dm_event(42, "bot".into(), "echo".into(), None)
+            .await;
+        assert!(rx.try_recv().is_err(), "DM from self should be dropped");
+    }
+
+    #[tokio::test]
+    async fn dm_event_includes_referenced_content() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let h = make_handler(tx, &[], &[]);
+        h.handle_dm_event(
+            42,
+            "alice".into(),
+            "reply text".into(),
+            Some("**[bob]** original".into()),
+        )
+        .await;
+        let event = rx.try_recv().expect("expected DmReceived event");
+        if let DiscordEvent::DmReceived {
+            referenced_content, ..
+        } = event
+        {
+            assert_eq!(referenced_content.as_deref(), Some("**[bob]** original"));
+        } else {
+            panic!("expected DmReceived");
+        }
+    }
+
     // should_relay_message
     // ---------------------------------------------------------------------------
 

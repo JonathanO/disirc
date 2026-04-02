@@ -68,6 +68,56 @@ struct BridgeTasks {
 }
 
 impl BridgeTasks {
+    /// Wait for a `DiscordCommand::SendDm` whose `text` contains `needle`.
+    /// Returns `(recipient_user_id, text)`. Ignores other commands. Panics on timeout.
+    async fn expect_send_dm(&mut self, needle: &str, timeout: Duration) -> (u64, String) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or(Duration::ZERO);
+            if remaining.is_zero() {
+                panic!("timed out waiting for DiscordCommand::SendDm containing {needle:?}");
+            }
+            match tokio::time::timeout(remaining, self.discord_cmd_rx.recv()).await {
+                Ok(Some(DiscordCommand::SendDm {
+                    recipient_user_id,
+                    text,
+                })) if text.contains(needle) => {
+                    return (recipient_user_id, text);
+                }
+                Ok(Some(_)) => continue,
+                _ => panic!("discord_cmd_rx closed before receiving SendDm containing {needle:?}"),
+            }
+        }
+    }
+
+    /// Wait for a `DiscordCommand::SendBotDm` whose `text` contains `needle`.
+    /// Returns `(recipient_user_id, text)`. Ignores other commands. Panics on timeout.
+    async fn expect_bot_dm(&mut self, needle: &str, timeout: Duration) -> (u64, String) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or(Duration::ZERO);
+            if remaining.is_zero() {
+                panic!("timed out waiting for DiscordCommand::SendBotDm containing {needle:?}");
+            }
+            match tokio::time::timeout(remaining, self.discord_cmd_rx.recv()).await {
+                Ok(Some(DiscordCommand::SendBotDm {
+                    recipient_user_id,
+                    text,
+                })) if text.contains(needle) => {
+                    return (recipient_user_id, text);
+                }
+                Ok(Some(_)) => continue,
+                _ => {
+                    panic!("discord_cmd_rx closed before receiving SendBotDm containing {needle:?}")
+                }
+            }
+        }
+    }
+
     /// Wait for a `DiscordCommand::SendMessage` whose `text` contains `needle`.
     /// Returns the full `text` field for further assertions.
     /// Ignores other commands. Panics on timeout.
@@ -560,6 +610,191 @@ async fn e2e_irc_mention_resolved_to_discord_id() {
         !text.contains("@Bob"),
         "@Bob should be converted to <@6001>, not left as literal; got: {text:?}"
     );
+
+    capture.assert_no_warnings_or_errors();
+    drop(tasks);
+}
+
+// ---------------------------------------------------------------------------
+// DM bridging tests
+// ---------------------------------------------------------------------------
+
+/// Config with dm_bridging enabled.
+fn e2e_dm_config(host: &str, s2s_port: u16) -> Config {
+    let mut config = e2e_config(host, s2s_port);
+    config.formatting.dm_bridging = true;
+    config
+}
+
+/// IRC→Discord DM: an IRC user /msg's a pseudoclient, and the bridge emits
+/// a `SendDm` command to the Discord user.
+#[tokio::test]
+#[ignore]
+async fn e2e_irc_privmsg_to_pseudoclient_relays_as_dm() {
+    let capture = init_capture_tracing();
+    let irc = helpers::start_unrealircd().await;
+    let config = e2e_dm_config(&irc.host, irc.s2s_port);
+    let mut tasks = spawn_bridge(config);
+
+    let mut client =
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
+    client.join("#e2e-test").await;
+    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
+
+    // Introduce Alice as a pseudoclient.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MemberSnapshot {
+            guild_id: 999,
+            members: vec![MemberInfo {
+                user_id: 7001,
+                display_name: "Alice".into(),
+                presence: DiscordPresence::Online,
+            }],
+            channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+
+    // Wait for Alice's pseudoclient to appear on IRC.
+    client
+        .expect_line_containing("Alice", Duration::from_secs(10))
+        .await;
+
+    // Send a /msg to Alice's pseudoclient nick. UnrealIRCd resolves nick→UID
+    // and delivers the PRIVMSG to the bridge via S2S.
+    client.send("PRIVMSG Alice :hello from irc dm").await;
+
+    // The bridge should emit a SendDm to Alice's Discord user ID.
+    let (recipient, text) = tasks
+        .expect_send_dm("hello from irc dm", Duration::from_secs(10))
+        .await;
+    assert_eq!(
+        recipient, 7001,
+        "DM should be sent to Alice's Discord user ID"
+    );
+    assert!(
+        text.contains("**["),
+        "DM text should have **[nick]** prefix; got: {text:?}"
+    );
+
+    capture.assert_no_warnings_or_errors();
+    drop(tasks);
+}
+
+/// Discord→IRC DM: a Discord user DMs the bridge bot with nick-colon
+/// addressing, and the bridge emits a PRIVMSG from the pseudoclient to the
+/// IRC user.
+#[tokio::test]
+#[ignore]
+async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
+    let capture = init_capture_tracing();
+    let irc = helpers::start_unrealircd().await;
+    let config = e2e_dm_config(&irc.host, irc.s2s_port);
+    let tasks = spawn_bridge(config);
+
+    let mut client =
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
+    client.join("#e2e-test").await;
+    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
+
+    // Introduce Alice as a pseudoclient (she's the Discord user who will DM).
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MemberSnapshot {
+            guild_id: 999,
+            members: vec![MemberInfo {
+                user_id: 8001,
+                display_name: "Alice".into(),
+                presence: DiscordPresence::Online,
+            }],
+            channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+
+    client
+        .expect_line_containing("Alice", Duration::from_secs(10))
+        .await;
+
+    // Alice DMs the bridge bot with nick-colon addressing to testbot.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::DmReceived {
+            author_id: 8001,
+            author_name: "Alice".into(),
+            content: "testbot: hey from discord dm".into(),
+            referenced_content: None,
+        })
+        .await
+        .unwrap();
+
+    // The IRC test client should see a PRIVMSG from Alice's pseudoclient.
+    client
+        .expect_line_containing("hey from discord dm", Duration::from_secs(10))
+        .await;
+
+    capture.assert_no_warnings_or_errors();
+    drop(tasks);
+}
+
+/// Discord→IRC DM: when a Discord user DMs the bridge bot without addressing,
+/// the bridge sends back a help message.
+#[tokio::test]
+#[ignore]
+async fn e2e_discord_dm_unresolvable_sends_help() {
+    let capture = init_capture_tracing();
+    let irc = helpers::start_unrealircd().await;
+    let config = e2e_dm_config(&irc.host, irc.s2s_port);
+    let mut tasks = spawn_bridge(config);
+
+    let mut client =
+        helpers::TestIrcClient::connect(&format!("{}:{}", irc.host, irc.client_port), "testbot")
+            .await;
+    client.join("#e2e-test").await;
+    wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
+
+    // Introduce Alice.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MemberSnapshot {
+            guild_id: 999,
+            members: vec![MemberInfo {
+                user_id: 9001,
+                display_name: "Alice".into(),
+                presence: DiscordPresence::Online,
+            }],
+            channel_ids: vec![111],
+            channel_names: std::collections::HashMap::new(),
+            role_names: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+
+    client
+        .expect_line_containing("Alice", Duration::from_secs(10))
+        .await;
+
+    // Alice DMs the bot with no addressing — should get a help message back.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::DmReceived {
+            author_id: 9001,
+            author_name: "Alice".into(),
+            content: "just a random message".into(),
+            referenced_content: None,
+        })
+        .await
+        .unwrap();
+
+    let (recipient, _text) = tasks.expect_bot_dm("nick:", Duration::from_secs(10)).await;
+    assert_eq!(recipient, 9001);
 
     capture.assert_no_warnings_or_errors();
     drop(tasks);

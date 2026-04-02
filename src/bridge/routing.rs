@@ -874,9 +874,11 @@ mod tests {
                 text,
             } => {
                 assert_eq!(target_uid, "001BOB001");
-                assert!(
-                    text.contains("hey there"),
-                    "text should contain message; got: {text:?}"
+                // The relayed text should be exactly "hey there" (formatted via
+                // discord_to_irc which is a no-op for plain text).
+                assert_eq!(
+                    text, "hey there",
+                    "text should be the message after stripping nick: prefix"
                 );
                 assert_eq!(from_uid, pm.get_by_discord_id(42).unwrap().uid);
             }

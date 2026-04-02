@@ -22,10 +22,14 @@ None.
 | [specs/07-irc-message-types](specs/07-irc-message-types/TODO.md) | ✅ Implemented | — |
 | [specs/08-e2e-testing](specs/08-e2e-testing/TODO.md) | ✅ Implemented | L3 + L4 tests, CI workflows, DEVELOPING.md docs |
 
-## Future specs (deferred from v1)
+## Pending
 
-- **DM bridging** — IRC `PRIVMSG` to a pseudoclient UID forwarded as a Discord DM and vice versa. Architecture must not preclude this: route `PRIVMSG` to non-channel targets; do not discard Discord DM `MESSAGE_CREATE` events at the framework level.
+- **DM bridging (spec 09)** — Spec written, pending review. See [specs/09-dm-bridging/TODO.md](specs/09-dm-bridging/TODO.md).
+
+## Completed features (post-v1)
+
 - ~~**Mention resolution**~~ — Implemented in PR #14. Real resolvers use bridge state (display_names, channel_names, role_names from guild_create, plus PseudoclientManager nick lookup).
+- ~~**Nick-colon mention**~~ — Implemented in PR #18. Leading `nick: ` in IRC messages converted to Discord mentions.
 
 ## Bugs fixed during integration
 

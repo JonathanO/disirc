@@ -77,6 +77,12 @@ All IRC→Discord transformations assume the incoming text is valid UTF-8 (see [
 
 `@nick` in IRC text is compared case-insensitively against Discord members in the bridged channel. If a match is found, replace with `<@discord_user_id>`. If no match, leave as plain `@nick`.
 
+#### Nick-colon addressing (optional)
+
+IRC users conventionally address messages with `nick: message` at the start of a line. When the config option `irc_nick_colon_mention` is `true` (default: `true`), a leading `nick: ` (nick followed by colon and space) at the very start of an IRC message is matched case-insensitively against Discord members. If a match is found, replace with `<@discord_user_id>: `, converting the IRC address into a Discord mention. If no match, leave unchanged.
+
+Only the very start of the message is checked — no leading whitespace, no mid-sentence patterns. The colon must be followed by a space to avoid matching URLs or other colon-containing text.
+
 ### Ping-fix (IRC nick in Discord)
 
 When the IRC nick appears as the webhook username or in the `**[nick]**` prefix (plain path), insert a zero-width space (`U+200B`) after the first character. This prevents Discord from notifying any Discord user whose display name matches the IRC nick.

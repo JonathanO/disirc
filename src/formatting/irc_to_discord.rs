@@ -185,6 +185,44 @@ pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> St
     result
 }
 
+/// Convert a leading `nick: ` at the start of an IRC message into a Discord
+/// `<@user_id>` mention.
+///
+/// IRC users conventionally address messages as `nick: message`.  This function
+/// matches the first token (before `: `) case-insensitively against Discord
+/// members via the resolver.  Only the very start of the message is checked —
+/// no leading whitespace or mid-sentence patterns.
+///
+/// If no match is found, the text is returned unchanged.
+#[must_use]
+pub fn convert_nick_colon_mention(text: &str, resolver: &dyn IrcMentionResolver) -> String {
+    let Some(pos) = text.find(": ") else {
+        return text.to_string();
+    };
+
+    let nick = &text[..pos];
+
+    // The nick must be non-empty and contain only valid IRC nick characters.
+    // `chars().all()` is vacuously true for empty strings, but an empty nick
+    // won't match any resolver, so no separate `is_empty()` guard is needed.
+    if !nick.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
+            )
+    }) {
+        return text.to_string();
+    }
+
+    if let Some(user_id) = resolver.resolve_nick(nick) {
+        let rest = &text[pos + 2..];
+        format!("<@{user_id}>: {rest}")
+    } else {
+        text.to_string()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Ping-fix
 // ---------------------------------------------------------------------------
@@ -728,5 +766,85 @@ mod tests {
             let without_zwsp: String = fixed.replace('\u{200B}', "");
             assert_eq!(without_zwsp, nick);
         }
+    }
+
+    // --- convert_nick_colon_mention ---
+
+    #[test]
+    fn nick_colon_converts_known_nick() {
+        let r = StubIrcResolver;
+        assert_eq!(
+            convert_nick_colon_mention("alice: hello", &r),
+            "<@111>: hello"
+        );
+    }
+
+    #[test]
+    fn nick_colon_case_insensitive() {
+        let r = StubIrcResolver;
+        assert_eq!(
+            convert_nick_colon_mention("Alice: hello", &r),
+            "<@111>: hello"
+        );
+    }
+
+    #[test]
+    fn nick_colon_unknown_nick_unchanged() {
+        let r = StubIrcResolver;
+        assert_eq!(
+            convert_nick_colon_mention("unknown: hello", &r),
+            "unknown: hello"
+        );
+    }
+
+    #[test]
+    fn nick_colon_no_colon_unchanged() {
+        let r = StubIrcResolver;
+        assert_eq!(
+            convert_nick_colon_mention("just a message", &r),
+            "just a message"
+        );
+    }
+
+    #[test]
+    fn nick_colon_mid_sentence_not_matched() {
+        let r = StubIrcResolver;
+        assert_eq!(
+            convert_nick_colon_mention("hey alice: check this", &r),
+            "hey alice: check this"
+        );
+    }
+
+    #[test]
+    fn nick_colon_leading_whitespace_not_matched() {
+        // Leading whitespace means it's not at the very start — skip.
+        let r = StubIrcResolver;
+        assert_eq!(
+            convert_nick_colon_mention("  alice: hello", &r),
+            "  alice: hello"
+        );
+    }
+
+    #[test]
+    fn nick_colon_without_space_after_not_matched() {
+        // "alice:hello" (no space) should not match.
+        let r = StubIrcResolver;
+        assert_eq!(convert_nick_colon_mention("alice:hello", &r), "alice:hello");
+    }
+
+    #[test]
+    fn nick_colon_empty_nick_not_matched() {
+        // ": hello" has an empty nick — should not match.
+        let r = StubIrcResolver;
+        assert_eq!(convert_nick_colon_mention(": hello", &r), ": hello");
+    }
+
+    #[test]
+    fn nick_colon_url_not_matched() {
+        let r = StubIrcResolver;
+        assert_eq!(
+            convert_nick_colon_mention("https://example.com", &r),
+            "https://example.com"
+        );
     }
 }

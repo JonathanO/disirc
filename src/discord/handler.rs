@@ -184,6 +184,31 @@ impl DiscordHandler {
         info!(bot_id, tag, "Discord bot ready");
     }
 
+    /// Relay a DM `MESSAGE_CREATE` event to the processing task if it passes
+    /// self-message filtering.
+    pub(crate) async fn handle_dm_event(
+        &self,
+        author_id: u64,
+        author_name: String,
+        content: String,
+        referenced_content: Option<String>,
+    ) {
+        let filter = self.self_filter.read().await;
+        if filter.contains(&author_id) {
+            return;
+        }
+        drop(filter);
+        let _ = self
+            .event_tx
+            .send(DiscordEvent::DmReceived {
+                author_id,
+                author_name,
+                content,
+                referenced_content,
+            })
+            .await;
+    }
+
     /// Relay a `MESSAGE_CREATE` event to the processing task if it passes
     /// channel routing and self-message filtering.
     pub(crate) async fn handle_message_event(
@@ -302,15 +327,39 @@ impl EventHandler for DiscordHandler {
         let _ = self.event_tx.send(event).await;
     }
 
-    async fn message(&self, _ctx: Context, msg: Message) {
-        self.handle_message_event(
-            msg.channel_id.get(),
-            msg.author.id.get(),
-            msg.author.name.clone(),
-            msg.content.clone(),
-            msg.attachments.iter().map(|a| a.url.clone()).collect(),
-        )
-        .await;
+    async fn message(&self, ctx: Context, msg: Message) {
+        if msg.guild_id.is_none() {
+            // DM — resolve referenced message content if this is a reply.
+            let referenced_content = if let Some(ref msg_ref) = msg.message_reference {
+                if let Some(ref_id) = msg_ref.message_id {
+                    msg.channel_id
+                        .message(&ctx.http, ref_id)
+                        .await
+                        .ok()
+                        .map(|m| m.content)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            self.handle_dm_event(
+                msg.author.id.get(),
+                msg.author.name.clone(),
+                msg.content.clone(),
+                referenced_content,
+            )
+            .await;
+        } else {
+            self.handle_message_event(
+                msg.channel_id.get(),
+                msg.author.id.get(),
+                msg.author.name.clone(),
+                msg.content.clone(),
+                msg.attachments.iter().map(|a| a.url.clone()).collect(),
+            )
+            .await;
+        }
     }
 
     async fn presence_update(&self, _ctx: Context, new_data: Presence) {

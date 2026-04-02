@@ -108,12 +108,16 @@ pub struct FormattingConfig {
     /// Convert leading `nick:` or `nick,` in IRC messages to Discord mentions.
     #[serde(default = "default_true")]
     pub irc_nick_colon_mention: bool,
+    /// Bridge private messages between IRC `/msg` and Discord DMs.
+    #[serde(default)]
+    pub dm_bridging: bool,
 }
 
 impl Default for FormattingConfig {
     fn default() -> Self {
         Self {
             irc_nick_colon_mention: true,
+            dm_bridging: false,
         }
     }
 }

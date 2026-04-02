@@ -71,6 +71,17 @@ pub enum DiscordEvent {
     },
     /// A member left or was removed from a guild.
     MemberRemoved { user_id: u64, guild_id: u64 },
+    /// A DM was received by the bridge bot (no guild context).
+    DmReceived {
+        author_id: u64,
+        author_name: String,
+        content: String,
+        /// If this DM is a reply, the content of the referenced message.
+        /// The Discord handler fetches the referenced message and includes
+        /// its content so the bridge can parse the `**[nick]**` prefix to
+        /// determine the target IRC user.
+        referenced_content: Option<String>,
+    },
     /// Initial member snapshot delivered once per guild after `guild_create`.
     /// Used to populate the IRC burst and mention resolution lookup tables.
     MemberSnapshot {
@@ -99,6 +110,20 @@ pub enum DiscordCommand {
         /// IRC nick of the sender. The send layer enforces the 2–32 char
         /// Discord webhook username constraint.
         sender_nick: String,
+        text: String,
+    },
+    /// Send a DM to a Discord user on behalf of an IRC user.
+    SendDm {
+        /// Discord user ID of the recipient.
+        recipient_user_id: u64,
+        /// Formatted message text (includes `**[nick]**` prefix).
+        text: String,
+    },
+    /// Send a DM to a Discord user as the bridge bot itself (help/error messages).
+    SendBotDm {
+        /// Discord user ID of the recipient.
+        recipient_user_id: u64,
+        /// Plain text message from the bot.
         text: String,
     },
     /// Notify the Discord module that the bridge configuration has changed.

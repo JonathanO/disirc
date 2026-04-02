@@ -27,7 +27,8 @@ use crate::signal::ControlEvent;
 pub use map::{BridgeInfo, BridgeMap};
 pub use relay::{discord_to_irc_commands, irc_to_discord_command};
 pub use routing::{
-    produce_burst_commands, route_discord_to_irc, route_irc_to_discord, update_guild_irc_channels,
+    produce_burst_commands, route_discord_to_irc, route_dm_to_irc, route_irc_to_discord,
+    route_irc_to_dm, update_guild_irc_channels,
 };
 pub use state::{DiscordState, IrcState, apply_discord_event, apply_irc_event};
 
@@ -144,6 +145,15 @@ pub async fn run_bridge(
                             current_config.formatting.irc_nick_colon_mention,
                         ) {
                             let _ = discord_cmd_tx.send(cmd).await;
+                        } else if current_config.formatting.dm_bridging {
+                            // Not a channel message — try DM to a pseudoclient.
+                            if let Some(cmd) = route_irc_to_dm(
+                                &pm, &irc_state,
+                                from_uid, target, text, &resolver,
+                                current_config.formatting.irc_nick_colon_mention,
+                            ) {
+                                let _ = discord_cmd_tx.send(cmd).await;
+                            }
                         }
                         // TODO: thread `timestamp` (IRC server-time) through to
                         // the Discord send path for accurate message timing.
@@ -192,6 +202,39 @@ pub async fn run_bridge(
                     for cmd in cmds {
                         let _ = irc_cmd_tx.send(cmd).await;
                     }
+                }
+
+                // Route Discord DMs to IRC.
+                if let DiscordEvent::DmReceived {
+                    author_id,
+                    content,
+                    referenced_content,
+                    ..
+                } = &event
+                    && current_config.formatting.dm_bridging
+                {
+                        let resolver = BridgeDiscordResolver { discord_state: &discord_state };
+                        match route_dm_to_irc(
+                            &pm, &irc_state,
+                            *author_id, content,
+                            referenced_content.as_deref(),
+                            &resolver,
+                        ) {
+                            routing::DmRouteResult::Relay { from_uid, target_uid, text } => {
+                                let _ = irc_cmd_tx.send(S2SCommand::SendMessage {
+                                    from_uid,
+                                    target: target_uid,
+                                    text,
+                                    timestamp: None,
+                                }).await;
+                            }
+                            routing::DmRouteResult::Error(msg) => {
+                                let _ = discord_cmd_tx.send(DiscordCommand::SendBotDm {
+                                    recipient_user_id: *author_id,
+                                    text: msg,
+                                }).await;
+                            }
+                        }
                 }
 
                 let now = unix_now();

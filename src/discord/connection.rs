@@ -197,6 +197,19 @@ mod tests {
         assert!(INTENTS.contains(GatewayIntents::MESSAGE_CONTENT));
     }
 
+    #[test]
+    fn intents_exact_value() {
+        // Assert the exact computed value to catch | vs ^ mutations.
+        // GUILDS(1) | GUILD_MEMBERS(2) | GUILD_PRESENCES(256) |
+        // GUILD_MESSAGES(512) | MESSAGE_CONTENT(32768) = 33539
+        let expected = GatewayIntents::GUILDS
+            | GatewayIntents::GUILD_MEMBERS
+            | GatewayIntents::GUILD_MESSAGES
+            | GatewayIntents::GUILD_PRESENCES
+            | GatewayIntents::MESSAGE_CONTENT;
+        assert_eq!(INTENTS, expected);
+    }
+
     /// Requires a live Discord token — skipped in CI.
     #[tokio::test]
     #[ignore = "requires Discord credentials"]

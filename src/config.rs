@@ -54,7 +54,7 @@ pub fn config_path_from_iter(mut args: impl Iterator<Item = String>) -> PathBuf 
 }
 
 /// Return the config file path from the process's command-line arguments.
-// mutants::skip — trivial delegation to config_path_from_iter (which is thoroughly tested)
+// mutants::skip — thin wrapper around config_path_from_iter with std::env::args()
 #[mutants::skip]
 pub fn config_path_from_args() -> PathBuf {
     config_path_from_iter(std::env::args())
@@ -1061,5 +1061,80 @@ mod tests {
             "load_and_validate should reject invalid SID"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- config_path_from_iter ---
+
+    #[test]
+    fn config_path_default_when_no_args() {
+        let args = vec!["disirc".to_string()];
+        assert_eq!(
+            config_path_from_iter(args.into_iter()),
+            PathBuf::from("config.toml")
+        );
+    }
+
+    #[test]
+    fn config_path_from_flag() {
+        let args = vec![
+            "disirc".to_string(),
+            "--config".to_string(),
+            "/etc/disirc.toml".to_string(),
+        ];
+        assert_eq!(
+            config_path_from_iter(args.into_iter()),
+            PathBuf::from("/etc/disirc.toml")
+        );
+    }
+
+    #[test]
+    fn config_path_ignores_other_flags() {
+        let args = vec![
+            "disirc".to_string(),
+            "--verbose".to_string(),
+            "--config".to_string(),
+            "custom.toml".to_string(),
+        ];
+        assert_eq!(
+            config_path_from_iter(args.into_iter()),
+            PathBuf::from("custom.toml")
+        );
+    }
+
+    // --- FormattingConfig defaults ---
+
+    #[test]
+    fn formatting_defaults_when_section_omitted() {
+        let cfg = parse(MINIMAL_TOML);
+        assert!(
+            cfg.formatting.irc_nick_colon_mention,
+            "irc_nick_colon_mention should default to true"
+        );
+    }
+
+    #[test]
+    fn formatting_explicit_false() {
+        let toml = r##"
+            [discord]
+            token = "Bot abc123"
+
+            [irc]
+            uplink = "irc.example.net"
+            link_name = "discord.example.net"
+            link_password = "secret"
+            sid = "0D0"
+
+            [formatting]
+            irc_nick_colon_mention = false
+
+            [[bridge]]
+            discord_channel_id = "123456789012345678"
+            irc_channel = "#general"
+        "##;
+        let cfg = parse(toml);
+        assert!(
+            !cfg.formatting.irc_nick_colon_mention,
+            "explicit false should be respected"
+        );
     }
 }

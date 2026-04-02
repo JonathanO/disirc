@@ -235,6 +235,7 @@ Both bots must have Send Messages and Read Message History in both channels.
 | `DISCORD_TEST_BOT_TOKEN` | Secret | `MTQ5MDEyMzQ1N...` |
 | `DISCORD_TEST_WEBHOOK_URL` | Secret | `https://discord.com/api/webhooks/123/abc...` |
 | `DISCORD_TEST_GUILD_ID` | ID | `1234567890123456` |
+| `DISCORD_BRIDGE_BOT_USER_ID` | ID | `1234567890123455` |
 | `DISCORD_TEST_CHANNEL_ID` | ID | `1234567890123457` |
 | `DISCORD_TEST_IRC_CHANNEL` | Name | `#e2e-webhook` |
 | `DISCORD_TEST_PLAIN_CHANNEL_ID` | ID | `1234567890123458` |

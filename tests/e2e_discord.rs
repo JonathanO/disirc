@@ -50,6 +50,7 @@ struct Secrets {
     test_token: String,
     #[allow(dead_code)] // Required for env validation; used by future guild-level tests.
     guild_id: u64,
+    bridge_bot_user_id: String,
     webhook_channel_id: u64,
     webhook_irc_channel: String,
     webhook_url: String,
@@ -77,6 +78,7 @@ fn read_secrets() -> Secrets {
         bridge_token: required_env("DISCORD_BRIDGE_BOT_TOKEN"),
         test_token: required_env("DISCORD_TEST_BOT_TOKEN"),
         guild_id: required_env_u64("DISCORD_TEST_GUILD_ID"),
+        bridge_bot_user_id: required_env("DISCORD_BRIDGE_BOT_USER_ID"),
         webhook_channel_id: required_env_u64("DISCORD_TEST_CHANNEL_ID"),
         webhook_irc_channel: required_env("DISCORD_TEST_IRC_CHANNEL"),
         webhook_url: required_env("DISCORD_TEST_WEBHOOK_URL"),
@@ -108,7 +110,10 @@ fn full_config(secrets: &Secrets, host: &str, s2s_port: u16) -> Config {
             host_suffix: "discord.test.net".into(),
             ident: "discord".into(),
         },
-        formatting: disirc::config::FormattingConfig::default(),
+        formatting: disirc::config::FormattingConfig {
+            dm_bridging: true,
+            ..disirc::config::FormattingConfig::default()
+        },
         bridges: vec![
             BridgeEntry {
                 discord_channel_id: secrets.webhook_channel_id.to_string(),
@@ -432,6 +437,59 @@ async fn e2e_discord_suite() {
             "IRC @{test_bot_name} should resolve to <@{test_bot_id}> in Discord; got: {:?}",
             msg.content
         );
+    }
+
+    // --- IRC → Discord DM ---
+    //
+    // The IRC test client sends /msg to the test bot's pseudoclient.
+    // The bridge should DM the test bot via the bridge bot.
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
+        // Discover the test bot's pseudoclient nick.
+        let probe = discord.send_message("dm-probe").await;
+        client
+            .expect_line_containing("dm-probe", Duration::from_secs(10))
+            .await;
+
+        let test_bot_name = &probe.author.username;
+
+        // Send a /msg to the test bot's pseudoclient nick from IRC.
+        client
+            .send(&format!("PRIVMSG {test_bot_name} :hello from irc dm"))
+            .await;
+
+        // The bridge bot should DM the test bot with **[testbot]** prefix.
+        let dm = discord
+            .poll_dm_containing(
+                &secrets.bridge_bot_user_id,
+                "hello from irc dm",
+                Duration::from_secs(15),
+            )
+            .await;
+        assert!(
+            dm.content.starts_with("**["),
+            "DM should have **[nick]** prefix; got: {:?}",
+            dm.content
+        );
+    }
+
+    // --- Discord → IRC DM ---
+    //
+    // The test bot DMs the bridge bot with nick-colon addressing.
+    // The bridge should relay it as a PRIVMSG from the test bot's pseudoclient
+    // to the named IRC user.
+    {
+        let discord = DiscordTestClient::new(&secrets.test_token, secrets.webhook_channel_id);
+
+        // Send a DM from the test bot to the bridge bot: "testbot: hey from dm"
+        discord
+            .send_dm(&secrets.bridge_bot_user_id, "testbot: hey from discord dm")
+            .await;
+
+        // The IRC test client should see a PRIVMSG from the test bot's pseudoclient.
+        client
+            .expect_line_containing("hey from discord dm", Duration::from_secs(15))
+            .await;
     }
 
     capture.assert_no_warnings_or_errors();

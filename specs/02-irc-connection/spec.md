@@ -7,11 +7,10 @@ protocol. The connection module is responsible for:
 
 1. Maintaining the TCP/TLS socket and line framing.
 2. Running the UnrealIRCd-specific handshake state machine.
-3. **Translating** between `IrcMessage` wire types and protocol-agnostic
+3. Translating between `IrcMessage` wire types and protocol-agnostic
    `S2SEvent` / `S2SCommand` types.
-4. Rate-limiting outbound traffic.
-5. Sending keepalive pings and detecting timeouts.
-6. Reconnecting with exponential backoff on link failure.
+4. Sending keepalive pings and detecting timeouts.
+5. Reconnecting with exponential backoff on link failure.
 
 The processing task never sees `IrcMessage` or any other UnrealIRCd wire type.
 All communication between the connection module and the rest of the application
@@ -341,27 +340,13 @@ and never accessed concurrently. See the actor model in spec-00.
 
 ---
 
-## Rate limiting
-
-All outbound `IrcMessage` writes except `PING` and `PONG` pass through a
-token-bucket rate limiter:
-
-- Bucket capacity: 10 tokens
-- Refill rate: 1 token per 500 ms
-- If the bucket is empty, the line is queued in memory (unbounded) and written
-  when a token is available.
-
-`PING` and `PONG` bypass the limiter and are written immediately.
-
----
-
 ## Ping / keepalive
 
 - `disirc` sends `PING :<our_sid>` to the uplink every 90 seconds.
 - If no `PONG` is received within 60 seconds of a `PING`, the link is
   considered dead and reconnection begins.
 - `PING` from the uplink is answered immediately with
-  `:<our_sid> PONG <our_sid> :<token>`, bypassing the rate limiter.
+  `:<our_sid> PONG <our_sid> :<token>`.
 
 ---
 
@@ -401,24 +386,6 @@ let end = if end > 0 && raw[end - 1] == b'\n' { ... };  // ← this guard
 so `raw.len() ≥ 1` and `end ≥ 1` are guaranteed at this point. Mutating `> 0` to
 `>= 0` leaves the condition always-true either way; there is no reachable input
 that distinguishes the two forms.
-
-### `connection.rs` — `if !queue.is_empty()` reschedule block in `run_session`
-
-```rust
-if !queue.is_empty() {
-    let delay = bucket.refill_delay(Instant::now());
-    write_timer.as_mut().reset(now + delay);
-}
-```
-
-Removing the `!` causes the write timer to be rescheduled when the queue *is*
-empty (an idle reschedule) rather than when it has items pending. Because the
-`select!` branch that fires on `write_timer` has a `if !queue.is_empty()` guard,
-actual message writes are still gated correctly. The only observable difference is
-an additional timer firing when the queue is empty, which triggers a no-op loop
-iteration — indistinguishable from the outside. Both branches satisfy the
-functional requirement; adding timing assertions would make the test suite fragile
-against scheduler jitter.
 
 ---
 

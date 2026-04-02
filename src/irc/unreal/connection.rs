@@ -7,8 +7,7 @@
 //! failure it emits `S2SEvent::LinkDown`, waits with full-jitter exponential
 //! backoff, and reconnects.
 
-use std::collections::VecDeque;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
 use tokio::sync::mpsc;
@@ -18,7 +17,6 @@ use crate::config::IrcConfig;
 
 use super::super::types::{S2SCommand, S2SEvent};
 use super::connect::{IrcReader, IrcWriter, connect};
-use super::rate_limiter::TokenBucket;
 use super::translation::{translate_inbound, translate_outbound};
 
 // ── Timing constants (overridden in tests) ─────────────────────────────────
@@ -315,8 +313,8 @@ async fn do_handshake(
 ///
 /// Handles:
 /// - Inbound lines → parse → translate to `S2SEvent` → send on `event_tx`.
-/// - Outbound `S2SCommand` → translate → rate-limit → write to wire.
-/// - Inbound `PING` → immediate `PONG` (bypasses rate limiter).
+/// - Outbound `S2SCommand` → translate → write to wire.
+/// - Inbound `PING` → immediate `PONG`.
 /// - Keepalive: send `PING` every `ping_interval`; bail if no `PONG` within
 ///   `pong_timeout`.
 ///
@@ -333,8 +331,6 @@ async fn run_session(
 ) -> anyhow::Result<()> {
     let ping_interval = timings.ping_interval;
     let pong_timeout = timings.pong_timeout;
-    let mut bucket = TokenBucket::default_irc();
-    let mut queue: VecDeque<IrcMessage> = VecDeque::new();
 
     let mut ping_tick = tokio::time::interval(ping_interval);
     // Consume the immediate first tick so we don't send a PING at t=0.
@@ -347,32 +343,7 @@ async fn run_session(
     let pong_sleep = tokio::time::sleep(FAR_FUTURE);
     tokio::pin!(pong_sleep);
 
-    // Write timer: reset when the queue becomes non-empty; fires when the
-    // next token is available.
-    let write_timer = tokio::time::sleep(FAR_FUTURE);
-    tokio::pin!(write_timer);
-
     loop {
-        // ── Drain queue ──────────────────────────────────────────────────
-        while !queue.is_empty() && bucket.try_consume(Instant::now()) {
-            let msg = queue.pop_front().unwrap();
-            writer.write_message(&msg).await.context("Write error")?;
-        }
-
-        // Schedule the next drain if there are still items in the queue.
-        // The `!` is load-bearing: only reschedule when the queue has items.
-        // Mutation testing flags this as "near-equivalent" because reversing it
-        // causes an idle busy-loop, but `try_consume` still gates actual writes
-        // so I/O behaviour is identical. The busy-loop behaviour is verified
-        // implicitly by the overall timing of `session_queued_messages_*`.
-        if !queue.is_empty() {
-            let delay = bucket.refill_delay(Instant::now());
-            write_timer
-                .as_mut()
-                .reset(tokio::time::Instant::now() + delay);
-        }
-
-        // ── Select ────────────────────────────────────────────────────────
         tokio::select! {
             // Inbound line from the uplink.
             result = reader.next_line() => {
@@ -390,7 +361,6 @@ async fn run_session(
 
                 match &msg.command {
                     IrcCommand::Ping { token } => {
-                        // Respond immediately, bypassing the rate limiter.
                         let pong = format!(":{our_sid} PONG {our_sid} :{token}\r\n");
                         writer.write_raw(&pong).await.context("Writing PONG")?;
                     }
@@ -422,15 +392,11 @@ async fn run_session(
                             .duration_since(UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs();
-                        let msgs = translate_outbound(&cmd, our_sid, hs.mtags_active, ts);
-                        queue.extend(msgs);
+                        for msg in translate_outbound(&cmd, our_sid, hs.mtags_active, ts) {
+                            writer.write_message(&msg).await.context("Write error")?;
+                        }
                     }
                 }
-            }
-
-            // Rate-limited queue drain: fires when the next token is available.
-            () = &mut write_timer, if !queue.is_empty() => {
-                // Token should now be available; loop back to drain at the top.
             }
 
             // Outgoing keepalive PING.
@@ -944,73 +910,6 @@ mod tests {
         assert!(
             msg.contains("timeout") || msg.contains("Ping"),
             "unexpected error message: {msg}"
-        );
-    }
-
-    /// All commands queued past the initial bucket capacity must be delivered.
-    ///
-    /// Sends BUCKET_CAPACITY + 1 = 11 commands. The first 10 drain immediately;
-    /// the 11th is held in the queue until a token is available. The test
-    /// verifies the drain-and-reschedule path (`if !queue.is_empty()`) works.
-    #[tokio::test]
-    async fn session_queued_messages_all_delivered_past_bucket_capacity() {
-        // One more than the bucket capacity (10).
-        let count = 11_usize;
-
-        let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(count + 1);
-        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
-
-        // Send all commands then hold cmd_tx alive so the session doesn't exit
-        // from cmd_rx closing — it will exit when the uplink closes the connection.
-        let cmd_task = tokio::spawn(async move {
-            for i in 0..count {
-                cmd_tx
-                    .send(S2SCommand::SendMessage {
-                        from_uid: "002AAAAAA".into(),
-                        target: "#test".into(),
-                        text: format!("msg{i}"),
-                        timestamp: None,
-                    })
-                    .await
-                    .unwrap();
-            }
-            cmd_tx // keep alive until task is joined
-        });
-
-        // Collect PRIVMSG lines until we have all of them, then close the connection.
-        let read_task = tokio::spawn(async move {
-            let mut reader = LineReader::new(uplink_r);
-            let mut received = 0_usize;
-            while let Ok(Some(line)) = reader.next_line().await {
-                if line.contains("PRIVMSG") {
-                    received += 1;
-                    if received >= count {
-                        break;
-                    }
-                }
-            }
-            drop(reader); // drops uplink_r (ReadHalf)
-            drop(uplink_w); // drops uplink_w (WriteHalf) → both halves gone → EOF to client_r
-            received
-        });
-
-        let _ = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            SessionTimings::production(),
-        )
-        .await;
-
-        let _ = cmd_task.await.unwrap(); // drops cmd_tx
-        let delivered = read_task.await.unwrap();
-        assert_eq!(
-            delivered, count,
-            "expected {count} PRIVMSG lines, got {delivered}"
         );
     }
 

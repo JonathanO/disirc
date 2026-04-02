@@ -6,20 +6,6 @@
 # patterns within otherwise-testable functions.
 
 exclude_re = [
-    # run_session: deleting `!` in `!queue.is_empty()` causes a busy-loop but
-    # produces identical I/O — the loop just sends zero messages instead of skipping.
-    # Performance-only concern; token bucket still gates actual writes.
-    "delete ! in run_session",
-
-    # run_session + to - in timer reset: sets the timer in the past, causing
-    # immediate re-fires. Creates a busy-loop but token bucket still gates
-    # actual writes, so I/O behaviour is identical. Performance-only concern.
-    "replace \\+ with - in run_session",
-
-    # INTENTS const: the four gateway intent flags are non-overlapping single-bit
-    # values, so `A | B == A ^ B` when `A & B == 0`. Equivalent mutant.
-    "replace \\| with \\^ in INTENTS",
-
     # protect_code_spans: replacing `t <= s` with `false` makes the code always
     # pick single-backtick mode when both ``` and ` start at the same position.
     # This changes internal delimiter choice but not the output: the single-`

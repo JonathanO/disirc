@@ -49,11 +49,11 @@ mutants-all:
 
 # Start a local UnrealIRCd in the background
 ircd-start:
-    docker run -d --name unrealircd -p 6667:6667 -p 6900:6900 ghcr.io/jonathano/disirc-unrealircd-test:latest
+    docker run -d --name unrealircd -p 6667:6667 -p 6900:6900 -v {{justfile_directory()}}/tests/fixtures/unrealircd.conf:/home/ircd/unrealircd/conf/unrealircd.conf:ro ghcr.io/jonathano/disirc-unrealircd-test:latest
 
 # Start a local UnrealIRCd in the foreground (Ctrl+C to stop)
 ircd:
-    docker run --rm --name unrealircd -p 6667:6667 -p 6900:6900 ghcr.io/jonathano/disirc-unrealircd-test:latest
+    docker run --rm --name unrealircd -p 6667:6667 -p 6900:6900 -v {{justfile_directory()}}/tests/fixtures/unrealircd.conf:/home/ircd/unrealircd/conf/unrealircd.conf:ro ghcr.io/jonathano/disirc-unrealircd-test:latest
 
 # Stop the local UnrealIRCd
 ircd-stop:

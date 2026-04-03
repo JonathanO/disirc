@@ -45,21 +45,21 @@ async fn main() {
     let control_rx = spawn_signal_handler();
 
     // --- Spawn IRC connection task ---
-    {
+    let irc_handle = {
         let irc_config = cfg.irc.clone();
         tokio::spawn(async move {
             run_connection(&irc_config, irc_cmd_rx, irc_event_tx).await;
-        });
-    }
+        })
+    };
 
     // --- Spawn Discord connection task ---
-    {
+    let discord_handle = {
         let discord_config = cfg.discord.clone();
         let bridges = cfg.bridges.clone();
         tokio::spawn(async move {
             run_discord(&discord_config, &bridges, discord_event_tx, discord_cmd_rx).await;
-        });
-    }
+        })
+    };
 
     // --- Bridge loop (runs until both channels close or a signal fires) ---
     run_bridge(
@@ -72,6 +72,19 @@ async fn main() {
         control_rx,
     )
     .await;
+
+    // Check if spawned tasks panicked — report the cause rather than
+    // silently exiting when a channel closes.
+    for (name, handle) in [("IRC", irc_handle), ("Discord", discord_handle)] {
+        if !handle.is_finished() {
+            continue;
+        }
+        match handle.await {
+            Err(e) if e.is_panic() => tracing::error!("{name} task panicked: {e}"),
+            Err(e) => tracing::error!("{name} task failed: {e}"),
+            Ok(()) => {}
+        }
+    }
 
     tracing::info!("disirc shutting down");
 }

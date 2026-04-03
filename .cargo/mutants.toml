@@ -12,14 +12,4 @@ exclude_re = [
     # path extracts a smaller span, and the remaining backticks are re-parsed on
     # the next iteration, still protecting all code content.
     "replace match guard t <= s with false in protect_code_spans",
-
-    # process_discord_event: `is_link_up() && uplink_burst_done` — LinkDown
-    # always resets both flags together, so uplink_burst_done is never true
-    # when is_link_up() is false. The && vs || mutation is unreachable.
-    "replace && with \\|\\| in BridgeState::process_discord_event",
-
-    # handle_irc_event kill_cooldowns.retain: housekeeping to bound map size.
-    # The reintroduce gate (is_some_and) runs before retain and makes the
-    # decision; mutating retain's comparator cannot change observable behavior.
-    "orchestrator.rs:211:\\d+: replace <",
 ]

@@ -276,12 +276,9 @@ pub fn apply_discord_event(
             guild_id: _,
         } => {
             discord_state.display_names.remove(user_id);
-            // Look up the UID before quitting (quit removes all state).
-            let uid = pm.get_by_discord_id(*user_id).map(|s| s.uid.clone());
-            if let Some(uid) = uid {
-                pm.quit(*user_id, "Left Discord");
+            if let Some(state) = pm.quit(*user_id, "Left Discord") {
                 return vec![S2SCommand::QuitUser {
-                    uid,
+                    uid: state.uid,
                     reason: "Left Discord".to_string(),
                 }];
             }
@@ -348,33 +345,25 @@ pub(crate) fn introduce_pseudoclient(
 ) -> Vec<S2SCommand> {
     let mut cmds = Vec::new();
 
-    if pm.get_by_discord_id(user_id).is_none() {
-        // Not yet introduced — call pm.introduce() to allocate uid/nick.
-        if pm
-            .introduce(user_id, display_name, display_name, channels, now_ts)
-            .is_some()
-        {
-            // Read back the allocated state.
-            let (uid, nick, chans) = {
-                let s = pm.get_by_discord_id(user_id).expect("just introduced");
-                (s.uid.clone(), s.nick.clone(), s.channels.clone())
-            };
-            let host = format!("{}.{}", sanitize_nick(display_name), pm.host_suffix());
-            cmds.push(S2SCommand::IntroduceUser {
+    if let Some(s) = pm.introduce(user_id, display_name, display_name, channels, now_ts) {
+        let uid = s.uid.clone();
+        let nick = s.nick.clone();
+        let chans = s.channels.clone();
+        let host = format!("{}.{}", sanitize_nick(display_name), pm.host_suffix());
+        cmds.push(S2SCommand::IntroduceUser {
+            uid: uid.clone(),
+            nick,
+            ident: pm.ident().to_string(),
+            host,
+            realname: display_name.to_string(),
+        });
+        for channel in &chans {
+            let ts = irc_state.ts_for_channel(channel).unwrap_or(now_ts);
+            cmds.push(S2SCommand::JoinChannel {
                 uid: uid.clone(),
-                nick,
-                ident: pm.ident().to_string(),
-                host,
-                realname: display_name.to_string(),
+                channel: channel.clone(),
+                ts,
             });
-            for channel in &chans {
-                let ts = irc_state.ts_for_channel(channel).unwrap_or(now_ts);
-                cmds.push(S2SCommand::JoinChannel {
-                    uid: uid.clone(),
-                    channel: channel.clone(),
-                    ts,
-                });
-            }
         }
     }
 

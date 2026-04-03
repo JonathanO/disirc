@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams, UidParams};
+use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams};
 
 // ---------------------------------------------------------------------------
 // Nick sanitization
@@ -219,8 +219,6 @@ pub struct PseudoclientManager {
     sid: String,
     /// Ident for all pseudoclients (from config).
     ident: String,
-    /// Host suffix for all pseudoclients (from config).
-    host_suffix: String,
     /// UID generator.
     uid_generator: UidGenerator,
     /// Discord user ID → state.
@@ -236,11 +234,10 @@ pub struct PseudoclientManager {
 impl PseudoclientManager {
     /// Create a new manager with the given config values.
     #[must_use]
-    pub fn new(sid: &str, ident: &str, host_suffix: &str) -> Self {
+    pub fn new(sid: &str, ident: &str) -> Self {
         Self {
             sid: sid.to_string(),
             ident: ident.to_string(),
-            host_suffix: host_suffix.to_string(),
             uid_generator: UidGenerator::new(sid),
             by_discord_id: HashMap::new(),
             nick_to_discord: HashMap::new(),
@@ -261,8 +258,8 @@ impl PseudoclientManager {
 
     /// Introduce a pseudoclient for a Discord user.
     ///
-    /// Returns the IRC messages to send, or `None` if the user already
-    /// has a pseudoclient (in which case, use `join_channel` to add channels).
+    /// Returns the allocated state (uid, nick, channels), or `None` if the
+    /// user already has a pseudoclient (use `join_channel` to add channels).
     pub fn introduce(
         &mut self,
         discord_user_id: u64,
@@ -270,7 +267,7 @@ impl PseudoclientManager {
         display_name: &str,
         channels: &[String],
         timestamp: u64,
-    ) -> Option<Vec<IrcMessage>> {
+    ) -> Option<&PseudoclientState> {
         if self.by_discord_id.contains_key(&discord_user_id) {
             return None;
         }
@@ -281,45 +278,7 @@ impl PseudoclientManager {
             .to_string();
         let base_nick = sanitize_nick(username);
         let nick = resolve_nick(&base_nick, discord_user_id, &uid, &self.known_nicks);
-        let host = format!("{}.{}", sanitize_nick(username), self.host_suffix);
 
-        // UID message
-        let uid_msg = IrcMessage {
-            tags: vec![],
-            prefix: Some(self.sid.clone()),
-            command: IrcCommand::Uid(UidParams {
-                nick: nick.clone(),
-                hop_count: 1,
-                timestamp,
-                ident: self.ident.clone(),
-                host: host.clone(),
-                uid: uid.clone(),
-                services_stamp: "0".to_string(),
-                umodes: "+i".to_string(),
-                vhost: "*".to_string(),
-                cloaked_host: "*".to_string(),
-                ip: "*".to_string(),
-                realname: display_name.to_string(),
-            }),
-        };
-
-        let mut messages = vec![uid_msg];
-
-        // SJOIN messages
-        for channel in channels {
-            messages.push(IrcMessage {
-                tags: vec![],
-                prefix: Some(self.sid.clone()),
-                command: IrcCommand::Sjoin(SjoinParams {
-                    timestamp,
-                    channel: channel.clone(),
-                    modes: "+".to_string(),
-                    members: vec![uid.clone()],
-                }),
-            });
-        }
-
-        // Update state
         let state = PseudoclientState {
             discord_user_id,
             uid: uid.clone(),
@@ -334,26 +293,22 @@ impl PseudoclientManager {
         self.uid_to_discord.insert(uid, discord_user_id);
         self.by_discord_id.insert(discord_user_id, state);
 
-        Some(messages)
+        // Return a reference to the just-inserted state.
+        let _ = timestamp; // preserved for API compatibility; callers use it for S2SCommand timestamps
+        self.by_discord_id.get(&discord_user_id)
     }
 
-    /// Generate a QUIT message for a pseudoclient and remove all state.
+    /// Remove a pseudoclient and all associated state.
     ///
-    /// Returns the IRC message, or `None` if no pseudoclient exists.
-    pub fn quit(&mut self, discord_user_id: u64, reason: &str) -> Option<IrcMessage> {
+    /// Returns the removed state, or `None` if no pseudoclient exists for
+    /// this Discord user.
+    pub fn quit(&mut self, discord_user_id: u64, _reason: &str) -> Option<PseudoclientState> {
         let state = self.by_discord_id.remove(&discord_user_id)?;
         self.known_nicks.remove(&state.nick);
         self.nick_to_discord
             .remove(&state.nick.to_ascii_lowercase());
         self.uid_to_discord.remove(&state.uid);
-
-        Some(IrcMessage {
-            tags: vec![],
-            prefix: Some(state.uid),
-            command: IrcCommand::Quit {
-                reason: reason.to_string(),
-            },
-        })
+        Some(state)
     }
 
     /// Join an existing pseudoclient to an additional channel.
@@ -493,6 +448,16 @@ impl PseudoclientManager {
         self.uid_generator.reset();
     }
 
+    /// Clear all registered external nicks. Called on link loss — the nicks
+    /// will be re-registered from the burst on the next connection.
+    pub fn clear_external_nicks(&mut self) {
+        self.known_nicks = NickSet::new();
+        // Re-add our own pseudoclient nicks so they're still tracked.
+        for state in self.by_discord_id.values() {
+            self.known_nicks.insert(&state.nick);
+        }
+    }
+
     /// Number of active pseudoclients.
     #[must_use]
     pub fn count(&self) -> usize {
@@ -516,12 +481,6 @@ impl PseudoclientManager {
     #[must_use]
     pub fn ident(&self) -> &str {
         &self.ident
-    }
-
-    /// Return the host suffix used to build pseudoclient hostnames.
-    #[must_use]
-    pub fn host_suffix(&self) -> &str {
-        &self.host_suffix
     }
 
     /// Iterate over all active pseudoclient states.
@@ -780,53 +739,32 @@ mod tests {
     // -------------------------------------------------------------------
 
     fn make_manager() -> PseudoclientManager {
-        PseudoclientManager::new("0D0", "discord", "discord.bridge")
+        PseudoclientManager::new("0D0", "discord")
     }
 
     #[test]
-    fn introduce_generates_uid_and_sjoin() {
+    fn introduce_allocates_state() {
         let mut mgr = make_manager();
-        let messages = mgr
+        let state = mgr
             .introduce(100, "alice", "Alice Display", &["#test".to_string()], 1000)
-            .unwrap();
+            .expect("should introduce");
 
-        assert_eq!(messages.len(), 2);
-
-        // First message: UID
-        assert_eq!(messages[0].prefix, Some("0D0".to_string()));
-        let IrcCommand::Uid(ref p) = messages[0].command else {
-            panic!("expected Uid, got {:?}", messages[0].command);
-        };
-        assert_eq!(p.nick, "alice");
-        assert_eq!(p.hop_count, 1);
-        assert_eq!(p.ident, "discord");
-        assert_eq!(p.umodes, "+i");
-        assert_eq!(p.realname, "Alice Display");
-
-        // Second message: SJOIN
-        assert_eq!(messages[1].prefix, Some("0D0".to_string()));
-        let IrcCommand::Sjoin(ref s) = messages[1].command else {
-            panic!("expected Sjoin, got {:?}", messages[1].command);
-        };
-        assert_eq!(s.channel, "#test");
-        assert_eq!(s.timestamp, 1000);
-        assert_eq!(s.members.len(), 1);
+        assert_eq!(state.nick, "alice");
+        assert_eq!(state.display_name, "Alice Display");
+        assert_eq!(state.discord_user_id, 100);
+        assert_eq!(state.channels, vec!["#test".to_string()]);
+        assert!(!state.uid.is_empty());
     }
 
     #[test]
     fn introduce_multiple_channels() {
         let mut mgr = make_manager();
         let channels = vec!["#a".to_string(), "#b".to_string(), "#c".to_string()];
-        let messages = mgr
+        let state = mgr
             .introduce(100, "alice", "Alice", &channels, 1000)
-            .unwrap();
+            .expect("should introduce");
 
-        // 1 UID + 3 SJOIN
-        assert_eq!(messages.len(), 4);
-        assert!(matches!(messages[0].command, IrcCommand::Uid(_)));
-        assert!(matches!(messages[1].command, IrcCommand::Sjoin(_)));
-        assert!(matches!(messages[2].command, IrcCommand::Sjoin(_)));
-        assert!(matches!(messages[3].command, IrcCommand::Sjoin(_)));
+        assert_eq!(state.channels, channels);
     }
 
     #[test]
@@ -838,10 +776,17 @@ mod tests {
     }
 
     #[test]
+    fn is_empty_true_when_no_pseudoclients() {
+        let mgr = make_manager();
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
     fn introduce_updates_state_maps() {
         let mut mgr = make_manager();
         mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
 
+        assert!(!mgr.is_empty());
         assert!(mgr.get_by_discord_id(100).is_some());
         assert!(mgr.get_by_nick("alice").is_some());
         assert!(mgr.get_by_nick("Alice").is_some()); // case-insensitive
@@ -852,15 +797,11 @@ mod tests {
     fn introduce_with_collision() {
         let mut mgr = make_manager();
         mgr.register_external_nick("alice");
-        let messages = mgr
+        let state = mgr
             .introduce(100, "alice", "Alice", &["#test".to_string()], 1000)
-            .unwrap();
+            .expect("should introduce");
 
-        // Nick should be alice_, not alice
-        let IrcCommand::Uid(ref p) = messages[0].command else {
-            panic!("expected Uid");
-        };
-        assert_eq!(p.nick, "alice_");
+        assert_eq!(state.nick, "alice_");
         assert!(mgr.get_by_nick("alice_").is_some());
     }
 
@@ -873,14 +814,9 @@ mod tests {
         let mut mgr = make_manager();
         mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
         let uid = mgr.get_by_discord_id(100).unwrap().uid.clone();
-        let msg = mgr.quit(100, "Disconnected from Discord").unwrap();
-        assert_eq!(msg.prefix, Some(uid));
-        assert_eq!(
-            msg.command,
-            IrcCommand::Quit {
-                reason: "Disconnected from Discord".to_string()
-            }
-        );
+        let removed = mgr.quit(100, "Disconnected from Discord").unwrap();
+        assert_eq!(removed.uid, uid);
+        assert_eq!(removed.discord_user_id, 100);
     }
 
     #[test]
@@ -1008,24 +944,18 @@ mod tests {
         let mut mgr = make_manager();
         mgr.register_external_nick("bob");
         // bob is taken — collision
-        let messages = mgr
+        let state = mgr
             .introduce(100, "bob", "Bob", &["#test".to_string()], 1000)
-            .unwrap();
-        let IrcCommand::Uid(ref p) = messages[0].command else {
-            panic!("expected Uid");
-        };
-        assert_eq!(p.nick, "bob_");
+            .expect("should introduce");
+        assert_eq!(state.nick, "bob_");
 
         // Unregister bob — now bob_ pseudoclient exists, but bob is free
         mgr.unregister_external_nick("bob");
         // Introduce another user named bob — should get "bob" this time
-        let messages2 = mgr
+        let state2 = mgr
             .introduce(200, "bob", "Bob2", &["#test".to_string()], 1001)
-            .unwrap();
-        let IrcCommand::Uid(ref p2) = messages2[0].command else {
-            panic!("expected Uid");
-        };
-        assert_eq!(p2.nick, "bob");
+            .expect("should introduce");
+        assert_eq!(state2.nick, "bob");
     }
 
     // -------------------------------------------------------------------

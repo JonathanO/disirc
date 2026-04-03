@@ -10,7 +10,7 @@ A pseudoclient is a virtual IRC user introduced by `disirc` under its own SID. T
 |-----------|-------|
 | Nick | Discord username, sanitized (see below) |
 | Ident | `pseudoclients.ident` from config (default: `discord`) |
-| Host | `<sanitized-username>.<pseudoclients.host_suffix>` |
+| Host | `<discord_user_id>.discord.com` |
 | Realname (GECOS) | Discord display name (may differ from username) |
 | UID | `<our_sid>` + 6 alphanumeric chars, unique and stable per Discord user ID for the session |
 | Modes | `+i` (invisible) by default |

@@ -232,7 +232,7 @@ The UID wire parameters for pseudoclients are:
 | hopcount | `1` |
 | timestamp | Unix timestamp at introduction time |
 | ident | `pseudoclients.ident` from config |
-| host | `<sanitized_nick>.<host_suffix>` from config |
+| host | `<discord_user_id>.discord.com` |
 | servicestamp | `0` |
 | umodes | `+i` |
 | virthost | `*` |

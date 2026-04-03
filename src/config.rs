@@ -108,8 +108,6 @@ fn default_connect_timeout() -> u64 {
 #[derive(Debug, Deserialize, PartialEq, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct PseudoclientConfig {
-    #[serde(default = "default_host_suffix")]
-    pub host_suffix: String,
     #[serde(default = "default_ident")]
     pub ident: String,
     /// Re-introduce pseudoclients immediately after they are killed by an
@@ -395,9 +393,6 @@ pub fn non_reloadable_changes(old: &Config, new: &Config) -> Vec<&'static str> {
     if old.irc.description != new.irc.description {
         changed.push("irc.description");
     }
-    if old.pseudoclients.host_suffix != new.pseudoclients.host_suffix {
-        changed.push("pseudoclients.host_suffix");
-    }
     if old.pseudoclients.ident != new.pseudoclients.ident {
         changed.push("pseudoclients.ident");
     }
@@ -436,10 +431,6 @@ fn default_description() -> String {
     "Discord bridge".to_string()
 }
 
-fn default_host_suffix() -> String {
-    "discord".to_string()
-}
-
 fn default_ident() -> String {
     "discord".to_string()
 }
@@ -447,7 +438,6 @@ fn default_ident() -> String {
 impl Default for PseudoclientConfig {
     fn default() -> Self {
         Self {
-            host_suffix: default_host_suffix(),
             ident: default_ident(),
             reintroduce_on_kill: false,
         }
@@ -495,7 +485,6 @@ mod tests {
         description = "My bridge"
 
         [pseudoclients]
-        host_suffix = "users.example.net"
         ident = "bridge"
 
         [[bridge]]
@@ -528,8 +517,9 @@ mod tests {
         assert_eq!(cfg.irc.port, 6900);
         assert!(cfg.irc.tls);
         assert_eq!(cfg.irc.description, "Discord bridge");
-        assert_eq!(cfg.pseudoclients.host_suffix, "discord");
         assert_eq!(cfg.pseudoclients.ident, "discord");
+        assert_eq!(cfg.irc.connect_timeout, 15);
+        assert!(cfg.formatting.irc_nick_colon_mention);
     }
 
     #[test]
@@ -538,7 +528,6 @@ mod tests {
         assert_eq!(cfg.irc.port, 7000);
         assert!(!cfg.irc.tls);
         assert_eq!(cfg.irc.description, "My bridge");
-        assert_eq!(cfg.pseudoclients.host_suffix, "users.example.net");
         assert_eq!(cfg.pseudoclients.ident, "bridge");
         assert_eq!(cfg.bridges.len(), 2);
         assert_eq!(
@@ -883,7 +872,6 @@ mod tests {
         assert!(changes.contains(&"irc.tls"));
         assert!(changes.contains(&"irc.description"));
         assert!(changes.contains(&"irc.sid"));
-        assert!(changes.contains(&"pseudoclients.host_suffix"));
         assert!(changes.contains(&"pseudoclients.ident"));
     }
 
@@ -1131,6 +1119,32 @@ mod tests {
         assert!(
             cfg.formatting.irc_nick_colon_mention,
             "irc_nick_colon_mention should default to true"
+        );
+    }
+
+    #[test]
+    fn formatting_field_default_when_section_present_but_field_omitted() {
+        let toml = r##"
+            [discord]
+            token = "Bot abc123"
+
+            [irc]
+            uplink = "irc.example.net"
+            link_name = "discord.example.net"
+            link_password = "secret"
+            sid = "0D0"
+
+            [formatting]
+            dm_bridging = true
+
+            [[bridge]]
+            discord_channel_id = "123456789012345678"
+            irc_channel = "#general"
+        "##;
+        let cfg = parse(toml);
+        assert!(
+            cfg.formatting.irc_nick_colon_mention,
+            "irc_nick_colon_mention should default to true even when [formatting] section exists"
         );
     }
 

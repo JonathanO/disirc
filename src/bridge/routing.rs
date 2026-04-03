@@ -1,7 +1,7 @@
 use crate::discord::DiscordCommand;
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::S2SCommand;
-use crate::pseudoclients::{PseudoclientManager, sanitize_nick};
+use crate::pseudoclients::PseudoclientManager;
 
 use super::map::BridgeMap;
 use super::relay::{discord_to_irc_commands, irc_to_discord_command};
@@ -23,11 +23,7 @@ pub fn produce_burst_commands(
 ) -> Vec<S2SCommand> {
     let mut cmds = Vec::new();
     for state in pm.iter_states() {
-        let host = format!(
-            "{}.{}",
-            sanitize_nick(&state.display_name),
-            pm.host_suffix()
-        );
+        let host = format!("{}.discord.com", state.discord_user_id);
         cmds.push(S2SCommand::IntroduceUser {
             uid: state.uid.clone(),
             nick: state.nick.clone(),
@@ -275,21 +271,21 @@ pub fn route_discord_to_irc(
             .unwrap_or_else(|| author_name.to_string());
         let channels = vec![irc_channel.clone()];
         let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
-        pm.introduce(author_id, &display_name, &display_name, &channels, ts);
-
-        // Emit the S2S commands so the IRC server learns about this user.
-        if let Some(state) = pm.get_by_discord_id(author_id) {
-            let host = format!("{}.{}", sanitize_nick(&display_name), pm.host_suffix());
+        if let Some(state) = pm.introduce(author_id, &display_name, &display_name, &channels, ts) {
+            let uid = state.uid.clone();
+            let nick = state.nick.clone();
+            let chans = state.channels.clone();
+            let host = format!("{author_id}.discord.com");
             cmds.push(S2SCommand::IntroduceUser {
-                uid: state.uid.clone(),
-                nick: state.nick.clone(),
+                uid: uid.clone(),
+                nick,
                 ident: pm.ident().to_string(),
                 host,
                 realname: display_name,
             });
-            for channel in &state.channels {
+            for channel in &chans {
                 cmds.push(S2SCommand::JoinChannel {
-                    uid: state.uid.clone(),
+                    uid: uid.clone(),
                     channel: channel.clone(),
                     ts,
                 });
@@ -374,7 +370,7 @@ mod tests {
     }
 
     fn make_pm() -> PseudoclientManager {
-        PseudoclientManager::new("001", "bridge", "users.example.com")
+        PseudoclientManager::new("001", "bridge")
     }
 
     fn introduced(uid: &str, nick: &str) -> S2SEvent {
@@ -421,17 +417,14 @@ mod tests {
     }
 
     #[test]
-    fn burst_introduce_uses_configured_ident_and_host_suffix() {
-        let mut pm = make_pm(); // ident="bridge", host_suffix="users.example.com"
+    fn burst_introduce_uses_configured_ident_and_user_id_host() {
+        let mut pm = make_pm(); // ident="bridge"
         pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
         let irc = IrcState::default();
         let cmds = produce_burst_commands(&pm, &irc, 1_000);
         if let S2SCommand::IntroduceUser { ident, host, .. } = &cmds[0] {
             assert_eq!(ident, "bridge");
-            assert!(
-                host.ends_with(".users.example.com"),
-                "host should end with configured host_suffix, got: {host}"
-            );
+            assert_eq!(host, "42.discord.com");
         } else {
             panic!("expected IntroduceUser as first command");
         }

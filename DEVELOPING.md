@@ -196,7 +196,6 @@ link_password = "testpassword"
 sid = "002"
 
 [pseudoclients]
-host_suffix = "discord.test.net"
 ident = "discord"
 
 [formatting]

@@ -363,6 +363,12 @@ impl EventHandler for DiscordHandler {
     }
 
     async fn presence_update(&self, _ctx: Context, new_data: Presence) {
+        tracing::debug!(
+            user_id = new_data.user.id.get(),
+            guild_id = ?new_data.guild_id.map(GuildId::get),
+            status = ?new_data.status,
+            "presence_update received"
+        );
         if let Some(event) = presence_event(
             new_data.user.id.get(),
             new_data.guild_id.map(GuildId::get),

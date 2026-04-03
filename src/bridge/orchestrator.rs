@@ -121,6 +121,11 @@ impl BridgeState {
                 // the uplink's burst completes).
                 output.irc_commands.push(S2SCommand::BurstComplete);
             }
+            S2SEvent::LinkDown { .. } => {
+                self.uplink_burst_done = false;
+                self.deferred_discord_events.clear();
+                self.pm.clear_external_nicks();
+            }
             S2SEvent::BurstComplete => {
                 self.uplink_burst_done = true;
                 // Replay buffered Discord events now that all IRC nicks are
@@ -660,5 +665,103 @@ mod tests {
         let resolver = BridgeDiscordResolver { discord_state: &ds };
         assert_eq!(resolver.resolve_user("999"), None);
         assert_eq!(resolver.resolve_user("notanumber"), None);
+    }
+
+    // --- LinkDown recovery ---
+
+    /// Deferred Discord events from a previous connection must be discarded
+    /// on LinkDown.  If they survive, the next BurstComplete would replay
+    /// stale events from a connection that no longer exists.
+    #[test]
+    fn link_down_clears_deferred_discord_events() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // LinkUp → buffer a Discord event during burst.
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_discord_event(
+            DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 7001,
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+        assert!(
+            !state.deferred_discord_events.is_empty(),
+            "event should be buffered during burst"
+        );
+
+        // Link drops before BurstComplete.
+        state.handle_irc_event(
+            &S2SEvent::LinkDown {
+                reason: "connection lost".into(),
+            },
+            ts,
+        );
+
+        assert!(
+            state.deferred_discord_events.is_empty(),
+            "deferred events must be cleared on LinkDown"
+        );
+    }
+
+    /// External nicks (known_nicks) from a previous connection must be cleared
+    /// on LinkDown.  If they survive, pseudoclient nick collision avoidance
+    /// would incorrectly suffix nicks for users who quit while the link was
+    /// down.
+    #[test]
+    fn link_down_clears_external_nicks() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Set up: link up, burst with IRC user "alice", burst complete.
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(
+            &S2SEvent::UserIntroduced {
+                uid: "001ALICE1".into(),
+                nick: "alice".into(),
+                server_sid: "001".into(),
+                realname: "Alice".into(),
+                host: "example.com".into(),
+                ident: "alice".into(),
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        // "alice" is now a known external nick — pseudoclient would be suffixed.
+        state
+            .pm
+            .introduce(42, "alice", "Alice", &["#test".to_string()], ts);
+        let suffixed = state.pm.get_by_discord_id(42).unwrap().nick.clone();
+        assert_ne!(suffixed, "alice", "should be suffixed before LinkDown");
+        // Clean up the test introduction.
+        state.pm.quit(42, "test");
+
+        // Link drops — "alice" may have quit while we were disconnected.
+        state.handle_irc_event(
+            &S2SEvent::LinkDown {
+                reason: "connection lost".into(),
+            },
+            ts,
+        );
+
+        // After LinkDown, "alice" should no longer be known.
+        // A new pseudoclient introduction should get the exact nick.
+        state
+            .pm
+            .introduce(43, "alice", "Alice", &["#test".to_string()], ts);
+        let nick = state.pm.get_by_discord_id(43).unwrap().nick.clone();
+        assert_eq!(
+            nick, "alice",
+            "after LinkDown, external nicks should be cleared; got: {nick}"
+        );
     }
 }

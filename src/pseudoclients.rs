@@ -493,6 +493,16 @@ impl PseudoclientManager {
         self.uid_generator.reset();
     }
 
+    /// Clear all registered external nicks. Called on link loss — the nicks
+    /// will be re-registered from the burst on the next connection.
+    pub fn clear_external_nicks(&mut self) {
+        self.known_nicks = NickSet::new();
+        // Re-add our own pseudoclient nicks so they're still tracked.
+        for state in self.by_discord_id.values() {
+            self.known_nicks.insert(&state.nick);
+        }
+    }
+
     /// Number of active pseudoclients.
     #[must_use]
     pub fn count(&self) -> usize {

@@ -166,7 +166,7 @@ pub fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
         // do not treat it as an error — live networks send many S2S commands
         // (MODE, TOPIC, TKL, NETINFO, …) that don't map to an S2SEvent.
         IrcCommand::Raw { command, .. } => {
-            tracing::trace!(command, "Unrecognised inbound command — ignored");
+            tracing::debug!(command, "Unrecognised inbound command — ignored");
             None
         }
     }

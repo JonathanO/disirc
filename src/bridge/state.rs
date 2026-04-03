@@ -1041,6 +1041,34 @@ mod tests {
     }
 
     #[test]
+    fn member_snapshot_dnd_member_gets_set_away() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                members: vec![member(10, "alice", DiscordPresence::DoNotDisturb)],
+            },
+            1000,
+        );
+
+        assert!(
+            cmds.iter().any(
+                |c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Do Not Disturb")
+            ),
+            "DnD member should get SetAway"
+        );
+    }
+
+    #[test]
     fn member_snapshot_caches_display_names() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();

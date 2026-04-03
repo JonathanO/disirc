@@ -241,6 +241,8 @@ Every spec that draws on external sources must include a `## References` section
 
 Do not write spec behaviour from memory alone when a primary source exists and is fetchable.
 
+The same applies to **tool and library recommendations**: always provide links to the project/docs, and do not claim specific projects use a tool without verifying (e.g. by checking their repo).
+
 ## Security
 
 - Never commit `config.toml` containing real tokens. Use `config.example.toml` for examples.

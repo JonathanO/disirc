@@ -159,6 +159,96 @@ cargo mutants --file src/<module>.rs
 
 See `CLAUDE.md` section "Closing out a spec" for the full policy.
 
+## Local development with UnrealIRCd
+
+For manual testing during development, you can run UnrealIRCd in Docker and connect the bridge to it. This uses the same test config as the L3 tests.
+
+### Start UnrealIRCd
+
+```sh
+docker run -d --name unrealircd \
+  -p 6667:6667 \
+  -p 6900:6900 \
+  ghcr.io/jonathano/disirc-unrealircd-test:latest
+```
+
+This starts UnrealIRCd with:
+- **Port 6667** — IRC client connections (connect with any IRC client)
+- **Port 6900** — S2S link (the bridge connects here)
+- **Server name**: `irc.test.net`, **SID**: `001`
+- **S2S link password**: `testpassword` (for link block `bridge.test.net`)
+- **Oper account**: `test` / `test` (netadmin)
+
+### Configure disirc
+
+Create a `config.toml` for local development:
+
+```toml
+[discord]
+token = "Bot YOUR_TOKEN_HERE"
+
+[irc]
+uplink = "localhost"
+port = 6900
+tls = false
+link_name = "bridge.test.net"
+link_password = "testpassword"
+sid = "002"
+
+[pseudoclients]
+host_suffix = "discord.test.net"
+ident = "discord"
+
+[formatting]
+# irc_nick_colon_mention = true
+# dm_bridging = false
+
+[[bridge]]
+discord_channel_id = "YOUR_CHANNEL_ID"
+irc_channel = "#general"
+# webhook_url = "https://discord.com/api/webhooks/..."
+```
+
+### Run the bridge
+
+```sh
+RUST_LOG=disirc=debug cargo run
+```
+
+### Connect an IRC client
+
+Connect any IRC client (e.g. irssi, weechat, HexChat) to `localhost:6667`. Join the bridged channel (e.g. `#general`). Messages sent from Discord should appear from pseudoclients, and messages sent from IRC should appear in Discord.
+
+### Verify the S2S link
+
+From your IRC client:
+
+```
+/links
+```
+
+You should see both `irc.test.net` and `bridge.test.net`. If only `irc.test.net` appears, the bridge hasn't connected or the handshake failed — check the bridge logs.
+
+### Stop and clean up
+
+```sh
+docker stop unrealircd && docker rm unrealircd
+```
+
+### Custom UnrealIRCd config
+
+The default config is baked into the Docker image. To use a custom config (e.g. to add more channels or link blocks), mount it:
+
+```sh
+docker run -d --name unrealircd \
+  -p 6667:6667 \
+  -p 6900:6900 \
+  -v $(pwd)/tests/fixtures/unrealircd.conf:/home/ircd/unrealircd/conf/unrealircd.conf:ro \
+  ghcr.io/jonathano/disirc-unrealircd-test:latest
+```
+
+> **Note:** The image runs `chown` on the conf directory at startup, so bind-mounted configs work correctly.
+
 ## End-to-end tests
 
 ### Layer 3: Real UnrealIRCd, mocked Discord

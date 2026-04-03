@@ -238,6 +238,8 @@ pub fn apply_discord_event(
                 .cloned()
                 .unwrap_or_default();
             let mut cmds = Vec::new();
+            let mut introduced = 0u32;
+            let mut cached_only = 0u32;
             for member in members {
                 // Cache display name for all members so PresenceUpdated can
                 // introduce them later when they come online.
@@ -245,8 +247,10 @@ pub fn apply_discord_event(
                     .display_names
                     .insert(member.user_id, member.display_name.clone());
                 if !member.presence.is_non_offline() {
+                    cached_only += 1;
                     continue;
                 }
+                introduced += 1;
                 cmds.extend(introduce_pseudoclient(
                     pm,
                     irc_state,
@@ -257,6 +261,13 @@ pub fn apply_discord_event(
                     now_ts,
                 ));
             }
+            tracing::debug!(
+                guild_id,
+                introduced,
+                cached_only,
+                total = members.len(),
+                "MemberSnapshot processed"
+            );
             cmds
         }
 
@@ -265,7 +276,7 @@ pub fn apply_discord_event(
             guild_id: _,
             display_name,
         } => {
-            // Cache the display name; introduction is deferred to PresenceUpdated.
+            tracing::debug!(user_id, %display_name, "MemberAdded — cached display name");
             discord_state
                 .display_names
                 .insert(*user_id, display_name.clone());
@@ -278,11 +289,13 @@ pub fn apply_discord_event(
         } => {
             discord_state.display_names.remove(user_id);
             if let Some(state) = pm.quit(*user_id, "Left Discord") {
+                tracing::debug!(user_id, uid = %state.uid, "MemberRemoved — quitting pseudoclient");
                 return vec![S2SCommand::QuitUser {
                     uid: state.uid,
                     reason: "Left Discord".to_string(),
                 }];
             }
+            tracing::debug!(user_id, "MemberRemoved — no pseudoclient to quit");
             vec![]
         }
 
@@ -300,6 +313,14 @@ pub fn apply_discord_event(
             // even if they went offline (AWAY :Offline rather than QUIT).
             if let Some(s) = pm.get_by_discord_id(*user_id) {
                 let uid = s.uid.clone();
+                let nick = s.nick.clone();
+                tracing::debug!(
+                    user_id,
+                    %nick,
+                    %uid,
+                    ?presence,
+                    "PresenceUpdated — updating away status"
+                );
                 return match presence {
                     DiscordPresence::Online => vec![S2SCommand::ClearAway { uid }],
                     DiscordPresence::Idle => vec![S2SCommand::SetAway {
@@ -318,6 +339,11 @@ pub fn apply_discord_event(
             }
             // Not yet introduced — only introduce for non-offline presence.
             if !presence.is_non_offline() {
+                tracing::debug!(
+                    user_id,
+                    ?presence,
+                    "PresenceUpdated — offline, not yet introduced, skipping"
+                );
                 return vec![];
             }
             let channels = discord_state
@@ -331,8 +357,19 @@ pub fn apply_discord_event(
                 .filter(|s| !s.is_empty())
                 .cloned()
             else {
+                tracing::debug!(
+                    user_id,
+                    ?presence,
+                    "PresenceUpdated — no cached display name, skipping introduction"
+                );
                 return vec![];
             };
+            tracing::debug!(
+                user_id,
+                %display_name,
+                ?presence,
+                "PresenceUpdated — introducing pseudoclient"
+            );
             introduce_pseudoclient(
                 pm,
                 irc_state,

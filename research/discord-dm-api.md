@@ -45,6 +45,10 @@ Discord bots can send and receive DMs. Sending requires creating a DM channel vi
 - The bot can look up the referenced message to determine conversational context
 - This enables a natural back-and-forth UX without explicit addressing
 
+### Bot-to-bot DMs
+
+Bots **cannot** DM other bots. The API returns error 50007 "Cannot send messages to this user". This is an undocumented Discord platform restriction — the API docs don't mention it, but it's confirmed by multiple community reports. This means automated e2e testing of DM bridging requires a human Discord user; two bot accounts cannot test the DM path.
+
 ### Privacy and blocking
 
 - Users can block bot DMs via:
@@ -70,3 +74,5 @@ Discord bots can send and receive DMs. Sending requires creating a DM channel vi
 - [Message Content Privileged Intent FAQ](https://support-dev.discord.com/hc/en-us/articles/4404772028055-Message-Content-Privileged-Intent-FAQ) — accessed 2026-04-02
 - [Discord Blocking & Privacy Settings](https://support.discord.com/hc/en-us/articles/217916488-Blocking-Privacy-Settings) — accessed 2026-04-02
 - [Threads in DMs feature request](https://support.discord.com/hc/en-us/community/posts/11149356521111-Threads-in-DMS) — accessed 2026-04-02
+- [Bot-to-bot DM limitation (corde)](https://github.com/cordejs/corde/discussions/1071) — accessed 2026-04-02
+- [Bot-to-bot DM limitation (discord.js)](https://github.com/discordjs/discord.js/issues/4112) — accessed 2026-04-02

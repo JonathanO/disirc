@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serenity::builder::{CreateAllowedMentions, CreateMessage, ExecuteWebhook};
 use serenity::cache::Cache;
 use serenity::http::Http;
-use serenity::model::id::ChannelId;
+use serenity::model::id::{ChannelId, UserId};
 use serenity::model::webhook::Webhook;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, warn};
@@ -84,6 +84,35 @@ pub(crate) async fn send_discord_message(
         if let Err(e) = ChannelId::new(channel_id).send_message(http, msg).await {
             warn!(error = %e, channel_id, "Channel send failed; dropping message");
         }
+    }
+}
+
+/// Send a DM to a Discord user.
+///
+/// Opens (or reuses) a DM channel with the recipient, then sends the message.
+/// The `text` should already be formatted (e.g. `**[nick]** content`).
+// mutants::skip — requires live Discord HTTP connection
+#[mutants::skip]
+pub(crate) async fn send_dm(http: &Http, recipient_user_id: u64, text: &str) {
+    let dm_channel = match UserId::new(recipient_user_id).create_dm_channel(http).await {
+        Ok(ch) => ch,
+        Err(e) => {
+            warn!(
+                error = %e,
+                recipient_user_id,
+                "Failed to open DM channel; dropping message"
+            );
+            return;
+        }
+    };
+    let safe_text = suppress_mentions(text);
+    let msg = CreateMessage::new().content(safe_text);
+    if let Err(e) = dm_channel.id.send_message(http, msg).await {
+        warn!(
+            error = %e,
+            recipient_user_id,
+            "DM send failed; dropping message"
+        );
     }
 }
 
@@ -266,6 +295,16 @@ pub(crate) async fn process_discord_commands(
                         }
                     }
                 }
+            }
+            DiscordCommand::SendDm {
+                recipient_user_id,
+                text,
+            }
+            | DiscordCommand::SendBotDm {
+                recipient_user_id,
+                text,
+            } => {
+                send_dm(&http, recipient_user_id, &text).await;
             }
         }
     }

@@ -93,6 +93,13 @@ pub struct IrcConfig {
     pub sid: String,
     #[serde(default = "default_description")]
     pub description: String,
+    /// TCP connect timeout in seconds. Default: 15.
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout: u64,
+}
+
+fn default_connect_timeout() -> u64 {
+    15
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -108,12 +115,16 @@ pub struct FormattingConfig {
     /// Convert leading `nick:` or `nick,` in IRC messages to Discord mentions.
     #[serde(default = "default_true")]
     pub irc_nick_colon_mention: bool,
+    /// Bridge private messages between IRC `/msg` and Discord DMs.
+    #[serde(default)]
+    pub dm_bridging: bool,
 }
 
 impl Default for FormattingConfig {
     fn default() -> Self {
         Self {
             irc_nick_colon_mention: true,
+            dm_bridging: false,
         }
     }
 }

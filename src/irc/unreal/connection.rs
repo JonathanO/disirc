@@ -123,9 +123,14 @@ async fn run_once(
     cmd_rx: &mut mpsc::Receiver<S2SCommand>,
     event_tx: &mpsc::Sender<S2SEvent>,
 ) -> anyhow::Result<()> {
-    let (mut reader, mut writer) = connect(&config.uplink, config.port, config.tls)
-        .await
-        .context("TCP/TLS connect failed")?;
+    let (mut reader, mut writer) = connect(
+        &config.uplink,
+        config.port,
+        config.tls,
+        config.connect_timeout,
+    )
+    .await
+    .context("TCP/TLS connect failed")?;
 
     let hs = do_handshake(&mut reader, &mut writer, config)
         .await
@@ -140,6 +145,7 @@ async fn run_once(
         cmd_rx,
         event_tx,
         &config.sid,
+        &config.link_name,
         SessionTimings::production(),
     )
     .await;
@@ -320,6 +326,7 @@ async fn do_handshake(
 ///
 /// `ping_interval` and `pong_timeout` are parameterised so tests can use short
 /// values without sleeping for real.
+#[allow(clippy::too_many_arguments)]
 async fn run_session(
     mut reader: IrcReader,
     mut writer: IrcWriter,
@@ -327,6 +334,7 @@ async fn run_session(
     cmd_rx: &mut mpsc::Receiver<S2SCommand>,
     event_tx: &mpsc::Sender<S2SEvent>,
     our_sid: &str,
+    our_link_name: &str,
     timings: SessionTimings,
 ) -> anyhow::Result<()> {
     let ping_interval = timings.ping_interval;
@@ -351,6 +359,8 @@ async fn run_session(
                     .context("Read error")?
                     .ok_or_else(|| anyhow::anyhow!("Connection closed by remote"))?;
 
+                tracing::trace!(line = %line, "IRC ← inbound");
+
                 let msg = match IrcMessage::parse(&line) {
                     Ok(m) => m,
                     Err(e) => {
@@ -362,10 +372,16 @@ async fn run_session(
                 match &msg.command {
                     IrcCommand::Ping { token } => {
                         let pong = format!(":{our_sid} PONG {our_sid} :{token}\r\n");
+                        tracing::trace!(pong = %pong.trim(), "IRC → PONG");
                         writer.write_raw(&pong).await.context("Writing PONG")?;
                     }
                     IrcCommand::Pong { token, .. } => {
-                        if token.as_str() == our_sid {
+                        tracing::trace!(token = %token, "IRC ← PONG");
+                        // UnrealIRCd echoes the link_name as the PONG token,
+                        // not the SID we sent.  Accept either.
+                        if waiting_for_pong
+                            && (token == our_sid || token == our_link_name)
+                        {
                             waiting_for_pong = false;
                             pong_sleep
                                 .as_mut()
@@ -393,6 +409,7 @@ async fn run_session(
                             .unwrap_or_default()
                             .as_secs();
                         for msg in translate_outbound(&cmd, our_sid, hs.mtags_active, ts) {
+                            tracing::trace!(line = %msg, "IRC → outbound");
                             writer.write_message(&msg).await.context("Write error")?;
                         }
                     }
@@ -402,6 +419,7 @@ async fn run_session(
             // Outgoing keepalive PING.
             _ = ping_tick.tick() => {
                 let ping = format!("PING :{our_sid}\r\n");
+                tracing::trace!(ping = %ping.trim(), "IRC → PING");
                 writer.write_raw(&ping).await.context("Writing PING")?;
                 waiting_for_pong = true;
                 pong_sleep
@@ -437,6 +455,7 @@ mod tests {
             link_password: "hunter2".into(),
             sid: "002".into(),
             description: "Test Bridge".into(),
+            connect_timeout: 15,
         }
     }
 
@@ -719,6 +738,7 @@ mod tests {
             &mut cmd_rx,
             &event_tx,
             "002",
+            "bridge.test",
             SessionTimings::production(),
         )
         .await;
@@ -784,6 +804,7 @@ mod tests {
             &mut cmd_rx,
             &event_tx,
             "002",
+            "bridge.test",
             SessionTimings::production(),
         )
         .await;
@@ -823,6 +844,7 @@ mod tests {
             &mut cmd_rx,
             &event_tx,
             "002",
+            "bridge.test",
             SessionTimings::production(),
         )
         .await;
@@ -866,6 +888,7 @@ mod tests {
             &mut cmd_rx,
             &event_tx,
             "002",
+            "bridge.test",
             SessionTimings {
                 ping_interval: Duration::from_millis(50),
                 pong_timeout: Duration::from_secs(60),
@@ -898,6 +921,7 @@ mod tests {
             &mut cmd_rx,
             &event_tx,
             "002",
+            "bridge.test",
             SessionTimings {
                 ping_interval: Duration::from_millis(50),
                 pong_timeout: Duration::from_millis(30),
@@ -959,6 +983,7 @@ mod tests {
             &mut cmd_rx,
             &event_tx,
             "002",
+            "bridge.test",
             SessionTimings::production(),
         )
         .await;
@@ -999,6 +1024,7 @@ mod tests {
             &mut cmd_rx,
             &event_tx,
             "002",
+            "bridge.test",
             SessionTimings::production(),
         )
         .await;

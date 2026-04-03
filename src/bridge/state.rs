@@ -38,6 +38,16 @@ impl IrcState {
         self.nicks.get(uid).map(String::as_str)
     }
 
+    /// Look up the UID for a nick (case-insensitive).
+    #[must_use]
+    pub fn uid_of_nick(&self, nick: &str) -> Option<&str> {
+        let lower = nick.to_ascii_lowercase();
+        self.nicks
+            .iter()
+            .find(|(_, n)| n.to_ascii_lowercase() == lower)
+            .map(|(uid, _)| uid.as_str())
+    }
+
     /// Look up the stored creation timestamp for a channel.
     #[must_use]
     pub fn ts_for_channel(&self, channel: &str) -> Option<u64> {
@@ -237,6 +247,11 @@ pub fn apply_discord_event(
             }
             vec![]
         }
+
+        // DMs are handled directly in the bridge loop; no state update needed.
+        // (Separate arm to document intent; identical body to MemberRemoved fallthrough.)
+        #[allow(clippy::match_same_arms)]
+        DiscordEvent::DmReceived { .. } => vec![],
 
         DiscordEvent::PresenceUpdated {
             user_id,

@@ -45,21 +45,21 @@ async fn main() {
     let control_rx = spawn_signal_handler();
 
     // --- Spawn IRC connection task ---
-    {
+    let irc_handle = {
         let irc_config = cfg.irc.clone();
         tokio::spawn(async move {
             run_connection(&irc_config, irc_cmd_rx, irc_event_tx).await;
-        });
-    }
+        })
+    };
 
     // --- Spawn Discord connection task ---
-    {
+    let discord_handle = {
         let discord_config = cfg.discord.clone();
         let bridges = cfg.bridges.clone();
         tokio::spawn(async move {
             run_discord(&discord_config, &bridges, discord_event_tx, discord_cmd_rx).await;
-        });
-    }
+        })
+    };
 
     // --- Bridge loop (runs until both channels close or a signal fires) ---
     run_bridge(
@@ -72,6 +72,30 @@ async fn main() {
         control_rx,
     )
     .await;
+
+    // Check spawned tasks for panics — await them with a short timeout
+    // so we catch panics that are still unwinding when run_bridge exits.
+    for (name, handle) in [("IRC", irc_handle), ("Discord", discord_handle)] {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+        match result {
+            Ok(Err(e)) if e.is_panic() => {
+                // Extract the actual panic message from the payload.
+                let panic = e.into_panic();
+                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else if let Some(s) = panic.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!("{name} task panicked: {msg}");
+            }
+            Ok(Err(e)) => tracing::error!("{name} task failed: {e}"),
+            // Ok(Ok(())) — task exited cleanly.
+            // Err(_) — task still running after timeout (normal for IRC reconnect loop).
+            _ => {}
+        }
+    }
 
     tracing::info!("disirc shutting down");
 }

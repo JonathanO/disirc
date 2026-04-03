@@ -103,12 +103,16 @@ fn full_config(secrets: &Secrets, host: &str, s2s_port: u16) -> Config {
             link_password: "testpassword".into(),
             sid: "002".into(),
             description: "E2E Test Bridge".into(),
+            connect_timeout: 15,
         },
         pseudoclients: PseudoclientConfig {
             host_suffix: "discord.test.net".into(),
             ident: "discord".into(),
         },
-        formatting: disirc::config::FormattingConfig::default(),
+        formatting: disirc::config::FormattingConfig {
+            dm_bridging: true,
+            ..disirc::config::FormattingConfig::default()
+        },
         bridges: vec![
             BridgeEntry {
                 discord_channel_id: secrets.webhook_channel_id.to_string(),
@@ -433,6 +437,11 @@ async fn e2e_discord_suite() {
             msg.content
         );
     }
+
+    // Note: L4 DM tests are not included because Discord does not allow
+    // bot-to-bot DMs.  DM bridging is tested at L3 (mock Discord, real IRC)
+    // where we can inject DmReceived events directly.  Manual testing with
+    // a human Discord user is needed to verify the full L4 DM path.
 
     capture.assert_no_warnings_or_errors();
 }

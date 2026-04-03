@@ -41,7 +41,8 @@ const INTENTS: GatewayIntents = GatewayIntents::from_bits_truncate(
         | GatewayIntents::GUILD_MEMBERS.bits()
         | GatewayIntents::GUILD_MESSAGES.bits()
         | GatewayIntents::GUILD_PRESENCES.bits()
-        | GatewayIntents::MESSAGE_CONTENT.bits(),
+        | GatewayIntents::MESSAGE_CONTENT.bits()
+        | GatewayIntents::DIRECT_MESSAGES.bits(),
 );
 
 /// Connect to the Discord Gateway and run the event loop.
@@ -195,18 +196,17 @@ mod tests {
         assert!(INTENTS.contains(GatewayIntents::GUILD_MESSAGES));
         assert!(INTENTS.contains(GatewayIntents::GUILD_PRESENCES));
         assert!(INTENTS.contains(GatewayIntents::MESSAGE_CONTENT));
+        assert!(INTENTS.contains(GatewayIntents::DIRECT_MESSAGES));
     }
 
     #[test]
     fn intents_exact_value() {
-        // Assert the exact computed value to catch | vs ^ mutations.
-        // GUILDS(1) | GUILD_MEMBERS(2) | GUILD_PRESENCES(256) |
-        // GUILD_MESSAGES(512) | MESSAGE_CONTENT(32768) = 33539
         let expected = GatewayIntents::GUILDS
             | GatewayIntents::GUILD_MEMBERS
             | GatewayIntents::GUILD_MESSAGES
             | GatewayIntents::GUILD_PRESENCES
-            | GatewayIntents::MESSAGE_CONTENT;
+            | GatewayIntents::MESSAGE_CONTENT
+            | GatewayIntents::DIRECT_MESSAGES;
         assert_eq!(INTENTS, expected);
     }
 

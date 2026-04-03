@@ -296,6 +296,27 @@ pub fn apply_discord_event(
             guild_id,
             presence,
         } => {
+            // If the user is already introduced, update their away status
+            // even if they went offline (AWAY :Offline rather than QUIT).
+            if let Some(s) = pm.get_by_discord_id(*user_id) {
+                let uid = s.uid.clone();
+                return match presence {
+                    DiscordPresence::Online => vec![S2SCommand::ClearAway { uid }],
+                    DiscordPresence::Idle => vec![S2SCommand::SetAway {
+                        uid,
+                        reason: "Idle".to_string(),
+                    }],
+                    DiscordPresence::DoNotDisturb => vec![S2SCommand::SetAway {
+                        uid,
+                        reason: "Do Not Disturb".to_string(),
+                    }],
+                    DiscordPresence::Offline => vec![S2SCommand::SetAway {
+                        uid,
+                        reason: "Offline".to_string(),
+                    }],
+                };
+            }
+            // Not yet introduced — only introduce for non-offline presence.
             if !presence.is_non_offline() {
                 return vec![];
             }
@@ -310,9 +331,6 @@ pub fn apply_discord_event(
                 .filter(|s| !s.is_empty())
                 .cloned()
             else {
-                // No cached display name — skip introduction. The user will
-                // be introduced on-demand when they send a message (which
-                // carries their username).
                 return vec![];
             };
             introduce_pseudoclient(
@@ -366,13 +384,9 @@ pub(crate) fn introduce_pseudoclient(
                 ts,
             });
         }
-    }
-
-    // Apply the presence as away / back.
-    if let Some(s) = pm.get_by_discord_id(user_id) {
-        let uid = s.uid.clone();
+        // Set initial away if introduced as Idle/DnD (e.g. from burst).
+        // Online needs no ClearAway — new users default to not-away.
         match presence {
-            DiscordPresence::Online => cmds.push(S2SCommand::ClearAway { uid }),
             DiscordPresence::Idle => cmds.push(S2SCommand::SetAway {
                 uid,
                 reason: "Idle".to_string(),
@@ -381,7 +395,7 @@ pub(crate) fn introduce_pseudoclient(
                 uid,
                 reason: "Do Not Disturb".to_string(),
             }),
-            DiscordPresence::Offline => {}
+            _ => {}
         }
     }
 
@@ -970,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn member_snapshot_online_member_gets_clear_away() {
+    fn member_snapshot_online_member_no_spurious_clear_away() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
@@ -989,10 +1003,13 @@ mod tests {
             1000,
         );
 
+        // First introduction should NOT send ClearAway — new users default
+        // to not-away on IRC.
         assert!(
-            cmds.iter()
+            !cmds
+                .iter()
                 .any(|c| matches!(c, S2SCommand::ClearAway { .. })),
-            "online member should get ClearAway"
+            "first introduction should not send ClearAway"
         );
     }
 
@@ -1287,6 +1304,91 @@ mod tests {
             cmds.iter()
                 .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Idle")),
             "should set away"
+        );
+    }
+
+    #[test]
+    fn presence_updated_offline_sets_away_on_introduced_user() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, "eve".to_string());
+
+        // Introduce via Online presence.
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+            },
+            1000,
+        );
+        assert!(pm.get_by_discord_id(50).is_some());
+
+        // User goes offline — should set away, not quit.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Offline,
+            },
+            1001,
+        );
+
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Offline")),
+            "offline should set AWAY, not quit"
+        );
+        assert!(
+            pm.get_by_discord_id(50).is_some(),
+            "pseudoclient must persist (not quit) when user goes offline"
+        );
+    }
+
+    #[test]
+    fn presence_updated_online_clears_away_on_introduced_user() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, "eve".to_string());
+
+        // Introduce, then set idle.
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Idle,
+            },
+            1000,
+        );
+
+        // Come back online — should clear away.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+            },
+            1001,
+        );
+
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::ClearAway { .. })),
+            "returning online should clear away"
         );
     }
 

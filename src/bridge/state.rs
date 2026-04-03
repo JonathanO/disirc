@@ -85,16 +85,56 @@ pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event
 
         S2SEvent::UserIntroduced { uid, nick, .. } => {
             state.nicks.insert(uid.clone(), nick.clone());
+            // Track external nicks so pseudoclient introduction can avoid
+            // nick collisions with real IRC users.
+            if !pm.is_our_uid(uid) {
+                pm.register_external_nick(nick);
+            }
         }
 
         S2SEvent::UserNickChanged { uid, new_nick } => {
+            if let Some(old_nick) = state.nicks.get(uid)
+                && !pm.is_our_uid(uid)
+            {
+                pm.unregister_external_nick(old_nick);
+                pm.register_external_nick(new_nick);
+            }
             if let Some(entry) = state.nicks.get_mut(uid) {
                 entry.clone_from(new_nick);
             }
         }
 
         S2SEvent::UserQuit { uid, .. } => {
-            state.nicks.remove(uid);
+            if let Some(nick) = state.nicks.remove(uid)
+                && !pm.is_our_uid(uid)
+            {
+                pm.unregister_external_nick(&nick);
+            }
+        }
+
+        S2SEvent::UserKilled { uid, reason, .. } => {
+            if let Some(ps) = pm.get_by_uid(uid) {
+                // One of our pseudoclients — remove from PM so it can be
+                // re-introduced on-demand or immediately (if configured).
+                tracing::debug!(
+                    uid = %uid,
+                    discord_id = ps.discord_user_id,
+                    nick = %ps.nick,
+                    reason = %reason,
+                    "pseudoclient killed — removing from PM"
+                );
+                let discord_id = ps.discord_user_id;
+                pm.quit(discord_id, "Killed");
+                // Clear the cached UID so reintroduction allocates a fresh one,
+                // avoiding UID collision with UnrealIRCd's kill state.
+                pm.forget_uid(discord_id);
+            } else {
+                // External IRC user — remove from nick map.
+                tracing::debug!(uid = %uid, reason = %reason, "external user killed");
+                if let Some(nick) = state.nicks.remove(uid) {
+                    pm.unregister_external_nick(&nick);
+                }
+            }
         }
 
         S2SEvent::ChannelBurst { channel, ts, .. } => {
@@ -297,7 +337,7 @@ pub fn apply_discord_event(
 ///
 /// Returns the `S2SCommand`s needed to introduce the user and set their
 /// initial presence.  Returns only away/back commands if already introduced.
-fn introduce_pseudoclient(
+pub(crate) fn introduce_pseudoclient(
     pm: &mut PseudoclientManager,
     irc_state: &IrcState,
     user_id: u64,
@@ -688,6 +728,148 @@ mod tests {
         );
         // Still trackable in nick map
         assert_eq!(state.nick_of("002ZZZZZZ"), Some("extern"));
+    }
+
+    #[test]
+    fn kill_removes_pseudoclient_from_pm() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        pm.introduce(77, "alice", "Alice", &["#general".to_string()], 1000)
+            .expect("introduce should succeed");
+        let uid = pm.get_by_discord_id(77).expect("should exist").uid.clone();
+
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserKilled {
+                uid: uid.clone(),
+                reason: "Killed by oper".to_string(),
+            },
+        );
+
+        assert!(
+            pm.get_by_discord_id(77).is_none(),
+            "pseudoclient should be removed from PM after KILL"
+        );
+        assert!(
+            pm.get_by_uid(&uid).is_none(),
+            "pseudoclient UID should be removed from PM after KILL"
+        );
+    }
+
+    #[test]
+    fn kill_clears_uid_cache_so_reintroduction_gets_fresh_uid() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        pm.introduce(77, "alice", "Alice", &["#general".to_string()], 1000)
+            .expect("introduce should succeed");
+        let old_uid = pm.get_by_discord_id(77).unwrap().uid.clone();
+
+        // Kill the pseudoclient.
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserKilled {
+                uid: old_uid.clone(),
+                reason: "Killed".to_string(),
+            },
+        );
+        assert!(pm.get_by_discord_id(77).is_none());
+
+        // Re-introduce — should get a different UID.
+        pm.introduce(77, "alice", "Alice", &["#general".to_string()], 2000)
+            .expect("reintroduce should succeed");
+        let new_uid = pm.get_by_discord_id(77).unwrap().uid.clone();
+
+        assert_ne!(
+            old_uid, new_uid,
+            "reintroduced pseudoclient must get a fresh UID to avoid collision; old={old_uid}, new={new_uid}"
+        );
+    }
+
+    #[test]
+    fn kill_of_external_user_only_removes_nick() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001EXTUSER", "bob"));
+        assert_eq!(state.nick_of("001EXTUSER"), Some("bob"));
+
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserKilled {
+                uid: "001EXTUSER".to_string(),
+                reason: "Killed".to_string(),
+            },
+        );
+
+        assert_eq!(state.nick_of("001EXTUSER"), None, "nick should be removed");
+    }
+
+    #[test]
+    fn introduced_external_user_registers_nick_for_collision_avoidance() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001EXTUSER", "alice"));
+
+        // Now introduce a pseudoclient with the same name — should get a suffixed nick.
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 1000);
+        let ps = pm.get_by_discord_id(42).unwrap();
+        assert_ne!(
+            ps.nick, "alice",
+            "pseudoclient nick should differ from external user; got: {}",
+            ps.nick
+        );
+    }
+
+    #[test]
+    fn quit_external_user_unregisters_nick() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001EXTUSER", "alice"));
+
+        // Quit the external user.
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserQuit {
+                uid: "001EXTUSER".to_string(),
+                reason: "Quit".to_string(),
+            },
+        );
+
+        // Now a pseudoclient can use "alice" without collision.
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 1000);
+        let ps = pm.get_by_discord_id(42).unwrap();
+        assert_eq!(
+            ps.nick, "alice",
+            "after external user quit, pseudoclient should get the exact nick"
+        );
+    }
+
+    #[test]
+    fn nick_change_updates_external_nick_registration() {
+        let mut state = IrcState::default();
+        let mut pm = make_pm();
+        apply_irc_event(&mut state, &mut pm, &introduced("001EXTUSER", "alice"));
+
+        // External user changes nick to "bob".
+        apply_irc_event(
+            &mut state,
+            &mut pm,
+            &S2SEvent::UserNickChanged {
+                uid: "001EXTUSER".to_string(),
+                new_nick: "bob".to_string(),
+            },
+        );
+
+        // "alice" is now free — pseudoclient can use it.
+        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 1000);
+        assert_eq!(pm.get_by_discord_id(42).unwrap().nick, "alice");
+
+        // "bob" is taken — pseudoclient should get a suffix.
+        pm.introduce(43, "bob", "Bob", &["#general".to_string()], 1000);
+        assert_ne!(pm.get_by_discord_id(43).unwrap().nick, "bob");
     }
 
     #[test]

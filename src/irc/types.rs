@@ -48,6 +48,11 @@ pub enum S2SEvent {
     /// A user disconnected from the network.
     UserQuit { uid: String, reason: String },
 
+    /// A user was killed by an operator. The user is removed from the network.
+    /// For pseudoclients, the PM entry must be cleared so the user can be
+    /// re-introduced on-demand.
+    UserKilled { uid: String, reason: String },
+
     /// A new server was introduced to the network.
     ServerIntroduced { sid: String, name: String },
 
@@ -179,7 +184,3 @@ pub enum S2SCommand {
     /// Signal that our burst is complete (translated to EOS on the wire).
     BurstComplete,
 }
-
-// No unit tests: S2SEvent, S2SCommand, and MemberPrefix are plain data types
-// with no logic to test. Behaviour is covered by the translation layer tests in
-// translation.rs.

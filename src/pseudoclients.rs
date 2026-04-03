@@ -130,6 +130,12 @@ impl UidGenerator {
         })
     }
 
+    /// Remove a single UID assignment so the next `get_or_create` for this
+    /// user allocates a fresh UID. Used after a KILL to avoid UID collisions.
+    pub fn forget(&mut self, discord_user_id: u64) {
+        self.assigned.remove(&discord_user_id);
+    }
+
     /// Reset all assignments (e.g. on reconnect).
     pub fn reset(&mut self) {
         self.assigned.clear();
@@ -491,6 +497,13 @@ impl PseudoclientManager {
     #[must_use]
     pub fn count(&self) -> usize {
         self.by_discord_id.len()
+    }
+
+    /// Clear the cached UID assignment for a Discord user so the next
+    /// introduction allocates a fresh UID.  Used after KILL to avoid
+    /// UID collisions with the recently-killed UID.
+    pub fn forget_uid(&mut self, discord_user_id: u64) {
+        self.uid_generator.forget(discord_user_id);
     }
 
     /// Returns `true` if no pseudoclients have been introduced.

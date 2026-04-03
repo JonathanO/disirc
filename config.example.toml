@@ -14,6 +14,7 @@ link_name = "disirc.example.net"
 link_password = "CHANGE_ME"
 sid = "0D0"            # must match [0-9][A-Z0-9]{2}
 # description = "disirc bridge"  # optional, has a default
+# connect_timeout = 15           # TCP connect timeout in seconds, default: 15
 
 [pseudoclients]
 # host_suffix = "discord"   # optional, default: "discord"

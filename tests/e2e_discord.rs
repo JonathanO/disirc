@@ -103,6 +103,7 @@ fn full_config(secrets: &Secrets, host: &str, s2s_port: u16) -> Config {
             link_password: "testpassword".into(),
             sid: "002".into(),
             description: "E2E Test Bridge".into(),
+            connect_timeout: 15,
         },
         pseudoclients: PseudoclientConfig {
             host_suffix: "discord.test.net".into(),

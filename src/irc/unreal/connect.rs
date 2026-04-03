@@ -36,8 +36,21 @@ pub type IrcWriter = LineWriter<Box<dyn tokio::io::AsyncWrite + Unpin + Send>>;
 ///
 /// Returns `Err` if the TCP connection is refused or if the TLS handshake
 /// fails.
-pub async fn connect(host: &str, port: u16, tls: bool) -> io::Result<(IrcReader, IrcWriter)> {
-    let tcp = TcpStream::connect((host, port)).await?;
+pub async fn connect(
+    host: &str,
+    port: u16,
+    tls: bool,
+    connect_timeout_secs: u64,
+) -> io::Result<(IrcReader, IrcWriter)> {
+    let timeout = std::time::Duration::from_secs(connect_timeout_secs);
+    let tcp = tokio::time::timeout(timeout, TcpStream::connect((host, port)))
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("TCP connect timed out after {connect_timeout_secs}s"),
+            )
+        })??;
 
     if tls {
         let config = Arc::new(make_accept_any_tls_config());
@@ -150,19 +163,19 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener); // nothing listening here now
 
-        let result = connect("127.0.0.1", port, false).await;
+        let result = connect("127.0.0.1", port, false, 5).await;
         assert!(result.is_err(), "expected connection error, got Ok");
     }
 
     #[tokio::test]
     #[ignore = "requires a live plain-TCP IRC server"]
     async fn connects_plain() {
-        let (_r, _w) = connect("irc.example.org", 6667, false).await.unwrap();
+        let (_r, _w) = connect("irc.example.org", 6667, false, 15).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore = "requires a live TLS IRC server"]
     async fn connects_tls() {
-        let (_r, _w) = connect("irc.example.org", 6697, true).await.unwrap();
+        let (_r, _w) = connect("irc.example.org", 6697, true, 15).await.unwrap();
     }
 }

@@ -93,6 +93,13 @@ pub struct IrcConfig {
     pub sid: String,
     #[serde(default = "default_description")]
     pub description: String,
+    /// TCP connect timeout in seconds. Default: 15.
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout: u64,
+}
+
+fn default_connect_timeout() -> u64 {
+    15
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]

@@ -188,7 +188,7 @@ Create a `config.toml` for local development:
 token = "Bot YOUR_TOKEN_HERE"
 
 [irc]
-uplink = "localhost"
+uplink = "127.0.0.1"
 port = 6900
 tls = false
 link_name = "bridge.test.net"

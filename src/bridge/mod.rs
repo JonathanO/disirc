@@ -339,6 +339,7 @@ mod tests {
                 link_password: "pw".into(),
                 sid: "002".into(),
                 description: "test".into(),
+                connect_timeout: 15,
             },
             pseudoclients: PseudoclientConfig {
                 host_suffix: "test.net".into(),

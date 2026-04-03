@@ -123,9 +123,14 @@ async fn run_once(
     cmd_rx: &mut mpsc::Receiver<S2SCommand>,
     event_tx: &mpsc::Sender<S2SEvent>,
 ) -> anyhow::Result<()> {
-    let (mut reader, mut writer) = connect(&config.uplink, config.port, config.tls)
-        .await
-        .context("TCP/TLS connect failed")?;
+    let (mut reader, mut writer) = connect(
+        &config.uplink,
+        config.port,
+        config.tls,
+        config.connect_timeout,
+    )
+    .await
+    .context("TCP/TLS connect failed")?;
 
     let hs = do_handshake(&mut reader, &mut writer, config)
         .await
@@ -437,6 +442,7 @@ mod tests {
             link_password: "hunter2".into(),
             sid: "002".into(),
             description: "Test Bridge".into(),
+            connect_timeout: 15,
         }
     }
 

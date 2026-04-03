@@ -253,11 +253,11 @@ async fn e2e_discord_suite() {
     client.join(&secrets.plain_irc_channel).await;
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    // Wait for guild_create → MemberSnapshot → deferred burst → pseudoclient
-    // JOIN.  This proves the Discord Gateway delivered GUILD_CREATE (which
-    // requires the GUILDS intent) and the bridge created pseudoclients.
+    // Verify pseudoclients are present in the channel.  Depending on timing,
+    // they may have arrived before or after our JOIN — so we request NAMES
+    // rather than waiting for a JOIN line.
     client
-        .expect_line_containing("JOIN", Duration::from_secs(30))
+        .expect_names_contain(&secrets.webhook_irc_channel, Duration::from_secs(30))
         .await;
 
     // --- Discord → IRC (webhook channel) ---

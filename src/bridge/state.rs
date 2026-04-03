@@ -238,14 +238,19 @@ pub fn apply_discord_event(
                 .cloned()
                 .unwrap_or_default();
             let mut cmds = Vec::new();
+            let mut introduced = 0u32;
+            let mut cached_only = 0u32;
             for member in members {
-                // Option B: only introduce non-offline members.
-                if !member.presence.is_non_offline() {
-                    continue;
-                }
+                // Cache display name for all members so PresenceUpdated can
+                // introduce them later when they come online.
                 discord_state
                     .display_names
                     .insert(member.user_id, member.display_name.clone());
+                if !member.presence.is_non_offline() {
+                    cached_only += 1;
+                    continue;
+                }
+                introduced += 1;
                 cmds.extend(introduce_pseudoclient(
                     pm,
                     irc_state,
@@ -256,6 +261,13 @@ pub fn apply_discord_event(
                     now_ts,
                 ));
             }
+            tracing::debug!(
+                guild_id,
+                introduced,
+                cached_only,
+                total = members.len(),
+                "MemberSnapshot processed"
+            );
             cmds
         }
 
@@ -264,7 +276,7 @@ pub fn apply_discord_event(
             guild_id: _,
             display_name,
         } => {
-            // Cache the display name; introduction is deferred to PresenceUpdated.
+            tracing::debug!(user_id, %display_name, "MemberAdded — cached display name");
             discord_state
                 .display_names
                 .insert(*user_id, display_name.clone());
@@ -277,11 +289,13 @@ pub fn apply_discord_event(
         } => {
             discord_state.display_names.remove(user_id);
             if let Some(state) = pm.quit(*user_id, "Left Discord") {
+                tracing::debug!(user_id, uid = %state.uid, "MemberRemoved — quitting pseudoclient");
                 return vec![S2SCommand::QuitUser {
                     uid: state.uid,
                     reason: "Left Discord".to_string(),
                 }];
             }
+            tracing::debug!(user_id, "MemberRemoved — no pseudoclient to quit");
             vec![]
         }
 
@@ -294,8 +308,48 @@ pub fn apply_discord_event(
             user_id,
             guild_id,
             presence,
+            display_name,
         } => {
+            // Cache/update the display name if the presence payload carried one.
+            if let Some(name) = display_name.as_ref().filter(|n| !n.is_empty()) {
+                discord_state.display_names.insert(*user_id, name.clone());
+            }
+
+            // If the user is already introduced, update their away status
+            // even if they went offline (AWAY :Offline rather than QUIT).
+            if let Some(s) = pm.get_by_discord_id(*user_id) {
+                let uid = s.uid.clone();
+                let nick = s.nick.clone();
+                tracing::debug!(
+                    user_id,
+                    %nick,
+                    %uid,
+                    ?presence,
+                    "PresenceUpdated — updating away status"
+                );
+                return match presence {
+                    DiscordPresence::Online => vec![S2SCommand::ClearAway { uid }],
+                    DiscordPresence::Idle => vec![S2SCommand::SetAway {
+                        uid,
+                        reason: "Idle".to_string(),
+                    }],
+                    DiscordPresence::DoNotDisturb => vec![S2SCommand::SetAway {
+                        uid,
+                        reason: "Do Not Disturb".to_string(),
+                    }],
+                    DiscordPresence::Offline => vec![S2SCommand::SetAway {
+                        uid,
+                        reason: "Offline".to_string(),
+                    }],
+                };
+            }
+            // Not yet introduced — only introduce for non-offline presence.
             if !presence.is_non_offline() {
+                tracing::debug!(
+                    user_id,
+                    ?presence,
+                    "PresenceUpdated — offline, not yet introduced, skipping"
+                );
                 return vec![];
             }
             let channels = discord_state
@@ -303,17 +357,33 @@ pub fn apply_discord_event(
                 .get(guild_id)
                 .cloned()
                 .unwrap_or_default();
-            let Some(display_name) = discord_state
-                .display_names
-                .get(user_id)
+            // Use display name from event (preferred) or fall back to cache.
+            // Large guilds (>200 members) may not include all members in
+            // GUILD_CREATE; the presence payload usually carries the name.
+            let resolved_name = display_name
+                .as_ref()
                 .filter(|s| !s.is_empty())
-                .cloned()
-            else {
-                // No cached display name — skip introduction. The user will
-                // be introduced on-demand when they send a message (which
-                // carries their username).
+                .or_else(|| {
+                    discord_state
+                        .display_names
+                        .get(user_id)
+                        .filter(|s| !s.is_empty())
+                })
+                .cloned();
+            let Some(display_name) = resolved_name else {
+                tracing::debug!(
+                    user_id,
+                    ?presence,
+                    "PresenceUpdated — no display name available, skipping introduction"
+                );
                 return vec![];
             };
+            tracing::debug!(
+                user_id,
+                %display_name,
+                ?presence,
+                "PresenceUpdated — introducing pseudoclient"
+            );
             introduce_pseudoclient(
                 pm,
                 irc_state,
@@ -365,13 +435,9 @@ pub(crate) fn introduce_pseudoclient(
                 ts,
             });
         }
-    }
-
-    // Apply the presence as away / back.
-    if let Some(s) = pm.get_by_discord_id(user_id) {
-        let uid = s.uid.clone();
+        // Set initial away if introduced as Idle/DnD (e.g. from burst).
+        // Online needs no ClearAway — new users default to not-away.
         match presence {
-            DiscordPresence::Online => cmds.push(S2SCommand::ClearAway { uid }),
             DiscordPresence::Idle => cmds.push(S2SCommand::SetAway {
                 uid,
                 reason: "Idle".to_string(),
@@ -380,7 +446,7 @@ pub(crate) fn introduce_pseudoclient(
                 uid,
                 reason: "Do Not Disturb".to_string(),
             }),
-            DiscordPresence::Offline => {}
+            _ => {}
         }
     }
 
@@ -924,7 +990,53 @@ mod tests {
     }
 
     #[test]
-    fn member_snapshot_online_member_gets_clear_away() {
+    fn offline_member_introduced_when_coming_online() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        // Snapshot includes an offline member.
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                members: vec![member(20, "bob", DiscordPresence::Offline)],
+            },
+            1000,
+        );
+        assert!(pm.get_by_discord_id(20).is_none(), "bob is offline");
+
+        // Bob comes online — should be introduced using the cached display name.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 20,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+                display_name: None,
+            },
+            1001,
+        );
+        assert!(
+            pm.get_by_discord_id(20).is_some(),
+            "bob should be introduced after coming online"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "should produce IntroduceUser for bob"
+        );
+    }
+
+    #[test]
+    fn member_snapshot_online_member_no_spurious_clear_away() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
@@ -943,10 +1055,13 @@ mod tests {
             1000,
         );
 
+        // First introduction should NOT send ClearAway — new users default
+        // to not-away on IRC.
         assert!(
-            cmds.iter()
+            !cmds
+                .iter()
                 .any(|c| matches!(c, S2SCommand::ClearAway { .. })),
-            "online member should get ClearAway"
+            "first introduction should not send ClearAway"
         );
     }
 
@@ -974,6 +1089,34 @@ mod tests {
             cmds.iter()
                 .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Idle")),
             "idle member should get SetAway Idle"
+        );
+    }
+
+    #[test]
+    fn member_snapshot_dnd_member_gets_set_away() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                members: vec![member(10, "alice", DiscordPresence::DoNotDisturb)],
+            },
+            1000,
+        );
+
+        assert!(
+            cmds.iter().any(
+                |c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Do Not Disturb")
+            ),
+            "DnD member should get SetAway"
         );
     }
 
@@ -1106,6 +1249,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Offline,
+                display_name: None,
             },
             1000,
         );
@@ -1135,6 +1279,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1161,6 +1306,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1187,6 +1333,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1214,6 +1361,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1227,6 +1375,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Idle,
+                display_name: None,
             },
             1000,
         );
@@ -1241,6 +1390,95 @@ mod tests {
             cmds.iter()
                 .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Idle")),
             "should set away"
+        );
+    }
+
+    #[test]
+    fn presence_updated_offline_sets_away_on_introduced_user() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, "eve".to_string());
+
+        // Introduce via Online presence.
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+                display_name: None,
+            },
+            1000,
+        );
+        assert!(pm.get_by_discord_id(50).is_some());
+
+        // User goes offline — should set away, not quit.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Offline,
+                display_name: None,
+            },
+            1001,
+        );
+
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Offline")),
+            "offline should set AWAY, not quit"
+        );
+        assert!(
+            pm.get_by_discord_id(50).is_some(),
+            "pseudoclient must persist (not quit) when user goes offline"
+        );
+    }
+
+    #[test]
+    fn presence_updated_online_clears_away_on_introduced_user() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        ds.display_names.insert(50, "eve".to_string());
+
+        // Introduce, then set idle.
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Idle,
+                display_name: None,
+            },
+            1000,
+        );
+
+        // Come back online — should clear away.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+                display_name: None,
+            },
+            1001,
+        );
+
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::ClearAway { .. })),
+            "returning online should clear away"
         );
     }
 

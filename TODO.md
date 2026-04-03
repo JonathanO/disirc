@@ -6,11 +6,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-- **PR #23 — Orchestrator refactor + nick collision fix** — CI green, awaiting mutation testing then merge. Includes:
-  - `BridgeState` orchestrator extracted from `run_bridge` (synchronous, testable handlers)
-  - Deferred pseudoclient introduction (buffered during uplink burst)
-  - LinkDown cleanup (clear deferred events + external nicks)
-  - `PseudoclientManager` API cleanup (`introduce` returns `&PseudoclientState`, `quit` returns `PseudoclientState`)
+None.
 
 ## Spec status
 
@@ -29,15 +25,20 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## Pending
 
-- **Presence not working** — `presence_update` events from serenity never fire when Discord users change online status. Debug logging added but root cause not yet identified. Needs investigation.
 - **DM bridging (spec 09)** — Implemented (PR #19 merged), but spec status not updated. Needs mutation testing and spec closure.
+
+## Future features
+
+- **Configurable quit-on-offline** — Currently pseudoclients persist when a Discord user goes offline (set AWAY instead of QUIT). A config option `pseudoclients.quit_on_offline` could quit them instead, optionally with an idle delay before quitting. See spec 06 "Presence policy" section.
 
 ## Completed features (post-v1)
 
 - ~~**Mention resolution**~~ — Implemented in PR #14. Real resolvers use bridge state (display_names, channel_names, role_names from guild_create, plus PseudoclientManager nick lookup).
 - ~~**Nick-colon mention**~~ — Implemented in PR #18. Leading `nick: ` in IRC messages converted to Discord mentions.
 - ~~**KILL handling**~~ — Implemented in PR #21. Pseudoclient cleanup on KILL + optional reintroduction with fresh UID and cooldown.
-- ~~**Orchestrator refactor**~~ — PR #23 (pending merge). Extracted `BridgeState` from `run_bridge` for deterministic testing. Fixed nick collision race via deferred introduction.
+- ~~**Orchestrator refactor**~~ — PR #23 merged. Extracted `BridgeState` from `run_bridge` for deterministic testing. Fixed nick collision race via deferred introduction.
+- ~~**LinkPhase state machine**~~ — PR #24 merged. Replaced boolean flags with `LinkPhase` enum. Simplified kill cooldown.
+- ~~**Pseudoclient hostnames**~~ — PR #23. Changed from `sanitize_nick.host_suffix` to `{user_id}.discord.com`.
 
 ## Bugs fixed during integration
 

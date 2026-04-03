@@ -83,6 +83,57 @@ impl TestIrcClient {
         }
     }
 
+    /// Send `NAMES #channel` and poll until the reply contains a nick other
+    /// than our own (i.e. a pseudoclient has appeared).  Retries every 2s
+    /// until `timeout_dur` elapses.
+    #[allow(dead_code)] // used from e2e_discord but not e2e_irc
+    pub async fn expect_names_contain(&mut self, channel: &str, timeout_dur: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout_dur;
+        loop {
+            self.send(&format!("NAMES {channel}")).await;
+            // Collect 353 lines until 366 (end of names).
+            let mut names = String::new();
+            loop {
+                let remaining = deadline
+                    .checked_duration_since(tokio::time::Instant::now())
+                    .unwrap_or(Duration::ZERO);
+                assert!(
+                    !remaining.is_zero(),
+                    "timed out waiting for pseudoclient in NAMES {channel}"
+                );
+                let line = self
+                    .read_line_timeout(remaining)
+                    .await
+                    .unwrap_or_else(|| panic!("timed out waiting for NAMES reply for {channel}"));
+                if let Some(token) = line.strip_prefix("PING :") {
+                    self.send(&format!("PONG :{token}")).await;
+                    continue;
+                }
+                let parts: Vec<&str> = line.splitn(4, ' ').collect();
+                if parts.get(1) == Some(&"353") {
+                    // :server 353 nick = #channel :@testbot user1 user2
+                    if let Some(trailing) = line.rsplit_once(':') {
+                        names.push(' ');
+                        names.push_str(trailing.1);
+                    }
+                } else if parts.get(1) == Some(&"366") {
+                    break;
+                }
+            }
+            // Check if any nick besides our own is present.
+            let nicks: Vec<&str> = names
+                .split_whitespace()
+                .map(|n| n.trim_start_matches('@').trim_start_matches('+'))
+                .filter(|n| !n.eq_ignore_ascii_case("testbot"))
+                .collect();
+            if !nicks.is_empty() {
+                return;
+            }
+            // No pseudoclients yet — wait and retry.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
     /// Send `PRIVMSG target :text`.
     pub async fn send_privmsg(&mut self, target: &str, text: &str) {
         self.send(&format!("PRIVMSG {target} :{text}")).await;

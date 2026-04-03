@@ -47,9 +47,13 @@ mutants file:
 mutants-all:
     cargo mutants --timeout 20 -j 4 -- --lib
 
-# Start a local UnrealIRCd for development
+# Start a local UnrealIRCd in the background
 ircd-start:
     docker run -d --name unrealircd -p 6667:6667 -p 6900:6900 ghcr.io/jonathano/disirc-unrealircd-test:latest
+
+# Start a local UnrealIRCd in the foreground (Ctrl+C to stop)
+ircd:
+    docker run --rm --name unrealircd -p 6667:6667 -p 6900:6900 ghcr.io/jonathano/disirc-unrealircd-test:latest
 
 # Stop the local UnrealIRCd
 ircd-stop:

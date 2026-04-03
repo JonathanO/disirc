@@ -14,8 +14,8 @@ use crate::pseudoclients::PseudoclientManager;
 
 use super::map::BridgeMap;
 use super::routing::{
-    DmRouteResult, route_discord_to_irc, route_dm_to_irc, route_irc_to_discord, route_irc_to_dm,
-    update_guild_irc_channels,
+    DmRouteResult, produce_burst_commands, route_discord_to_irc, route_dm_to_irc,
+    route_irc_to_discord, route_irc_to_dm, update_guild_irc_channels,
 };
 use super::state::{
     DiscordState, IrcState, apply_discord_event, apply_irc_event, introduce_pseudoclient,
@@ -125,9 +125,9 @@ impl BridgeState {
         match event {
             S2SEvent::LinkUp => {
                 self.link_phase = LinkPhase::Bursting;
-                // Send our burst (EOS only — pseudoclients are deferred until
-                // the uplink's burst completes).
-                output.irc_commands.push(S2SCommand::BurstComplete);
+                // Don't send anything yet — wait for the remote burst to
+                // complete so we know all external nicks before introducing
+                // our pseudoclients.
             }
             S2SEvent::LinkDown { .. } => {
                 self.link_phase = LinkPhase::Down;
@@ -136,14 +136,34 @@ impl BridgeState {
             }
             S2SEvent::BurstComplete => {
                 self.link_phase = LinkPhase::Ready;
+
+                // Send our burst: re-introduce existing pseudoclients
+                // (on reconnect; empty on first connect), replay deferred
+                // Discord events (which may introduce more), then send
+                // our EOS.  Nick collisions with external users from the
+                // remote burst are resolved by the KILL handler.
+                //
+                // produce_burst_commands appends BurstComplete (EOS) but
+                // we want EOS after deferred replay, so strip it and add
+                // it explicitly at the end.
+                let burst = produce_burst_commands(&self.pm, &self.irc_state, now_ts);
+                output.irc_commands.extend(
+                    burst
+                        .into_iter()
+                        .filter(|c| !matches!(c, S2SCommand::BurstComplete)),
+                );
+
                 // Replay buffered Discord events now that all IRC nicks are
-                // registered from the burst.
+                // registered from the remote burst.
                 let deferred: Vec<_> = self.deferred_discord_events.drain(..).collect();
                 for event in deferred {
                     let inner = self.process_discord_event(&event, now_ts);
                     output.irc_commands.extend(inner.irc_commands);
                     output.discord_commands.extend(inner.discord_commands);
                 }
+
+                // Our EOS — signals end of our burst.
+                output.irc_commands.push(S2SCommand::BurstComplete);
             }
             S2SEvent::MessageReceived {
                 from_uid,
@@ -472,13 +492,11 @@ mod tests {
         let mut state = BridgeState::new(&test_config());
         let ts = 1_000_000;
 
-        // LinkUp → our EOS.
+        // LinkUp — no commands yet, just transitions to Bursting.
         let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
         assert!(
-            out.irc_commands
-                .iter()
-                .any(|c| matches!(c, S2SCommand::BurstComplete)),
-            "LinkUp should emit BurstComplete (our EOS)"
+            out.irc_commands.is_empty(),
+            "LinkUp should not emit any commands"
         );
 
         // Discord user "jono" appears in MemberSnapshot during uplink burst.
@@ -1049,6 +1067,100 @@ mod tests {
         assert!(
             state.pm.get_by_discord_id(9002).is_some(),
             "Eve should be introduced after replay"
+        );
+    }
+
+    /// After IRC link drops and reconnects, existing pseudoclients must be
+    /// re-introduced to the new link on BurstComplete.
+    #[test]
+    fn reconnect_rebursts_existing_pseudoclients() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // First connect: introduce a pseudoclient.
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        let out = state.handle_discord_event(
+            DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 7777,
+                    display_name: "Frank".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+        assert!(out.irc_commands.is_empty(), "buffered during burst");
+        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "Frank should be introduced on first connect"
+        );
+        let frank_uid = state.pm.get_by_discord_id(7777).unwrap().uid.clone();
+
+        // IRC link drops.
+        state.handle_irc_event(
+            &S2SEvent::LinkDown {
+                reason: "test".into(),
+            },
+            ts + 100,
+        );
+        // Frank still exists in pm.
+        assert!(state.pm.get_by_discord_id(7777).is_some());
+
+        // Reconnect: link up, remote burst, burst complete.
+        state.handle_irc_event(&S2SEvent::LinkUp, ts + 200);
+        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts + 200);
+
+        // Frank should be re-introduced with the same UID.
+        let reintroduced = out
+            .irc_commands
+            .iter()
+            .find_map(|c| {
+                if let S2SCommand::IntroduceUser { uid, nick, .. } = c {
+                    Some((uid.clone(), nick.clone()))
+                } else {
+                    None
+                }
+            })
+            .expect("Frank should be re-introduced on reconnect");
+        assert_eq!(reintroduced.0, frank_uid, "should reuse same UID");
+        assert_eq!(reintroduced.1, "Frank");
+
+        // Our EOS should be present.
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::BurstComplete)),
+            "burst should end with our EOS"
+        );
+    }
+
+    /// Our EOS is sent on BurstComplete, not LinkUp.
+    #[test]
+    fn eos_sent_on_burst_complete_not_link_up() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        assert!(
+            !out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::BurstComplete)),
+            "LinkUp must not send EOS"
+        );
+
+        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::BurstComplete)),
+            "BurstComplete must send our EOS"
         );
     }
 }

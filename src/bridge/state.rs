@@ -239,13 +239,14 @@ pub fn apply_discord_event(
                 .unwrap_or_default();
             let mut cmds = Vec::new();
             for member in members {
-                // Option B: only introduce non-offline members.
-                if !member.presence.is_non_offline() {
-                    continue;
-                }
+                // Cache display name for all members so PresenceUpdated can
+                // introduce them later when they come online.
                 discord_state
                     .display_names
                     .insert(member.user_id, member.display_name.clone());
+                if !member.presence.is_non_offline() {
+                    continue;
+                }
                 cmds.extend(introduce_pseudoclient(
                     pm,
                     irc_state,
@@ -920,6 +921,51 @@ mod tests {
             cmds.iter()
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
             "should produce IntroduceUser"
+        );
+    }
+
+    #[test]
+    fn offline_member_introduced_when_coming_online() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        // Snapshot includes an offline member.
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                members: vec![member(20, "bob", DiscordPresence::Offline)],
+            },
+            1000,
+        );
+        assert!(pm.get_by_discord_id(20).is_none(), "bob is offline");
+
+        // Bob comes online — should be introduced using the cached display name.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 20,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+            },
+            1001,
+        );
+        assert!(
+            pm.get_by_discord_id(20).is_some(),
+            "bob should be introduced after coming online"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "should produce IntroduceUser for bob"
         );
     }
 

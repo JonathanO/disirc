@@ -73,16 +73,27 @@ async fn main() {
     )
     .await;
 
-    // Check if spawned tasks panicked — report the cause rather than
-    // silently exiting when a channel closes.
+    // Check spawned tasks for panics — await them with a short timeout
+    // so we catch panics that are still unwinding when run_bridge exits.
     for (name, handle) in [("IRC", irc_handle), ("Discord", discord_handle)] {
-        if !handle.is_finished() {
-            continue;
-        }
-        match handle.await {
-            Err(e) if e.is_panic() => tracing::error!("{name} task panicked: {e}"),
-            Err(e) => tracing::error!("{name} task failed: {e}"),
-            Ok(()) => {}
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+        match result {
+            Ok(Err(e)) if e.is_panic() => {
+                // Extract the actual panic message from the payload.
+                let panic = e.into_panic();
+                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else if let Some(s) = panic.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!("{name} task panicked: {msg}");
+            }
+            Ok(Err(e)) => tracing::error!("{name} task failed: {e}"),
+            // Ok(Ok(())) — task exited cleanly.
+            // Err(_) — task still running after timeout (normal for IRC reconnect loop).
+            _ => {}
         }
     }
 

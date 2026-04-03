@@ -29,7 +29,11 @@ None.
 
 ## Future features
 
+- **Topic bridging** — Sync channel topics bidirectionally between Discord and IRC. Discord channel topic changes should update the IRC channel topic and vice versa.
+- **Metrics / observability** — Structured metrics for operators: message counts (per direction), pseudoclient count, link uptime, reconnect count. Could expose via a simple HTTP endpoint or structured log events.
+- **Dynamic configuration** — Allow operators to change bridge settings at runtime from within IRC (e.g. via PRIVMSG to the bridge server) or Discord (e.g. bot commands). Currently config changes require editing `config.toml` and sending SIGHUP.
 - **Configurable quit-on-offline** — Currently pseudoclients persist when a Discord user goes offline (set AWAY instead of QUIT). A config option `pseudoclients.quit_on_offline` could quit them instead, optionally with an idle delay before quitting. See spec 06 "Presence policy" section.
+- **Reintroduce-on-kill delay** — Currently `reintroduce_on_kill` re-introduces immediately after the KILL (with a 30s cooldown to prevent loops). A configurable delay before reintroduction would be less aggressive and give IRC operators time to address the issue that prompted the KILL.
 
 ## Completed features (post-v1)
 

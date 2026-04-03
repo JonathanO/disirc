@@ -259,8 +259,12 @@ impl BridgeState {
 
     /// Handle a Discord event.  Returns commands to send to IRC and Discord.
     pub fn handle_discord_event(&mut self, event: DiscordEvent, now_ts: u64) -> HandlerOutput {
-        // Buffer events during uplink burst.
-        if self.link_phase == LinkPhase::Bursting {
+        // Buffer events until the IRC link is ready.  Events arriving while
+        // the link is Down or Bursting are replayed after BurstComplete.
+        // Without this, state would be updated (e.g. pm.introduce()) but the
+        // resulting IRC commands would be silently dropped, leaving
+        // pseudoclients marked as introduced but never sent to IRC.
+        if self.link_phase != LinkPhase::Ready {
             self.deferred_discord_events.push(event);
             return HandlerOutput::default();
         }
@@ -997,6 +1001,54 @@ mod tests {
         assert!(
             out.irc_commands.is_empty(),
             "Discord events when link is down should not produce IRC commands"
+        );
+    }
+
+    /// Discord events arriving before LinkUp (phase=Down) must be buffered
+    /// and replayed after BurstComplete, not silently dropped.
+    #[test]
+    fn discord_event_before_link_up_replayed_after_burst() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Discord MemberSnapshot arrives before IRC link is up.
+        let out = state.handle_discord_event(
+            DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 9002,
+                    display_name: "Eve".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+        assert!(
+            out.irc_commands.is_empty(),
+            "should be buffered, not processed"
+        );
+        assert!(
+            state.pm.get_by_discord_id(9002).is_none(),
+            "pseudoclient should not be introduced yet"
+        );
+
+        // IRC link comes up, burst completes.
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        // The buffered MemberSnapshot should now be replayed.
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "buffered MemberSnapshot should produce IntroduceUser after BurstComplete"
+        );
+        assert!(
+            state.pm.get_by_discord_id(9002).is_some(),
+            "Eve should be introduced after replay"
         );
     }
 }

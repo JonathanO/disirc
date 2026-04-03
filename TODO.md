@@ -25,7 +25,7 @@ None.
 
 ## Pending
 
-- **DM bridging (spec 09)** — Implemented (PR #19 merged), but spec status not updated. Needs mutation testing and spec closure.
+None.
 
 ## Future features
 
@@ -39,6 +39,7 @@ None.
 - ~~**Orchestrator refactor**~~ — PR #23 merged. Extracted `BridgeState` from `run_bridge` for deterministic testing. Fixed nick collision race via deferred introduction.
 - ~~**LinkPhase state machine**~~ — PR #24 merged. Replaced boolean flags with `LinkPhase` enum. Simplified kill cooldown.
 - ~~**Pseudoclient hostnames**~~ — PR #23. Changed from `sanitize_nick.host_suffix` to `{user_id}.discord.com`.
+- ~~**Presence fixes**~~ — PR #25. Cache display names for offline members, extract display name from presence_update payload, AWAY :Offline for offline users, proper burst on BurstComplete (not LinkUp), re-burst on reconnect, buffer Discord events when link is Down.
 
 ## Bugs fixed during integration
 
@@ -50,6 +51,12 @@ None.
 - Bots excluded from pseudoclients — Discord bots lack presence data and were treated as offline
 - SJOIN optional modes — UnrealIRCd omits channel modes parameter when none are set
 - Windows shutdown race — control_rx closing immediately on Windows caused bridge to exit
+- Offline members not introduced when coming online — display names not cached for offline members in MemberSnapshot; fixed by including all members
+- Discord events before LinkUp silently dropped — MemberSnapshot arriving before IRC handshake updated PM state but IRC commands were dropped; fixed by buffering in Down phase
+- EOS sent on LinkUp instead of BurstComplete — our burst was empty; pseudoclients sent post-burst. Fixed to send UIDs+SJOINs+EOS on BurstComplete
+- Pseudoclients lost on IRC reconnect — pm retained state but UIDs never re-sent to new link; fixed by re-bursting on BurstComplete
+- Spurious ClearAway on first introduction — new pseudoclients sent AWAY clear despite never being away
+- Offline presence silently dropped — users going offline produced no IRC command; now sends AWAY :Offline
 
 ## Completed milestones
 

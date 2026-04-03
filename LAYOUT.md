@@ -43,7 +43,8 @@ main event loop. No direct I/O; operates on protocol-agnostic types
 
 | File | What it contains |
 |------|-----------------|
-| `src/bridge/mod.rs` | Re-exports all public types and functions. Contains `NoopIrcResolver` / `NoopDiscordResolver` (used only by `run_bridge`), `unix_now`, and the `run_bridge` async event loop which owns `PseudoclientManager`, `IrcState`, and `DiscordState`. |
+| `src/bridge/mod.rs` | Re-exports all public types and functions. Contains `unix_now` and the `run_bridge` async event loop — a thin dispatcher that receives events from IRC/Discord channels, delegates to `BridgeState`, and forwards the resulting commands. |
+| `src/bridge/orchestrator.rs` | `BridgeState` — all mutable bridge state with synchronous handler methods (`handle_irc_event`, `handle_discord_event`). Owns `PseudoclientManager`, `IrcState`, `DiscordState`, and `LinkPhase`. Manages event buffering during link establishment, pseudoclient burst/reburst, deferred Discord event replay, KILL reintroduction with cooldown, and config reload. Contains `BridgeIrcResolver` / `BridgeDiscordResolver` for mention resolution. |
 | `src/bridge/map.rs` | `BridgeInfo` (immutable snapshot of one bridge entry) and `BridgeMap` (bidirectional O(1) channel routing table built from config). |
 | `src/bridge/relay.rs` | Message format conversion: `discord_to_irc_commands` (Discord message → Vec of `S2SCommand::SendMessage`), `irc_to_discord_command` (IRC PRIVMSG/NOTICE/ACTION → `DiscordCommand::SendMessage`). Private `extract_action` helper for CTCP ACTION parsing. |
 | `src/bridge/state.rs` | `IrcState` (uid→nick map + channel→timestamp cache), `DiscordState` (display_name cache + guild→irc-channel map), `apply_irc_event` (updates IrcState + PseudoclientManager from S2S events), `apply_discord_event` (updates DiscordState + PseudoclientManager from Discord events, returns S2S commands to emit). Private `introduce_pseudoclient` helper. |

@@ -86,6 +86,7 @@ impl TestIrcClient {
     /// Send `NAMES #channel` and poll until the reply contains a nick other
     /// than our own (i.e. a pseudoclient has appeared).  Retries every 2s
     /// until `timeout_dur` elapses.
+    #[allow(dead_code)] // used from e2e_discord but not e2e_irc
     pub async fn expect_names_contain(&mut self, channel: &str, timeout_dur: Duration) {
         let deadline = tokio::time::Instant::now() + timeout_dur;
         loop {

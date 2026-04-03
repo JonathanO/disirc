@@ -112,6 +112,7 @@ pub async fn run_bridge(
     );
     let mut irc_state = IrcState::default();
     let mut discord_state = DiscordState::default();
+    let mut control_alive = true;
 
     loop {
         tokio::select! {
@@ -246,7 +247,7 @@ pub async fn run_bridge(
                 // will include these members when the link comes up.
             }
 
-            maybe_ctrl = control_rx.recv() => {
+            maybe_ctrl = control_rx.recv(), if control_alive => {
                 match maybe_ctrl {
                     Some(ControlEvent::Reload) => {
                         match crate::config::reload(config_path, &current_config) {
@@ -299,7 +300,10 @@ pub async fn run_bridge(
                             }
                         }
                     }
-                    None => break,
+                    // Channel closed — signal handler exited (normal on
+                    // non-Unix where SIGHUP isn't available).  Disable
+                    // this select arm so we don't busy-loop on None.
+                    None => { control_alive = false; }
                 }
             }
         }

@@ -62,9 +62,20 @@ Messages flow bidirectionally:
    };
    ```
 
-3. Create a Discord bot in the [Developer Portal](https://discord.com/developers/applications) with these privileged intents enabled: **Server Members**, **Message Content**, **Presence**.
+3. Create a Discord bot in the [Developer Portal](https://discord.com/developers/applications):
 
-4. Copy and edit the config:
+   - Under **Bot**, enable these Privileged Gateway Intents: **Server Members**, **Message Content**, **Presence**.
+   - Copy the bot token.
+
+4. Invite the bot to your Discord server using this OAuth2 URL (replace `YOUR_CLIENT_ID` with the Application ID from the Developer Portal):
+
+   ```
+   https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=536874048
+   ```
+
+   This grants: View Channels, Send Messages, Read Message History, Manage Webhooks.
+
+5. Copy and edit the config:
 
    ```sh
    cp config.example.toml config.toml
@@ -72,7 +83,7 @@ Messages flow bidirectionally:
 
    Fill in your Discord bot token, IRC uplink address, link password, SID, and channel mappings. See the comments in `config.example.toml`.
 
-5. Run:
+6. Run:
 
    ```sh
    cargo run --release

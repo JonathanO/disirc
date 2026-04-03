@@ -351,6 +351,10 @@ pub fn apply_discord_event(
                 .get(guild_id)
                 .cloned()
                 .unwrap_or_default();
+            // Large guilds (>200 members) don't include offline members in
+            // GUILD_CREATE, so their display names are never cached.  When
+            // they come online we have no name to use for the pseudoclient.
+            // They will be introduced on-demand when they first send a message.
             let Some(display_name) = discord_state
                 .display_names
                 .get(user_id)

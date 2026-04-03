@@ -1,5 +1,7 @@
 # disirc task runner — install just: cargo install just
 
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+
 # Run all quality checks (same as pre-commit hook + cargo deny)
 check: fmt clippy test deny
 
@@ -28,8 +30,14 @@ e2e-discord:
     cargo test --test e2e_discord -- --include-ignored --nocapture --test-threads=1
 
 # Run the bridge with debug logging
+[unix]
 run:
     RUST_LOG=disirc=debug cargo run
+
+# Run the bridge with debug logging
+[windows]
+run:
+    $env:RUST_LOG="disirc=debug"; cargo run
 
 # Run mutation testing on a specific file
 mutants file:
@@ -45,4 +53,5 @@ ircd-start:
 
 # Stop the local UnrealIRCd
 ircd-stop:
-    docker stop unrealircd && docker rm unrealircd
+    docker stop unrealircd
+    docker rm unrealircd

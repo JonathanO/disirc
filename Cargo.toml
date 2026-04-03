@@ -3,6 +3,9 @@ name = "disirc"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "Discord-IRC bridge daemon using UnrealIRCd S2S protocol with pseudoclients"
+repository = "https://github.com/JonathanO/disirc"
+authors = ["Jonathan Oddy"]
 
 [dev-dependencies]
 proptest = "1"

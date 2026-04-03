@@ -308,7 +308,13 @@ pub fn apply_discord_event(
             user_id,
             guild_id,
             presence,
+            display_name,
         } => {
+            // Cache/update the display name if the presence payload carried one.
+            if let Some(name) = display_name.as_ref().filter(|n| !n.is_empty()) {
+                discord_state.display_names.insert(*user_id, name.clone());
+            }
+
             // If the user is already introduced, update their away status
             // even if they went offline (AWAY :Offline rather than QUIT).
             if let Some(s) = pm.get_by_discord_id(*user_id) {
@@ -351,20 +357,24 @@ pub fn apply_discord_event(
                 .get(guild_id)
                 .cloned()
                 .unwrap_or_default();
-            // Large guilds (>200 members) don't include offline members in
-            // GUILD_CREATE, so their display names are never cached.  When
-            // they come online we have no name to use for the pseudoclient.
-            // They will be introduced on-demand when they first send a message.
-            let Some(display_name) = discord_state
-                .display_names
-                .get(user_id)
+            // Use display name from event (preferred) or fall back to cache.
+            // Large guilds (>200 members) may not include all members in
+            // GUILD_CREATE; the presence payload usually carries the name.
+            let resolved_name = display_name
+                .as_ref()
                 .filter(|s| !s.is_empty())
-                .cloned()
-            else {
+                .or_else(|| {
+                    discord_state
+                        .display_names
+                        .get(user_id)
+                        .filter(|s| !s.is_empty())
+                })
+                .cloned();
+            let Some(display_name) = resolved_name else {
                 tracing::debug!(
                     user_id,
                     ?presence,
-                    "PresenceUpdated — no cached display name, skipping introduction"
+                    "PresenceUpdated — no display name available, skipping introduction"
                 );
                 return vec![];
             };
@@ -1010,6 +1020,7 @@ mod tests {
                 user_id: 20,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1001,
         );
@@ -1238,6 +1249,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Offline,
+                display_name: None,
             },
             1000,
         );
@@ -1267,6 +1279,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1293,6 +1306,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1319,6 +1333,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1346,6 +1361,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1359,6 +1375,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Idle,
+                display_name: None,
             },
             1000,
         );
@@ -1392,6 +1409,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1000,
         );
@@ -1406,6 +1424,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Offline,
+                display_name: None,
             },
             1001,
         );
@@ -1437,6 +1456,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Idle,
+                display_name: None,
             },
             1000,
         );
@@ -1450,6 +1470,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             1001,
         );

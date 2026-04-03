@@ -907,6 +907,7 @@ mod tests {
                 user_id: 8001,
                 guild_id: 999,
                 presence: DiscordPresence::Online,
+                display_name: None,
             },
             ts + 30,
         );

@@ -80,11 +80,13 @@ pub(crate) fn presence_event(
     user_id: u64,
     guild_id: Option<u64>,
     status: OnlineStatus,
+    display_name: Option<String>,
 ) -> Option<DiscordEvent> {
     guild_id.map(|gid| DiscordEvent::PresenceUpdated {
         user_id,
         guild_id: gid,
         presence: map_online_status(status),
+        display_name,
     })
 }
 
@@ -359,16 +361,28 @@ impl EventHandler for DiscordHandler {
     }
 
     async fn presence_update(&self, _ctx: Context, new_data: Presence) {
+        // Extract display name from the presence payload's partial user/member.
+        let nick = new_data
+            .user
+            .member
+            .as_ref()
+            .and_then(|m| m.nick.as_deref());
+        let global_name = new_data.user.global_name.as_deref();
+        let username = new_data.user.name.as_deref();
+        let display_name = username.map(|u| resolve_display_name(nick, global_name, u).to_owned());
+
         tracing::debug!(
             user_id = new_data.user.id.get(),
             guild_id = ?new_data.guild_id.map(GuildId::get),
             status = ?new_data.status,
+            ?display_name,
             "presence_update received"
         );
         if let Some(event) = presence_event(
             new_data.user.id.get(),
             new_data.guild_id.map(GuildId::get),
             new_data.status,
+            display_name,
         ) {
             let _ = self.event_tx.send(event).await;
         }
@@ -586,20 +600,24 @@ mod tests {
 
     #[test]
     fn presence_event_with_guild_id_emits_event() {
-        let ev = presence_event(42, Some(100), OnlineStatus::Idle);
+        let ev = presence_event(42, Some(100), OnlineStatus::Idle, Some("Alice".into()));
         assert_eq!(
             ev,
             Some(DiscordEvent::PresenceUpdated {
                 user_id: 42,
                 guild_id: 100,
                 presence: DiscordPresence::Idle,
+                display_name: Some("Alice".into()),
             })
         );
     }
 
     #[test]
     fn presence_event_without_guild_id_returns_none() {
-        assert_eq!(presence_event(42, None, OnlineStatus::Online), None);
+        assert_eq!(
+            presence_event(42, None, OnlineStatus::Online, Some("Alice".into())),
+            None
+        );
     }
 
     // ---------------------------------------------------------------------------

@@ -62,6 +62,10 @@ pub enum DiscordEvent {
         user_id: u64,
         guild_id: u64,
         presence: DiscordPresence,
+        /// Display name resolved from the presence payload (guild nick →
+        /// global name → username).  `None` if the presence payload carried
+        /// no user fields beyond the ID.
+        display_name: Option<String>,
     },
     /// A new member joined a guild that has at least one bridged channel.
     MemberAdded {

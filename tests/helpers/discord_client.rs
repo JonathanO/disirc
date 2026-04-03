@@ -105,6 +105,7 @@ impl DiscordTestClient {
 
     /// Open a DM channel with a user and send a message.
     /// Returns the sent message.
+    #[allow(dead_code)] // Kept for future L4 DM tests with a human user.
     pub async fn send_dm(&self, recipient_id: &str, content: &str) -> DiscordMessage {
         // Step 1: create/get the DM channel.
         let url = format!("{DISCORD_API}/users/@me/channels");
@@ -153,6 +154,7 @@ impl DiscordTestClient {
 
     /// Poll a DM channel with a user for a message containing `needle`.
     /// Opens the DM channel, fetches recent messages, returns the first match.
+    #[allow(dead_code)] // Kept for future L4 DM tests with a human user.
     pub async fn poll_dm_containing(
         &self,
         recipient_id: &str,

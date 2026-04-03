@@ -22,6 +22,22 @@ use super::state::{
 };
 
 // ---------------------------------------------------------------------------
+// Link phase
+// ---------------------------------------------------------------------------
+
+/// IRC link lifecycle phase.  Prevents impossible state combinations that
+/// arise when link-up and burst-complete are tracked as independent booleans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkPhase {
+    /// No S2S link is established.
+    Down,
+    /// Link is up; receiving the uplink's burst.  Discord events are buffered.
+    Bursting,
+    /// Burst complete; pseudoclients can be introduced.
+    Ready,
+}
+
+// ---------------------------------------------------------------------------
 // Resolvers
 // ---------------------------------------------------------------------------
 
@@ -79,10 +95,10 @@ pub struct BridgeState {
     pub pm: PseudoclientManager,
     pub irc_state: IrcState,
     pub discord_state: DiscordState,
-    /// True after the uplink's `BurstComplete` (EOS) has been received.
-    pub uplink_burst_done: bool,
+    /// Current IRC link lifecycle phase.
+    link_phase: LinkPhase,
     /// Discord events buffered during the uplink burst.
-    pub deferred_discord_events: Vec<DiscordEvent>,
+    deferred_discord_events: Vec<DiscordEvent>,
     /// Kill-reintroduction cooldowns: `discord_user_id` → epoch seconds.
     pub kill_cooldowns: HashMap<u64, u64>,
 }
@@ -96,7 +112,7 @@ impl BridgeState {
             pm: PseudoclientManager::new(&config.irc.sid, &config.pseudoclients.ident),
             irc_state: IrcState::default(),
             discord_state: DiscordState::default(),
-            uplink_burst_done: false,
+            link_phase: LinkPhase::Down,
             deferred_discord_events: Vec::new(),
             kill_cooldowns: HashMap::new(),
         }
@@ -108,18 +124,18 @@ impl BridgeState {
 
         match event {
             S2SEvent::LinkUp => {
-                self.uplink_burst_done = false;
+                self.link_phase = LinkPhase::Bursting;
                 // Send our burst (EOS only — pseudoclients are deferred until
                 // the uplink's burst completes).
                 output.irc_commands.push(S2SCommand::BurstComplete);
             }
             S2SEvent::LinkDown { .. } => {
-                self.uplink_burst_done = false;
+                self.link_phase = LinkPhase::Down;
                 self.deferred_discord_events.clear();
                 self.pm.clear_external_nicks();
             }
             S2SEvent::BurstComplete => {
-                self.uplink_burst_done = true;
+                self.link_phase = LinkPhase::Ready;
                 // Replay buffered Discord events now that all IRC nicks are
                 // registered from the burst.
                 let deferred: Vec<_> = self.deferred_discord_events.drain(..).collect();
@@ -202,14 +218,11 @@ impl BridgeState {
             && self.irc_state.is_link_up()
         {
             let cooldown_secs = 30u64;
-            let in_cooldown = self
-                .kill_cooldowns
-                .get(&discord_id)
-                .is_some_and(|ts| now_ts.saturating_sub(*ts) < cooldown_secs);
-            // Prune expired cooldowns (housekeeping to prevent unbounded growth).
+            // Check and prune in one step: remove the entry if expired,
+            // then check whether it survived.
             self.kill_cooldowns
                 .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
-            if in_cooldown {
+            if self.kill_cooldowns.contains_key(&discord_id) {
                 tracing::warn!(
                     discord_id,
                     nick = %display_name,
@@ -247,7 +260,7 @@ impl BridgeState {
     /// Handle a Discord event.  Returns commands to send to IRC and Discord.
     pub fn handle_discord_event(&mut self, event: DiscordEvent, now_ts: u64) -> HandlerOutput {
         // Buffer events during uplink burst.
-        if self.irc_state.is_link_up() && !self.uplink_burst_done {
+        if self.link_phase == LinkPhase::Bursting {
             self.deferred_discord_events.push(event);
             return HandlerOutput::default();
         }
@@ -352,7 +365,7 @@ impl BridgeState {
             event,
             now_ts,
         );
-        if self.irc_state.is_link_up() && self.uplink_burst_done {
+        if self.link_phase == LinkPhase::Ready {
             output.irc_commands.extend(cmds);
         }
 
@@ -953,11 +966,11 @@ mod tests {
         let mut state = BridgeState::new(&test_config());
         let ts = 1_000_000;
 
-        // Link up, burst complete — so uplink_burst_done = true.
+        // Link up, burst complete — phase is Ready.
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_irc_event(&S2SEvent::BurstComplete, ts);
 
-        // Link drops — is_link_up() becomes false, but uplink_burst_done is still true.
+        // Link drops — phase returns to Down.
         state.handle_irc_event(
             &S2SEvent::LinkDown {
                 reason: "test".into(),
@@ -965,8 +978,7 @@ mod tests {
             ts,
         );
 
-        // Discord event while link is down — should not produce IRC commands
-        // even though uplink_burst_done is true.
+        // Discord event while link is down — should not produce IRC commands.
         let out = state.handle_discord_event(
             DiscordEvent::MemberSnapshot {
                 guild_id: 999,

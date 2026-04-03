@@ -1,6 +1,6 @@
 use crate::discord::{DiscordEvent, DiscordPresence};
 use crate::irc::{S2SCommand, S2SEvent};
-use crate::pseudoclients::{PseudoclientManager, sanitize_nick};
+use crate::pseudoclients::PseudoclientManager;
 
 // ---------------------------------------------------------------------------
 // IRC lifecycle state
@@ -349,7 +349,7 @@ pub(crate) fn introduce_pseudoclient(
         let uid = s.uid.clone();
         let nick = s.nick.clone();
         let chans = s.channels.clone();
-        let host = format!("{}.{}", sanitize_nick(display_name), pm.host_suffix());
+        let host = format!("{user_id}.discord.com");
         cmds.push(S2SCommand::IntroduceUser {
             uid: uid.clone(),
             nick,
@@ -400,7 +400,7 @@ mod tests {
     use crate::pseudoclients::PseudoclientManager;
 
     fn make_pm() -> PseudoclientManager {
-        PseudoclientManager::new("001", "bridge", "users.example.com")
+        PseudoclientManager::new("001", "bridge")
     }
 
     fn introduced(uid: &str, nick: &str) -> S2SEvent {

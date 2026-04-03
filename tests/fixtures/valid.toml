@@ -8,7 +8,6 @@ link_password = "secret"
 sid = "0D0"
 
 [pseudoclients]
-host_suffix = "users.example.net"
 ident = "bridge"
 
 [[bridge]]

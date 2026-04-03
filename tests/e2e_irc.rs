@@ -43,7 +43,6 @@ fn e2e_config(host: &str, s2s_port: u16) -> Config {
             connect_timeout: 30,
         },
         pseudoclients: PseudoclientConfig {
-            host_suffix: "discord.test.net".into(),
             ident: "discord".into(),
             reintroduce_on_kill: false,
         },

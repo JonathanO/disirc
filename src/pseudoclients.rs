@@ -219,8 +219,6 @@ pub struct PseudoclientManager {
     sid: String,
     /// Ident for all pseudoclients (from config).
     ident: String,
-    /// Host suffix for all pseudoclients (from config).
-    host_suffix: String,
     /// UID generator.
     uid_generator: UidGenerator,
     /// Discord user ID → state.
@@ -236,11 +234,10 @@ pub struct PseudoclientManager {
 impl PseudoclientManager {
     /// Create a new manager with the given config values.
     #[must_use]
-    pub fn new(sid: &str, ident: &str, host_suffix: &str) -> Self {
+    pub fn new(sid: &str, ident: &str) -> Self {
         Self {
             sid: sid.to_string(),
             ident: ident.to_string(),
-            host_suffix: host_suffix.to_string(),
             uid_generator: UidGenerator::new(sid),
             by_discord_id: HashMap::new(),
             nick_to_discord: HashMap::new(),
@@ -484,12 +481,6 @@ impl PseudoclientManager {
     #[must_use]
     pub fn ident(&self) -> &str {
         &self.ident
-    }
-
-    /// Return the host suffix used to build pseudoclient hostnames.
-    #[must_use]
-    pub fn host_suffix(&self) -> &str {
-        &self.host_suffix
     }
 
     /// Iterate over all active pseudoclient states.
@@ -748,7 +739,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     fn make_manager() -> PseudoclientManager {
-        PseudoclientManager::new("0D0", "discord", "discord.bridge")
+        PseudoclientManager::new("0D0", "discord")
     }
 
     #[test]
@@ -785,10 +776,17 @@ mod tests {
     }
 
     #[test]
+    fn is_empty_true_when_no_pseudoclients() {
+        let mgr = make_manager();
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
     fn introduce_updates_state_maps() {
         let mut mgr = make_manager();
         mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
 
+        assert!(!mgr.is_empty());
         assert!(mgr.get_by_discord_id(100).is_some());
         assert!(mgr.get_by_nick("alice").is_some());
         assert!(mgr.get_by_nick("Alice").is_some()); // case-insensitive

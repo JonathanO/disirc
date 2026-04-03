@@ -66,11 +66,7 @@ pub struct HandlerOutput {
     pub discord_commands: Vec<DiscordCommand>,
 }
 
-impl HandlerOutput {
-    fn empty() -> Self {
-        Self::default()
-    }
-}
+// HandlerOutput uses derive(Default) — call HandlerOutput::default() directly.
 
 // ---------------------------------------------------------------------------
 // BridgeState
@@ -97,11 +93,7 @@ impl BridgeState {
         Self {
             config: config.clone(),
             bridge_map: BridgeMap::from_config(&config.bridges),
-            pm: PseudoclientManager::new(
-                &config.irc.sid,
-                &config.pseudoclients.ident,
-                &config.pseudoclients.host_suffix,
-            ),
+            pm: PseudoclientManager::new(&config.irc.sid, &config.pseudoclients.ident),
             irc_state: IrcState::default(),
             discord_state: DiscordState::default(),
             uplink_burst_done: false,
@@ -112,7 +104,7 @@ impl BridgeState {
 
     /// Handle an IRC event.  Returns commands to send to IRC and Discord.
     pub fn handle_irc_event(&mut self, event: &S2SEvent, now_ts: u64) -> HandlerOutput {
-        let mut output = HandlerOutput::empty();
+        let mut output = HandlerOutput::default();
 
         match event {
             S2SEvent::LinkUp => {
@@ -210,14 +202,14 @@ impl BridgeState {
             && self.irc_state.is_link_up()
         {
             let cooldown_secs = 30u64;
-            // Prune expired cooldowns.
-            self.kill_cooldowns
-                .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
-            if self
+            let in_cooldown = self
                 .kill_cooldowns
                 .get(&discord_id)
-                .is_some_and(|ts| now_ts.saturating_sub(*ts) < cooldown_secs)
-            {
+                .is_some_and(|ts| now_ts.saturating_sub(*ts) < cooldown_secs);
+            // Prune expired cooldowns (housekeeping to prevent unbounded growth).
+            self.kill_cooldowns
+                .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
+            if in_cooldown {
                 tracing::warn!(
                     discord_id,
                     nick = %display_name,
@@ -257,7 +249,7 @@ impl BridgeState {
         // Buffer events during uplink burst.
         if self.irc_state.is_link_up() && !self.uplink_burst_done {
             self.deferred_discord_events.push(event);
-            return HandlerOutput::empty();
+            return HandlerOutput::default();
         }
 
         self.process_discord_event(&event, now_ts)
@@ -265,7 +257,7 @@ impl BridgeState {
 
     /// Inner Discord event processing (used both live and for deferred replay).
     fn process_discord_event(&mut self, event: &DiscordEvent, now_ts: u64) -> HandlerOutput {
-        let mut output = HandlerOutput::empty();
+        let mut output = HandlerOutput::default();
 
         // Populate guild→irc-channel map.
         if let DiscordEvent::MemberSnapshot {
@@ -443,7 +435,6 @@ mod tests {
                 connect_timeout: 15,
             },
             pseudoclients: PseudoclientConfig {
-                host_suffix: "test.net".into(),
                 ident: "discord".into(),
                 reintroduce_on_kill: false,
             },
@@ -631,7 +622,7 @@ mod tests {
     /// IRC resolver finds pseudoclient by nick.
     #[test]
     fn irc_resolver_finds_pseudoclient() {
-        let mut pm = PseudoclientManager::new("002", "bridge", "test.net");
+        let mut pm = PseudoclientManager::new("002", "bridge");
         pm.introduce(42, "alice", "Alice", &["#test".to_string()], 1000);
         let resolver = BridgeIrcResolver { pm: &pm };
         assert_eq!(resolver.resolve_nick("alice"), Some("42".to_string()));
@@ -640,7 +631,7 @@ mod tests {
     /// IRC resolver returns None for unknown nick.
     #[test]
     fn irc_resolver_unknown_nick() {
-        let pm = PseudoclientManager::new("002", "bridge", "test.net");
+        let pm = PseudoclientManager::new("002", "bridge");
         let resolver = BridgeIrcResolver { pm: &pm };
         assert_eq!(resolver.resolve_nick("nobody"), None);
     }
@@ -762,6 +753,237 @@ mod tests {
         assert_eq!(
             nick, "alice",
             "after LinkDown, external nicks should be cleared; got: {nick}"
+        );
+    }
+
+    // --- IRC→Discord message relay ---
+
+    /// Helper: set up a bridge with link up, burst complete, and a pseudoclient.
+    fn setup_bridge_with_pseudoclient() -> (BridgeState, String) {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        // Introduce an external IRC user so messages come from a known UID.
+        state.handle_irc_event(
+            &S2SEvent::UserIntroduced {
+                uid: "001AAA001".into(),
+                nick: "ircuser".into(),
+                server_sid: "001".into(),
+                realname: "IRC User".into(),
+                host: "example.com".into(),
+                ident: "ircuser".into(),
+            },
+            ts,
+        );
+        (state, "001AAA001".to_string())
+    }
+
+    #[test]
+    fn irc_message_routed_to_discord() {
+        let (mut state, uid) = setup_bridge_with_pseudoclient();
+        let out = state.handle_irc_event(
+            &S2SEvent::MessageReceived {
+                from_uid: uid,
+                target: "#test".into(),
+                text: "hello".into(),
+                timestamp: None,
+            },
+            1_000_000,
+        );
+        assert!(
+            !out.discord_commands.is_empty(),
+            "IRC PRIVMSG to bridged channel should produce a Discord command"
+        );
+    }
+
+    #[test]
+    fn irc_notice_routed_to_discord() {
+        let (mut state, uid) = setup_bridge_with_pseudoclient();
+        let out = state.handle_irc_event(
+            &S2SEvent::NoticeReceived {
+                from_uid: uid,
+                target: "#test".into(),
+                text: "notice text".into(),
+            },
+            1_000_000,
+        );
+        assert!(
+            !out.discord_commands.is_empty(),
+            "IRC NOTICE to bridged channel should produce a Discord command"
+        );
+    }
+
+    // --- KILL cooldown ---
+
+    #[test]
+    fn kill_within_cooldown_does_not_reintroduce() {
+        let mut config = test_config();
+        config.pseudoclients.reintroduce_on_kill = true;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        let out = state.handle_discord_event(
+            DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 8001,
+                    display_name: "Charlie".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+        let uid1 = out
+            .irc_commands
+            .iter()
+            .find_map(|c| {
+                if let S2SCommand::IntroduceUser { uid, .. } = c {
+                    Some(uid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("should introduce Charlie");
+
+        // First kill — should reintroduce.
+        let out = state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid: uid1.clone(),
+                reason: "first kill".into(),
+            },
+            ts,
+        );
+        let uid2 = out
+            .irc_commands
+            .iter()
+            .find_map(|c| {
+                if let S2SCommand::IntroduceUser { uid, .. } = c {
+                    Some(uid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("first kill should reintroduce");
+
+        // Second kill within cooldown — should NOT reintroduce.
+        let out = state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid: uid2,
+                reason: "second kill".into(),
+            },
+            ts + 5, // only 5 seconds later
+        );
+        assert!(
+            !out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "second kill within cooldown must not reintroduce"
+        );
+
+        // Third kill after cooldown expires — should reintroduce again.
+        // Re-introduce manually since the cooldown suppressed it.
+        state.handle_discord_event(
+            DiscordEvent::PresenceUpdated {
+                user_id: 8001,
+                guild_id: 999,
+                presence: DiscordPresence::Online,
+            },
+            ts + 30,
+        );
+        let uid3 = state
+            .pm
+            .get_by_discord_id(8001)
+            .map(|s| s.uid.clone())
+            .expect("should be introduced via presence");
+        let out = state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid: uid3,
+                reason: "third kill".into(),
+            },
+            ts + 30,
+        );
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "kill after cooldown expires should reintroduce"
+        );
+    }
+
+    // --- reload_config ---
+
+    #[test]
+    fn reload_config_with_changed_bridges_produces_command() {
+        let mut state = BridgeState::new(&test_config());
+        let mut new_config = test_config();
+        new_config.bridges.push(BridgeEntry {
+            discord_channel_id: "222".into(),
+            irc_channel: "#new".into(),
+            webhook_url: None,
+        });
+        let cmd = state.reload_config(new_config);
+        assert!(
+            cmd.is_some(),
+            "reload_config with changed bridges should return a DiscordCommand"
+        );
+    }
+
+    #[test]
+    fn reload_config_with_no_changes_returns_none() {
+        let mut state = BridgeState::new(&test_config());
+        let same_config = test_config();
+        let cmd = state.reload_config(same_config);
+        assert!(
+            cmd.is_none(),
+            "reload_config with identical bridges should return None"
+        );
+    }
+
+    // --- Discord event buffering gate ---
+
+    #[test]
+    fn discord_state_cmds_not_forwarded_after_link_down() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Link up, burst complete — so uplink_burst_done = true.
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        // Link drops — is_link_up() becomes false, but uplink_burst_done is still true.
+        state.handle_irc_event(
+            &S2SEvent::LinkDown {
+                reason: "test".into(),
+            },
+            ts,
+        );
+
+        // Discord event while link is down — should not produce IRC commands
+        // even though uplink_burst_done is true.
+        let out = state.handle_discord_event(
+            DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 9001,
+                    display_name: "Dave".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+        assert!(
+            out.irc_commands.is_empty(),
+            "Discord events when link is down should not produce IRC commands"
         );
     }
 }

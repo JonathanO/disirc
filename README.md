@@ -110,7 +110,6 @@ link_password = "your-link-password"
 sid = "0D0"
 
 [pseudoclients]
-host_suffix = "discord.example.net"
 ident = "discord"
 
 [formatting]

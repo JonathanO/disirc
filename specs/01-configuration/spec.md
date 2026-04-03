@@ -23,10 +23,8 @@ sid            = "0D0"                   # unique 3-char alphanumeric SID
 description    = "Discord bridge"
 
 [pseudoclients]
-# Hostname suffix for Discord users on IRC
-# Alice on Discord appears as Alice!discord@alice.users.discord.example.net
-host_suffix    = "users.discord.example.net"
 # Ident field for all pseudoclients
+# Hostnames are derived from the Discord user ID: <user_id>.discord.com
 ident          = "discord"
 
 [formatting]
@@ -65,7 +63,6 @@ irc_channel        = "#dev"
 | `irc.port` | `6900` | Port to connect to on the uplink |
 | `irc.tls` | `true` | Use TLS for the server link |
 | `irc.description` | `"Discord bridge"` | Server description shown in `/links` and `/map` |
-| `pseudoclients.host_suffix` | `"discord"` | Hostname suffix for pseudoclient hostmasks |
 | `pseudoclients.ident` | `"discord"` | Ident (username) field for all pseudoclients |
 | `formatting.irc_nick_colon_mention` | `true` | Convert leading `nick: ` in IRC messages to Discord `<@id>` mentions |
 | `bridge[].webhook_url` | _(none)_ | Discord webhook URL for this channel. When set, IRC messages are delivered via webhook so each IRC user appears with their own nick and avatar. Falls back to plain `channel.send()` if absent or on failure. |
@@ -104,7 +101,7 @@ All other fields require a full restart. Changing them at runtime is ignored wit
 
 - `discord.token`
 - All `[irc]` fields (uplink, port, tls, link_name, link_password, sid, description)
-- All `[pseudoclients]` fields (host_suffix, ident)
+- All `[pseudoclients]` fields (ident)
 
 ### Reload procedure
 

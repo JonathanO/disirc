@@ -100,6 +100,11 @@ pub fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
             reason: reason.clone(),
         }),
 
+        IrcCommand::Kill { target, reason } => Some(S2SEvent::UserKilled {
+            uid: target.clone(),
+            reason: reason.clone(),
+        }),
+
         IrcCommand::Kick {
             channel,
             target,
@@ -713,6 +718,26 @@ mod tests {
             panic!()
         };
         assert_eq!(reason, "");
+    }
+
+    #[test]
+    fn inbound_kill_translates_to_user_killed() {
+        let msg = IrcMessage {
+            tags: vec![],
+            prefix: Some("001OPER01".into()),
+            command: IrcCommand::Kill {
+                target: "002AAAAAA".into(),
+                reason: "Killed (abuse)".into(),
+            },
+        };
+        let event = translate_inbound(&msg).unwrap();
+        assert_eq!(
+            event,
+            S2SEvent::UserKilled {
+                uid: "002AAAAAA".to_string(),
+                reason: "Killed (abuse)".to_string(),
+            }
+        );
     }
 
     // -----------------------------------------------------------------------

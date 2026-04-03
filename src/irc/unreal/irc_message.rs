@@ -125,6 +125,13 @@ pub enum IrcCommand {
         /// Optional part message.
         reason: Option<String>,
     },
+    /// `KILL` — forcibly remove a user from the network (oper action).
+    Kill {
+        /// UID of the user being killed.
+        target: String,
+        /// Kill reason/path.
+        reason: String,
+    },
     /// `KICK` — forcibly remove a user from a channel.
     Kick {
         /// Channel the kick applies to.
@@ -574,6 +581,14 @@ fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseErr
                 reason: p.optional_trailing(),
             })
         }
+        "KILL" => {
+            let mut p = take_params("KILL", params, 2, 2)?;
+            let target = p.next();
+            Ok(IrcCommand::Kill {
+                target,
+                reason: p.trailing(),
+            })
+        }
         "KICK" => {
             let mut p = take_params("KICK", params, 2, 3)?;
             let channel = p.next();
@@ -777,6 +792,11 @@ fn write_command(cmd: &IrcCommand, out: &mut String) -> Result<(), SerializeErro
             if let Some(r) = reason {
                 append_trailing(out, r);
             }
+        }
+        IrcCommand::Kill { target, reason } => {
+            out.push_str("KILL");
+            append_param(out, target, 0)?;
+            append_trailing(out, reason);
         }
         IrcCommand::Nick {
             new_nick,
@@ -1302,6 +1322,24 @@ mod tests {
                 reason: Some("spamming".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn parse_kill() {
+        let msg = IrcMessage::parse(":001OPER01 KILL 002AAAAAA :Killed (reason)").unwrap();
+        assert_eq!(msg.prefix, Some("001OPER01".to_string()));
+        assert_eq!(
+            msg.command,
+            IrcCommand::Kill {
+                target: "002AAAAAA".to_string(),
+                reason: "Killed (reason)".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_kill_too_few_params_is_error() {
+        assert!(IrcMessage::parse("KILL").is_err());
     }
 
     #[test]

@@ -63,7 +63,13 @@ pub async fn start_unrealircd() -> IrcContainer {
 
     // On Docker Desktop (Windows/macOS), containers may not be reachable on
     // 127.0.0.1 — use get_host() to get the correct address.
-    let host = container.get_host().await.expect("failed to get host");
+    // On Docker Desktop (Windows/macOS), containers may not be reachable on
+    // 127.0.0.1 — use get_host() to get the correct address.
+    let host = container
+        .get_host()
+        .await
+        .expect("failed to get host")
+        .to_string();
     let client_port = container
         .get_host_port_ipv4(6667)
         .await
@@ -74,7 +80,7 @@ pub async fn start_unrealircd() -> IrcContainer {
         .expect("failed to get S2S port");
 
     IrcContainer {
-        host: host.to_string(),
+        host,
         s2s_port,
         client_port,
         _container: container,

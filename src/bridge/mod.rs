@@ -14,7 +14,7 @@ mod state;
 use tokio::sync::mpsc;
 
 use crate::config::Config;
-use crate::discord::{DiscordCommand, DiscordEvent};
+use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence};
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::{S2SCommand, S2SEvent};
 use crate::pseudoclients::PseudoclientManager;
@@ -113,6 +113,10 @@ pub async fn run_bridge(
     let mut irc_state = IrcState::default();
     let mut discord_state = DiscordState::default();
     let mut control_alive = true;
+    // Track recent kill-reintroductions to prevent kill loops.
+    // Maps discord_user_id → time of last reintroduction.
+    let mut kill_cooldowns: std::collections::HashMap<u64, tokio::time::Instant> =
+        std::collections::HashMap::new();
 
     loop {
         tokio::select! {
@@ -169,7 +173,57 @@ pub async fn run_bridge(
                     _ => {}
                 }
 
+                // Before apply_irc_event removes the pseudoclient, capture its
+                // identity so we can re-introduce it if configured.
+                let killed_pseudoclient = if let S2SEvent::UserKilled { uid, .. } = &event {
+                    pm.get_by_uid(uid).map(|ps| {
+                        (ps.discord_user_id, ps.nick.clone(), ps.channels.clone())
+                    })
+                } else {
+                    None
+                };
+
                 apply_irc_event(&mut irc_state, &mut pm, &event);
+
+                // Re-introduce killed pseudoclients immediately if configured,
+                // with cooldown to prevent kill loops.
+                if let Some((discord_id, display_name, channels)) = killed_pseudoclient
+                    && current_config.pseudoclients.reintroduce_on_kill
+                    && irc_state.is_link_up()
+                {
+                    let now_inst = tokio::time::Instant::now();
+                    let cooldown = std::time::Duration::from_secs(30);
+                    // Prune expired cooldowns to prevent unbounded growth.
+                    kill_cooldowns.retain(|_, ts| now_inst.duration_since(*ts) < cooldown);
+                    if kill_cooldowns
+                        .get(&discord_id)
+                        .is_some_and(|last| now_inst.duration_since(*last) < cooldown)
+                    {
+                        tracing::warn!(
+                            discord_id,
+                            nick = %display_name,
+                            "not re-introducing killed pseudoclient — killed again within 30s cooldown"
+                        );
+                    } else {
+                        let now = unix_now();
+                        let cmds = state::introduce_pseudoclient(
+                            &mut pm, &irc_state, discord_id, &display_name,
+                            &channels, DiscordPresence::Online, now,
+                        );
+                        let new_uid = pm.get_by_discord_id(discord_id).map(|ps| ps.uid.as_str());
+                        tracing::debug!(
+                            discord_id,
+                            nick = %display_name,
+                            new_uid = ?new_uid,
+                            cmd_count = cmds.len(),
+                            "re-introducing killed pseudoclient"
+                        );
+                        kill_cooldowns.insert(discord_id, now_inst);
+                        for cmd in cmds {
+                            let _ = irc_cmd_tx.send(cmd).await;
+                        }
+                    }
+                }
             }
 
             maybe_event = discord_event_rx.recv() => {
@@ -344,6 +398,7 @@ mod tests {
             pseudoclients: PseudoclientConfig {
                 host_suffix: "test.net".into(),
                 ident: "discord".into(),
+                reintroduce_on_kill: false,
             },
             formatting: crate::config::FormattingConfig::default(),
             bridges: vec![BridgeEntry {

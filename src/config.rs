@@ -65,6 +65,7 @@ pub fn config_path_from_args() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub discord: DiscordConfig,
     pub irc: IrcConfig,
@@ -77,11 +78,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct DiscordConfig {
     pub token: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct IrcConfig {
     pub uplink: String,
     #[serde(default = "default_port")]
@@ -103,14 +106,20 @@ fn default_connect_timeout() -> u64 {
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PseudoclientConfig {
     #[serde(default = "default_host_suffix")]
     pub host_suffix: String,
     #[serde(default = "default_ident")]
     pub ident: String,
+    /// Re-introduce pseudoclients immediately after they are killed by an
+    /// IRC operator.  Default: false (re-introduced on next message only).
+    #[serde(default)]
+    pub reintroduce_on_kill: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct FormattingConfig {
     /// Convert leading `nick:` or `nick,` in IRC messages to Discord mentions.
     #[serde(default = "default_true")]
@@ -130,6 +139,7 @@ impl Default for FormattingConfig {
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct BridgeEntry {
     pub discord_channel_id: String,
     pub irc_channel: String,
@@ -439,6 +449,7 @@ impl Default for PseudoclientConfig {
         Self {
             host_suffix: default_host_suffix(),
             ident: default_ident(),
+            reintroduce_on_kill: false,
         }
     }
 }

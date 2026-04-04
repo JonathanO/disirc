@@ -119,10 +119,6 @@ pub(crate) struct RawMemberData<'a> {
     pub nick: Option<&'a str>,
     pub global_name: Option<&'a str>,
     pub username: &'a str,
-    /// `true` when the Discord account is a bot.  Bots lack presence data but
-    /// can send and receive channel messages, so they are treated as always
-    /// online for pseudoclient purposes.
-    pub bot: bool,
 }
 
 /// Build a [`DiscordEvent::MemberSnapshot`] from raw member data.
@@ -142,21 +138,16 @@ pub(crate) fn build_member_snapshot_event(
     channel_names: HashMap<u64, String>,
     role_names: HashMap<u64, String>,
 ) -> DiscordEvent {
-    // Include all members so their display names are cached for later
-    // introduction when they come online via PRESENCE_UPDATE.  Only non-offline
-    // members will actually be introduced as pseudoclients during the burst.
-    // Bots have no presence data but are always treated as Online.
+    // Include all members so their names are cached for later introduction
+    // when they come online via PRESENCE_UPDATE.  Only non-offline members
+    // will actually be introduced as pseudoclients during the burst.
     let member_infos: Vec<MemberInfo> = members
         .iter()
         .map(|m| {
-            let presence = if m.bot {
-                DiscordPresence::Online
-            } else {
-                presences
-                    .get(&m.user_id)
-                    .copied()
-                    .unwrap_or(DiscordPresence::Offline)
-            };
+            let presence = presences
+                .get(&m.user_id)
+                .copied()
+                .unwrap_or(DiscordPresence::Offline);
             MemberInfo {
                 user_id: m.user_id,
                 username: m.username.to_owned(),
@@ -271,7 +262,6 @@ impl EventHandler for DiscordHandler {
                 nick: m.nick.as_deref(),
                 global_name: m.user.global_name.as_deref(),
                 username: &m.user.name,
-                bot: m.user.bot,
             })
             .collect();
 
@@ -667,14 +657,12 @@ mod tests {
                 nick: None,
                 global_name: None,
                 username: "alice",
-                bot: false,
             },
             RawMemberData {
                 user_id: 2,
                 nick: None,
                 global_name: None,
                 username: "bob",
-                bot: false,
             },
         ];
         let mut presences = HashMap::new();
@@ -712,7 +700,6 @@ mod tests {
             nick: Some("N"),
             global_name: None,
             username: "u",
-            bot: false,
         }];
         let ev = build_member_snapshot_event(
             10,
@@ -738,14 +725,12 @@ mod tests {
                 nick: None,
                 global_name: None,
                 username: "idler",
-                bot: false,
             },
             RawMemberData {
                 user_id: 11,
                 nick: None,
                 global_name: None,
                 username: "busy",
-                bot: false,
             },
         ];
         let mut presences = HashMap::new();
@@ -767,26 +752,24 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_bot_treated_as_online_without_presence() {
-        // Bot accounts lack Gateway presence data; they must be treated as Online
-        // so they get pseudoclients introduced during burst.
+    fn snapshot_members_without_presence_are_offline() {
+        // Members absent from the presences map default to Offline,
+        // regardless of whether they are bots or humans.  They will be
+        // introduced when their PRESENCE_UPDATE arrives.
         let members = vec![
             RawMemberData {
                 user_id: 20,
                 nick: None,
                 global_name: None,
                 username: "bridgebot",
-                bot: true,
             },
             RawMemberData {
                 user_id: 21,
                 nick: None,
                 global_name: None,
                 username: "offlineuser",
-                bot: false,
             },
         ];
-        // No presences for either member.
         let ev = build_member_snapshot_event(
             50,
             &members,
@@ -799,14 +782,8 @@ mod tests {
             panic!()
         };
         assert_eq!(infos.len(), 2, "all members must be included");
-        assert_eq!(infos[0].user_id, 20);
-        assert_eq!(infos[0].presence, DiscordPresence::Online, "bot → Online");
-        assert_eq!(infos[1].user_id, 21);
-        assert_eq!(
-            infos[1].presence,
-            DiscordPresence::Offline,
-            "human without presence → Offline"
-        );
+        assert_eq!(infos[0].presence, DiscordPresence::Offline);
+        assert_eq!(infos[1].presence, DiscordPresence::Offline);
     }
 
     // ---------------------------------------------------------------------------

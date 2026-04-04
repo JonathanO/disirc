@@ -194,6 +194,8 @@ pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event
 ///   to the IRC channel names the bridge serves for that guild.
 #[derive(Debug, Default)]
 pub struct DiscordState {
+    /// Discord user ID → username (the unique `@handle`).
+    pub usernames: std::collections::HashMap<u64, String>,
     /// Discord user ID → current display name.
     pub display_names: std::collections::HashMap<u64, String>,
     /// Discord guild ID → IRC channel names served by this guild.
@@ -241,8 +243,11 @@ pub fn apply_discord_event(
             let mut introduced = 0u32;
             let mut cached_only = 0u32;
             for member in members {
-                // Cache display name for all members so PresenceUpdated can
-                // introduce them later when they come online.
+                // Cache username and display name for all members so
+                // PresenceUpdated can introduce them later when they come online.
+                discord_state
+                    .usernames
+                    .insert(member.user_id, member.username.clone());
                 discord_state
                     .display_names
                     .insert(member.user_id, member.display_name.clone());
@@ -255,6 +260,7 @@ pub fn apply_discord_event(
                     pm,
                     irc_state,
                     member.user_id,
+                    &member.username,
                     &member.display_name,
                     &channels,
                     member.presence,
@@ -308,9 +314,13 @@ pub fn apply_discord_event(
             user_id,
             guild_id,
             presence,
+            username,
             display_name,
         } => {
-            // Cache/update the display name if the presence payload carried one.
+            // Cache/update names if the presence payload carried them.
+            if let Some(name) = username.as_ref().filter(|n| !n.is_empty()) {
+                discord_state.usernames.insert(*user_id, name.clone());
+            }
             if let Some(name) = display_name.as_ref().filter(|n| !n.is_empty()) {
                 discord_state.display_names.insert(*user_id, name.clone());
             }
@@ -357,10 +367,18 @@ pub fn apply_discord_event(
                 .get(guild_id)
                 .cloned()
                 .unwrap_or_default();
-            // Use display name from event (preferred) or fall back to cache.
-            // Large guilds (>200 members) may not include all members in
-            // GUILD_CREATE; the presence payload usually carries the name.
-            let resolved_name = display_name
+            // Resolve username and display name from event or cache.
+            let resolved_username = username
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    discord_state
+                        .usernames
+                        .get(user_id)
+                        .filter(|s| !s.is_empty())
+                })
+                .cloned();
+            let resolved_display = display_name
                 .as_ref()
                 .filter(|s| !s.is_empty())
                 .or_else(|| {
@@ -370,16 +388,18 @@ pub fn apply_discord_event(
                         .filter(|s| !s.is_empty())
                 })
                 .cloned();
-            let Some(display_name) = resolved_name else {
+            let Some(username) = resolved_username else {
                 tracing::debug!(
                     user_id,
                     ?presence,
-                    "PresenceUpdated — no display name available, skipping introduction"
+                    "PresenceUpdated — no username available, skipping introduction"
                 );
                 return vec![];
             };
+            let display_name = resolved_display.unwrap_or_else(|| username.clone());
             tracing::debug!(
                 user_id,
+                %username,
                 %display_name,
                 ?presence,
                 "PresenceUpdated — introducing pseudoclient"
@@ -388,6 +408,7 @@ pub fn apply_discord_event(
                 pm,
                 irc_state,
                 *user_id,
+                &username,
                 &display_name,
                 &channels,
                 *presence,
@@ -404,10 +425,12 @@ pub fn apply_discord_event(
 ///
 /// Returns the `S2SCommand`s needed to introduce the user and set their
 /// initial presence.  Returns only away/back commands if already introduced.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn introduce_pseudoclient(
     pm: &mut PseudoclientManager,
     irc_state: &IrcState,
     user_id: u64,
+    username: &str,
     display_name: &str,
     channels: &[String],
     presence: DiscordPresence,
@@ -415,7 +438,7 @@ pub(crate) fn introduce_pseudoclient(
 ) -> Vec<S2SCommand> {
     let mut cmds = Vec::new();
 
-    if let Some(s) = pm.introduce(user_id, display_name, display_name, channels, now_ts) {
+    if let Some(s) = pm.introduce(user_id, username, display_name, channels, now_ts) {
         let uid = s.uid.clone();
         let nick = s.nick.clone();
         let chans = s.channels.clone();
@@ -490,6 +513,7 @@ mod tests {
     fn member(user_id: u64, name: &str, presence: DiscordPresence) -> MemberInfo {
         MemberInfo {
             user_id,
+            username: name.to_string(),
             display_name: name.to_string(),
             presence,
         }
@@ -1020,6 +1044,7 @@ mod tests {
                 user_id: 20,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             1001,
@@ -1239,6 +1264,7 @@ mod tests {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
+        ds.usernames.insert(50, "eve".to_string());
         ds.display_names.insert(50, "dave".to_string());
 
         let cmds = apply_discord_event(
@@ -1249,6 +1275,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Offline,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1269,6 +1296,7 @@ mod tests {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
+        ds.usernames.insert(50, "eve".to_string());
         ds.display_names.insert(50, "eve".to_string());
 
         let cmds = apply_discord_event(
@@ -1279,6 +1307,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1306,6 +1335,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1319,11 +1349,12 @@ mod tests {
     }
 
     #[test]
-    fn presence_updated_empty_display_name_skips_introduction() {
+    fn presence_updated_no_cached_username_skips_introduction() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
-        ds.display_names.insert(50, String::new()); // empty display name
+        // Display name cached but no username — cannot introduce.
+        ds.display_names.insert(50, "Eve".to_string());
 
         let cmds = apply_discord_event(
             &mut ds,
@@ -1333,6 +1364,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1340,7 +1372,7 @@ mod tests {
 
         assert!(
             pm.get_by_discord_id(50).is_none(),
-            "must not introduce with empty display name"
+            "must not introduce without a username"
         );
         assert!(cmds.is_empty());
     }
@@ -1350,6 +1382,7 @@ mod tests {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
+        ds.usernames.insert(50, "eve".to_string());
         ds.display_names.insert(50, "eve".to_string());
 
         // First introduce
@@ -1361,6 +1394,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1375,6 +1409,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Idle,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1398,6 +1433,7 @@ mod tests {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
+        ds.usernames.insert(50, "eve".to_string());
         ds.display_names.insert(50, "eve".to_string());
 
         // Introduce via Online presence.
@@ -1409,6 +1445,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1424,6 +1461,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Offline,
+                username: None,
                 display_name: None,
             },
             1001,
@@ -1445,6 +1483,7 @@ mod tests {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
         let irc = IrcState::default();
+        ds.usernames.insert(50, "eve".to_string());
         ds.display_names.insert(50, "eve".to_string());
 
         // Introduce, then set idle.
@@ -1456,6 +1495,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Idle,
+                username: None,
                 display_name: None,
             },
             1000,
@@ -1470,6 +1510,7 @@ mod tests {
                 user_id: 50,
                 guild_id: 1,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             1001,

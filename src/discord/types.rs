@@ -38,6 +38,8 @@ impl DiscordPresence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberInfo {
     pub user_id: u64,
+    /// Discord username (the unique `@handle`).
+    pub username: String,
     /// Display name resolved as: guild nickname → global display name → username.
     pub display_name: String,
     pub presence: DiscordPresence,
@@ -62,6 +64,9 @@ pub enum DiscordEvent {
         user_id: u64,
         guild_id: u64,
         presence: DiscordPresence,
+        /// Discord username from the presence payload.  `None` if the
+        /// payload carried no user fields beyond the ID.
+        username: Option<String>,
         /// Display name resolved from the presence payload (guild nick →
         /// global name → username).  `None` if the presence payload carried
         /// no user fields beyond the ID.

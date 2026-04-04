@@ -223,9 +223,13 @@ impl BridgeState {
 
         // Capture pseudoclient identity before apply_irc_event removes it.
         let killed_pseudoclient = if let S2SEvent::UserKilled { uid, .. } = event {
-            self.pm
-                .get_by_uid(uid)
-                .map(|ps| (ps.discord_user_id, ps.nick.clone(), ps.channels.clone()))
+            self.pm.get_by_uid(uid).map(|ps| {
+                (
+                    ps.discord_user_id,
+                    ps.display_name.clone(),
+                    ps.channels.clone(),
+                )
+            })
         } else {
             None
         };
@@ -249,10 +253,17 @@ impl BridgeState {
                     "not re-introducing killed pseudoclient — killed again within 30s cooldown"
                 );
             } else {
+                let username = self
+                    .discord_state
+                    .usernames
+                    .get(&discord_id)
+                    .cloned()
+                    .unwrap_or_else(|| display_name.clone());
                 let cmds = introduce_pseudoclient(
                     &mut self.pm,
                     &self.irc_state,
                     discord_id,
+                    &username,
                     &display_name,
                     &channels,
                     DiscordPresence::Online,
@@ -505,6 +516,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 3001,
+                    username: "jono".into(),
                     display_name: "jono".into(),
                     presence: DiscordPresence::Online,
                 }],
@@ -571,6 +583,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 4001,
+                    username: "Alice".into(),
                     display_name: "Alice".into(),
                     presence: DiscordPresence::Online,
                 }],
@@ -606,6 +619,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 5001,
+                    username: "Bob".into(),
                     display_name: "Bob".into(),
                     presence: DiscordPresence::Online,
                 }],
@@ -710,6 +724,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 7001,
+                    username: "Alice".into(),
                     display_name: "Alice".into(),
                     presence: DiscordPresence::Online,
                 }],
@@ -866,6 +881,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 8001,
+                    username: "Charlie".into(),
                     display_name: "Charlie".into(),
                     presence: DiscordPresence::Online,
                 }],
@@ -929,6 +945,7 @@ mod tests {
                 user_id: 8001,
                 guild_id: 999,
                 presence: DiscordPresence::Online,
+                username: None,
                 display_name: None,
             },
             ts + 30,
@@ -1007,6 +1024,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 9001,
+                    username: "Dave".into(),
                     display_name: "Dave".into(),
                     presence: DiscordPresence::Online,
                 }],
@@ -1035,6 +1053,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 9002,
+                    username: "Eve".into(),
                     display_name: "Eve".into(),
                     presence: DiscordPresence::Online,
                 }],
@@ -1084,6 +1103,7 @@ mod tests {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 7777,
+                    username: "Frank".into(),
                     display_name: "Frank".into(),
                     presence: DiscordPresence::Online,
                 }],

@@ -264,14 +264,20 @@ pub fn route_discord_to_irc(
     // On-demand introduction: ensure a pseudoclient exists for this author.
     let mut cmds = Vec::new();
     if pm.get_by_discord_id(author_id).is_none() {
+        // author_name is the Discord username (from msg.author.name).
+        let username = discord_state
+            .usernames
+            .get(&author_id)
+            .cloned()
+            .unwrap_or_else(|| author_name.to_string());
         let display_name = discord_state
             .display_names
             .get(&author_id)
             .cloned()
-            .unwrap_or_else(|| author_name.to_string());
+            .unwrap_or_else(|| username.clone());
         let channels = vec![irc_channel.clone()];
         let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
-        if let Some(state) = pm.introduce(author_id, &display_name, &display_name, &channels, ts) {
+        if let Some(state) = pm.introduce(author_id, &username, &display_name, &channels, ts) {
             let uid = state.uid.clone();
             let nick = state.nick.clone();
             let chans = state.channels.clone();

@@ -284,6 +284,7 @@ async fn e2e_discord_to_irc_message_relay() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 1001,
+                username: "testuser".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -346,6 +347,7 @@ async fn e2e_irc_to_discord_message_relay() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 1002,
+                username: "testuser".into(),
                 display_name: "BridgeUser".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -410,6 +412,7 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 3001,
+                username: "testuser".into(),
                 display_name: "EarlyUser".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -454,6 +457,7 @@ async fn e2e_pseudoclient_appears_on_irc() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 2001,
+                username: "testuser".into(),
                 display_name: "TestUser".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -496,11 +500,13 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
             members: vec![
                 MemberInfo {
                     user_id: 5001,
+                    username: "testuser".into(),
                     display_name: "Alice".into(),
                     presence: DiscordPresence::Online,
                 },
                 MemberInfo {
                     user_id: 5002,
+                    username: "testuser".into(),
                     display_name: "Bob".into(),
                     presence: DiscordPresence::Online,
                 },
@@ -574,6 +580,7 @@ async fn e2e_irc_mention_resolved_to_discord_id() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 6001,
+                username: "testuser".into(),
                 display_name: "Bob".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -638,6 +645,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 10_001,
+                username: "killtarget".into(),
                 display_name: "KillTarget".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -735,6 +743,7 @@ async fn e2e_irc_privmsg_to_pseudoclient_relays_as_dm() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 7001,
+                username: "testuser".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -794,6 +803,7 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 8001,
+                username: "testuser".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -851,6 +861,7 @@ async fn e2e_discord_dm_unresolvable_sends_help() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 9001,
+                username: "testuser".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],

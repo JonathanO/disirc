@@ -189,6 +189,7 @@ pub(crate) fn snapshot_from_cache(
             }
             Some(MemberInfo {
                 user_id: m.user.id.get(),
+                username: m.user.name.clone(),
                 display_name: resolve_display_name(
                     m.nick.as_deref(),
                     m.user.global_name.as_deref(),

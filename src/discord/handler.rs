@@ -80,12 +80,14 @@ pub(crate) fn presence_event(
     user_id: u64,
     guild_id: Option<u64>,
     status: OnlineStatus,
+    username: Option<String>,
     display_name: Option<String>,
 ) -> Option<DiscordEvent> {
     guild_id.map(|gid| DiscordEvent::PresenceUpdated {
         user_id,
         guild_id: gid,
         presence: map_online_status(status),
+        username,
         display_name,
     })
 }
@@ -157,6 +159,7 @@ pub(crate) fn build_member_snapshot_event(
             };
             MemberInfo {
                 user_id: m.user_id,
+                username: m.username.to_owned(),
                 display_name: resolve_display_name(m.nick, m.global_name, m.username).to_owned(),
                 presence,
             }
@@ -382,6 +385,7 @@ impl EventHandler for DiscordHandler {
             new_data.user.id.get(),
             new_data.guild_id.map(GuildId::get),
             new_data.status,
+            username.map(str::to_owned),
             display_name,
         ) {
             let _ = self.event_tx.send(event).await;
@@ -600,13 +604,20 @@ mod tests {
 
     #[test]
     fn presence_event_with_guild_id_emits_event() {
-        let ev = presence_event(42, Some(100), OnlineStatus::Idle, Some("Alice".into()));
+        let ev = presence_event(
+            42,
+            Some(100),
+            OnlineStatus::Idle,
+            Some("alice".into()),
+            Some("Alice".into()),
+        );
         assert_eq!(
             ev,
             Some(DiscordEvent::PresenceUpdated {
                 user_id: 42,
                 guild_id: 100,
                 presence: DiscordPresence::Idle,
+                username: Some("alice".into()),
                 display_name: Some("Alice".into()),
             })
         );
@@ -615,7 +626,13 @@ mod tests {
     #[test]
     fn presence_event_without_guild_id_returns_none() {
         assert_eq!(
-            presence_event(42, None, OnlineStatus::Online, Some("Alice".into())),
+            presence_event(
+                42,
+                None,
+                OnlineStatus::Online,
+                Some("alice".into()),
+                Some("Alice".into())
+            ),
             None
         );
     }

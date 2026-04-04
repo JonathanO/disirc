@@ -56,24 +56,26 @@ deterministically testable.
 ## Link lifecycle (LinkPhase state machine)
 
 ```
-         LinkUp              BurstComplete
-  Down ────────► Bursting ──────────────► Ready
-   ▲                                        │
-   │              LinkDown                  │
-   └────────────────────────────────────────┘
+                  BurstComplete
+  NotReady ──────────────────────► Ready
+      ▲                              │
+      │           LinkDown           │
+      └──────────────────────────────┘
 ```
+
+LinkUp is a no-op — the bridge starts `NotReady` and stays there until
+`BurstComplete`. This avoids a redundant intermediate state.
 
 | Phase | IRC events | Discord events | Our burst |
 |-------|-----------|----------------|-----------|
-| **Down** | Only LinkUp transitions out | Buffered in `deferred_discord_events` | Not sent |
-| **Bursting** | Remote burst arrives (UIDs, SJOINs); external nicks registered | Buffered | Not sent yet |
+| **NotReady** | Remote burst registers external nicks; LinkUp is a no-op | Buffered in `deferred_discord_events` | Not sent |
 | **Ready** | Processed normally (messages routed, state updated) | Processed immediately | Sent on entry (existing pseudoclients + deferred replay + EOS) |
 
 ## First connect flow
 
 ```
 1. IRC handshake completes
-2. LinkUp → phase = Bursting
+2. LinkUp (no-op — already NotReady)
 3. Discord GUILD_CREATE → MemberSnapshot → buffered
 4. Remote burst: UIDs, SJOINs → external nicks registered in PseudoclientManager
 5. Remote EOS → BurstComplete → phase = Ready
@@ -88,13 +90,13 @@ deterministically testable.
 ## Reconnect flow (IRC link drops, Discord stays connected)
 
 ```
-1. LinkDown → phase = Down
+1. LinkDown → phase = NotReady
    - Deferred events cleared
    - External nicks cleared
    - Pseudoclients remain in PseudoclientManager (not quit)
-2. New Discord events arrive → buffered (phase is Down)
+2. New Discord events arrive → buffered (phase is NotReady)
 3. IRC reconnects → handshake completes
-4. LinkUp → phase = Bursting
+4. LinkUp (no-op — already NotReady)
 5. Remote burst arrives → external nicks re-registered
 6. Remote EOS → BurstComplete → phase = Ready
 7. Our burst sent:

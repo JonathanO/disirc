@@ -12,4 +12,14 @@ exclude_re = [
     # path extracts a smaller span, and the remaining backticks are re-parsed on
     # the next iteration, still protecting all code content.
     "replace match guard t <= s with false in protect_code_spans",
+
+    # LinkUp sets phase to Bursting, but Down and Bursting both buffer
+    # Discord events (any phase != Ready). The distinction matters for
+    # future state-dependent logic but is not currently observable.
+    "delete match arm S2SEvent::LinkUp in BridgeState::handle_irc_event",
+
+    # MemberSnapshot introduced/cached_only counters are only used in
+    # debug logging. Mutating += to *= changes the logged count but has
+    # no effect on test-observable behavior.
+    "replace \\+= with \\*= in apply_discord_event",
 ]

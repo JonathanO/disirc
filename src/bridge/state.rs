@@ -1061,6 +1061,91 @@ mod tests {
     }
 
     #[test]
+    fn presence_updated_uses_event_carried_username() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        // No cached names — the event carries them.
+
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 60,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+                username: Some("frank_user".into()),
+                display_name: Some("Frank Display".into()),
+            },
+            1000,
+        );
+
+        assert!(
+            pm.get_by_discord_id(60).is_some(),
+            "should be introduced from event-carried name"
+        );
+        // Nick should be derived from the username, not the display name.
+        let nick = &pm.get_by_discord_id(60).unwrap().nick;
+        assert_eq!(nick, "frank_user");
+        // Display name should be stored.
+        let gecos = &pm.get_by_discord_id(60).unwrap().display_name;
+        assert_eq!(gecos, "Frank Display");
+        // Names should be cached for future use.
+        assert_eq!(
+            ds.usernames.get(&60).map(String::as_str),
+            Some("frank_user")
+        );
+        assert_eq!(
+            ds.display_names.get(&60).map(String::as_str),
+            Some("Frank Display")
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+        );
+    }
+
+    #[test]
+    fn presence_updated_empty_event_name_falls_back_to_cache() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+        // Pre-cache names.
+        ds.usernames.insert(70, "cached_user".to_string());
+        ds.display_names.insert(70, "Cached Display".to_string());
+
+        // Event carries empty strings — should fall back to cache.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 70,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+                username: Some(String::new()),
+                display_name: Some(String::new()),
+            },
+            1000,
+        );
+
+        assert!(
+            pm.get_by_discord_id(70).is_some(),
+            "should fall back to cached username"
+        );
+        assert_eq!(pm.get_by_discord_id(70).unwrap().nick, "cached_user");
+        assert_eq!(
+            pm.get_by_discord_id(70).unwrap().display_name,
+            "Cached Display"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+        );
+    }
+
+    #[test]
     fn member_snapshot_online_member_no_spurious_clear_away() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();

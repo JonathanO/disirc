@@ -284,7 +284,7 @@ async fn e2e_discord_to_irc_message_relay() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 1001,
-                username: "testuser".into(),
+                username: "alice".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -298,7 +298,7 @@ async fn e2e_discord_to_irc_message_relay() {
     // Wait for any line mentioning Alice (NICK intro, JOIN, etc.) to confirm
     // her pseudoclient has been introduced to the network.
     client
-        .expect_line_containing("Alice", Duration::from_secs(10))
+        .expect_line_containing("alice", Duration::from_secs(10))
         .await;
 
     // Now relay a Discord message from Alice.
@@ -307,7 +307,7 @@ async fn e2e_discord_to_irc_message_relay() {
         .send(DiscordEvent::MessageReceived {
             channel_id: 111,
             author_id: 1001,
-            author_name: "Alice".into(),
+            author_name: "alice".into(),
             content: "hello from discord".into(),
             attachments: vec![],
         })
@@ -316,7 +316,7 @@ async fn e2e_discord_to_irc_message_relay() {
 
     // The IRC client should see a PRIVMSG from Alice's pseudoclient.
     client
-        .expect_privmsg("Alice", "hello from discord", Duration::from_secs(10))
+        .expect_privmsg("alice", "hello from discord", Duration::from_secs(10))
         .await;
 
     drop(tasks);
@@ -347,7 +347,7 @@ async fn e2e_irc_to_discord_message_relay() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 1002,
-                username: "testuser".into(),
+                username: "bridgeuser".into(),
                 display_name: "BridgeUser".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -360,7 +360,7 @@ async fn e2e_irc_to_discord_message_relay() {
 
     // Wait for the pseudoclient JOIN to confirm the bridge is in the channel.
     client
-        .expect_line_containing("BridgeUser", Duration::from_secs(10))
+        .expect_line_containing("bridgeuser", Duration::from_secs(10))
         .await;
 
     // Send an IRC message from the test client.
@@ -412,7 +412,7 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 3001,
-                username: "testuser".into(),
+                username: "earlyuser".into(),
                 display_name: "EarlyUser".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -429,7 +429,7 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
     // EarlyUser must appear via the burst even though the snapshot arrived
     // before the link was established.
     client
-        .expect_line_containing("EarlyUser", Duration::from_secs(10))
+        .expect_line_containing("earlyuser", Duration::from_secs(10))
         .await;
 
     drop(tasks);
@@ -470,7 +470,7 @@ async fn e2e_pseudoclient_appears_on_irc() {
 
     // The test IRC client should see TestUser's pseudoclient JOIN #e2e-test.
     client
-        .expect_line_containing("TestUser", Duration::from_secs(10))
+        .expect_line_containing("testuser", Duration::from_secs(10))
         .await;
 
     drop(tasks);
@@ -500,13 +500,13 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
             members: vec![
                 MemberInfo {
                     user_id: 5001,
-                    username: "testuser".into(),
+                    username: "alice".into(),
                     display_name: "Alice".into(),
                     presence: DiscordPresence::Online,
                 },
                 MemberInfo {
                     user_id: 5002,
-                    username: "testuser".into(),
+                    username: "bob".into(),
                     display_name: "Bob".into(),
                     presence: DiscordPresence::Online,
                 },
@@ -533,7 +533,7 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
         .send(DiscordEvent::MessageReceived {
             channel_id: 111,
             author_id: 5001,
-            author_name: "Alice".into(),
+            author_name: "alice".into(),
             content: "hey <@5002> check <#200> and <@&300>".into(),
             attachments: vec![],
         })
@@ -580,7 +580,7 @@ async fn e2e_irc_mention_resolved_to_discord_id() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 6001,
-                username: "testuser".into(),
+                username: "bob".into(),
                 display_name: "Bob".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -592,7 +592,7 @@ async fn e2e_irc_mention_resolved_to_discord_id() {
         .unwrap();
 
     client
-        .expect_line_containing("Bob", Duration::from_secs(10))
+        .expect_line_containing("bob", Duration::from_secs(10))
         .await;
 
     // IRC user mentions @Bob — should resolve to <@6001> in the Discord command.
@@ -662,7 +662,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
         .send(DiscordEvent::MessageReceived {
             channel_id: 111,
             author_id: 10_001,
-            author_name: "KillTarget".into(),
+            author_name: "killtarget".into(),
             content: "pre-kill probe".into(),
             attachments: vec![],
         })
@@ -695,7 +695,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
         .send(DiscordEvent::MessageReceived {
             channel_id: 111,
             author_id: 10_001,
-            author_name: "KillTarget".into(),
+            author_name: "killtarget".into(),
             content: "post-kill probe".into(),
             attachments: vec![],
         })
@@ -743,7 +743,7 @@ async fn e2e_irc_privmsg_to_pseudoclient_relays_as_dm() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 7001,
-                username: "testuser".into(),
+                username: "alice".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -756,7 +756,7 @@ async fn e2e_irc_privmsg_to_pseudoclient_relays_as_dm() {
 
     // Wait for Alice's pseudoclient to appear on IRC.
     client
-        .expect_line_containing("Alice", Duration::from_secs(10))
+        .expect_line_containing("alice", Duration::from_secs(10))
         .await;
 
     // Send a /msg to Alice's pseudoclient nick. UnrealIRCd resolves nick→UID
@@ -803,7 +803,7 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 8001,
-                username: "testuser".into(),
+                username: "alice".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -815,7 +815,7 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
         .unwrap();
 
     client
-        .expect_line_containing("Alice", Duration::from_secs(10))
+        .expect_line_containing("alice", Duration::from_secs(10))
         .await;
 
     // Alice DMs the bridge bot with nick-colon addressing to testbot.
@@ -823,7 +823,7 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
         .discord_event_tx
         .send(DiscordEvent::DmReceived {
             author_id: 8001,
-            author_name: "Alice".into(),
+            author_name: "alice".into(),
             content: "testbot: hey from discord dm".into(),
             referenced_content: None,
         })
@@ -861,7 +861,7 @@ async fn e2e_discord_dm_unresolvable_sends_help() {
             guild_id: 999,
             members: vec![MemberInfo {
                 user_id: 9001,
-                username: "testuser".into(),
+                username: "alice".into(),
                 display_name: "Alice".into(),
                 presence: DiscordPresence::Online,
             }],
@@ -873,7 +873,7 @@ async fn e2e_discord_dm_unresolvable_sends_help() {
         .unwrap();
 
     client
-        .expect_line_containing("Alice", Duration::from_secs(10))
+        .expect_line_containing("alice", Duration::from_secs(10))
         .await;
 
     // Alice DMs the bot with no addressing — should get a help message back.
@@ -881,7 +881,7 @@ async fn e2e_discord_dm_unresolvable_sends_help() {
         .discord_event_tx
         .send(DiscordEvent::DmReceived {
             author_id: 9001,
-            author_name: "Alice".into(),
+            author_name: "alice".into(),
             content: "just a random message".into(),
             referenced_content: None,
         })

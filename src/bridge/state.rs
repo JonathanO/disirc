@@ -240,8 +240,6 @@ pub fn apply_discord_event(
                 .cloned()
                 .unwrap_or_default();
             let mut cmds = Vec::new();
-            let mut introduced = 0u32;
-            let mut cached_only = 0u32;
             for member in members {
                 // Cache username and display name for all members so
                 // PresenceUpdated can introduce them later when they come online.
@@ -252,10 +250,8 @@ pub fn apply_discord_event(
                     .display_names
                     .insert(member.user_id, member.display_name.clone());
                 if !member.presence.is_non_offline() {
-                    cached_only += 1;
                     continue;
                 }
-                introduced += 1;
                 cmds.extend(introduce_pseudoclient(
                     pm,
                     irc_state,
@@ -267,13 +263,7 @@ pub fn apply_discord_event(
                     now_ts,
                 ));
             }
-            tracing::debug!(
-                guild_id,
-                introduced,
-                cached_only,
-                total = members.len(),
-                "MemberSnapshot processed"
-            );
+            tracing::debug!(guild_id, total = members.len(), "MemberSnapshot processed");
             cmds
         }
 

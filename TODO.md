@@ -35,8 +35,7 @@ None.
 - **Configurable quit-on-offline** — Currently pseudoclients persist when a Discord user goes offline (set AWAY instead of QUIT). A config option `pseudoclients.quit_on_offline` could quit them instead, optionally with an idle delay before quitting. See spec 06 "Presence policy" section.
 - **Reintroduce-on-kill delay** — Currently `reintroduce_on_kill` re-introduces immediately after the KILL (with a 30s cooldown to prevent loops). A configurable delay before reintroduction would be less aggressive and give IRC operators time to address the issue that prompted the KILL.
 - **Username change tracking** — Discord usernames can change (rarely). Detect username changes and update the pseudoclient nick via NICK command.
-- **Resolve members via serenity cache** — Use serenity's member cache as a fallback for display name / username resolution, reducing dependence on our own caches in DiscordState.
-- **Revisit orchestrator state handling** — Review whether DiscordState caches (usernames, display_names, guild_irc_channels) could be simplified or unified, and whether the orchestrator's ownership of all mutable state scales well as features are added.
+- **Revisit orchestrator state handling** — Consider splitting BridgeState into focused sub-objects (IrcBridge, DiscordBridge) that own related state, with the orchestrator coordinating between them. Would improve encapsulation and reduce parameter passing.
 
 ## Completed features (post-v1)
 

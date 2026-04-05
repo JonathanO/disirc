@@ -415,13 +415,11 @@ pub(crate) fn introduce_pseudoclient(
 ) -> Vec<S2SCommand> {
     let mut cmds = Vec::new();
 
-    if let Some(s) = pm.introduce(user_id, username, display_name, channels, now_ts) {
+    if let Some(s) = pm.introduce(user_id, username, display_name, channels, now_ts, presence) {
         let uid = s.uid.clone();
         let nick = s.nick.clone();
         let chans = s.channels.clone();
         let host = format!("{user_id}.discord.com");
-        // Store the initial presence so burst re-introduction can emit AWAY.
-        pm.update_presence(user_id, presence);
         cmds.push(S2SCommand::IntroduceUser {
             uid: uid.clone(),
             nick,
@@ -687,6 +685,7 @@ mod tests {
             "Discord User",
             &["#general".to_string()],
             1000,
+            DiscordPresence::Online,
         )
         .expect("introduce should succeed");
         let uid = pm.get_by_discord_id(99).expect("should exist").uid.clone();
@@ -712,8 +711,15 @@ mod tests {
     fn user_parted_removes_pseudoclient_from_channel() {
         let mut state = IrcState::default();
         let mut pm = make_pm();
-        pm.introduce(77, "testuser", "Test User", &["#lobby".to_string()], 1000)
-            .expect("introduce should succeed");
+        pm.introduce(
+            77,
+            "testuser",
+            "Test User",
+            &["#lobby".to_string()],
+            1000,
+            DiscordPresence::Online,
+        )
+        .expect("introduce should succeed");
         let uid = pm.get_by_discord_id(77).expect("should exist").uid.clone();
         apply_irc_event(
             &mut state,
@@ -746,6 +752,7 @@ mod tests {
             "Test User 2",
             &["#kicked".to_string()],
             1000,
+            DiscordPresence::Online,
         )
         .expect("introduce should succeed");
         let uid = pm.get_by_discord_id(88).expect("should exist").uid.clone();
@@ -792,8 +799,15 @@ mod tests {
     fn kill_removes_pseudoclient_from_pm() {
         let mut state = IrcState::default();
         let mut pm = make_pm();
-        pm.introduce(77, "alice", "Alice", &["#general".to_string()], 1000)
-            .expect("introduce should succeed");
+        pm.introduce(
+            77,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            1000,
+            DiscordPresence::Online,
+        )
+        .expect("introduce should succeed");
         let uid = pm.get_by_discord_id(77).expect("should exist").uid.clone();
 
         apply_irc_event(
@@ -819,8 +833,15 @@ mod tests {
     fn kill_clears_uid_cache_so_reintroduction_gets_fresh_uid() {
         let mut state = IrcState::default();
         let mut pm = make_pm();
-        pm.introduce(77, "alice", "Alice", &["#general".to_string()], 1000)
-            .expect("introduce should succeed");
+        pm.introduce(
+            77,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            1000,
+            DiscordPresence::Online,
+        )
+        .expect("introduce should succeed");
         let old_uid = pm.get_by_discord_id(77).unwrap().uid.clone();
 
         // Kill the pseudoclient.
@@ -835,8 +856,15 @@ mod tests {
         assert!(pm.get_by_discord_id(77).is_none());
 
         // Re-introduce — should get a different UID.
-        pm.introduce(77, "alice", "Alice", &["#general".to_string()], 2000)
-            .expect("reintroduce should succeed");
+        pm.introduce(
+            77,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            2000,
+            DiscordPresence::Online,
+        )
+        .expect("reintroduce should succeed");
         let new_uid = pm.get_by_discord_id(77).unwrap().uid.clone();
 
         assert_ne!(
@@ -871,7 +899,14 @@ mod tests {
         apply_irc_event(&mut state, &mut pm, &introduced("001EXTUSER", "alice"));
 
         // Now introduce a pseudoclient with the same name — should get a suffixed nick.
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 1000);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let ps = pm.get_by_discord_id(42).unwrap();
         assert_ne!(
             ps.nick, "alice",
@@ -897,7 +932,14 @@ mod tests {
         );
 
         // Now a pseudoclient can use "alice" without collision.
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 1000);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let ps = pm.get_by_discord_id(42).unwrap();
         assert_eq!(
             ps.nick, "alice",
@@ -922,11 +964,25 @@ mod tests {
         );
 
         // "alice" is now free — pseudoclient can use it.
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 1000);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         assert_eq!(pm.get_by_discord_id(42).unwrap().nick, "alice");
 
         // "bob" is taken — pseudoclient should get a suffix.
-        pm.introduce(43, "bob", "Bob", &["#general".to_string()], 1000);
+        pm.introduce(
+            43,
+            "bob",
+            "Bob",
+            &["#general".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         assert_ne!(pm.get_by_discord_id(43).unwrap().nick, "bob");
     }
 
@@ -937,8 +993,15 @@ mod tests {
         // fresh Discord MemberSnapshot.
         let mut state = IrcState::default();
         let mut pm = make_pm();
-        pm.introduce(55, "user55", "User 55", &["#test".to_string()], 1000)
-            .expect("introduce should succeed");
+        pm.introduce(
+            55,
+            "user55",
+            "User 55",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        )
+        .expect("introduce should succeed");
         apply_irc_event(
             &mut state,
             &mut pm,

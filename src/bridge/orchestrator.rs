@@ -622,6 +622,55 @@ mod tests {
         );
     }
 
+    /// Presence change while link is down is stored and reflected in burst AWAY.
+    #[test]
+    fn presence_change_while_not_ready_reflected_in_burst() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Introduce online user while link is not ready.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 6001,
+                    username: "frank".into(),
+                    display_name: "Frank".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+
+        // User goes DnD while link is still not ready.
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 6001,
+                guild_id: 999,
+                presence: DiscordPresence::DoNotDisturb,
+                username: Some("frank".into()),
+                display_name: Some("Frank".into()),
+            },
+            ts + 10,
+        );
+
+        // Link comes up, burst.
+        state.handle_irc_event(&S2SEvent::LinkUp, ts + 20);
+        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts + 20);
+
+        // Burst should include AWAY for the DnD presence.
+        assert!(
+            out.irc_commands.iter().any(
+                |c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Do Not Disturb")
+            ),
+            "burst should reflect DnD presence set while link was down; got: {:?}",
+            out.irc_commands
+        );
+    }
+
     /// KILL of a pseudoclient with reintroduce_on_kill=true should produce
     /// IntroduceUser commands with a fresh UID.
     #[test]
@@ -692,7 +741,14 @@ mod tests {
     #[test]
     fn irc_resolver_finds_pseudoclient() {
         let mut pm = PseudoclientManager::new("002", "bridge");
-        pm.introduce(42, "alice", "Alice", &["#test".to_string()], 1000);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let resolver = BridgeIrcResolver { pm: &pm };
         assert_eq!(resolver.resolve_nick("alice"), Some("42".to_string()));
     }
@@ -754,9 +810,14 @@ mod tests {
         state.handle_irc_event(&S2SEvent::BurstComplete, ts);
 
         // "alice" is now a known external nick — pseudoclient would be suffixed.
-        state
-            .pm
-            .introduce(42, "alice", "Alice", &["#test".to_string()], ts);
+        state.pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            ts,
+            DiscordPresence::Online,
+        );
         let suffixed = state.pm.get_by_discord_id(42).unwrap().nick.clone();
         assert_ne!(suffixed, "alice", "should be suffixed before LinkDown");
         // Clean up the test introduction.
@@ -772,9 +833,14 @@ mod tests {
 
         // After LinkDown, "alice" should no longer be known.
         // A new pseudoclient introduction should get the exact nick.
-        state
-            .pm
-            .introduce(43, "alice", "Alice", &["#test".to_string()], ts);
+        state.pm.introduce(
+            43,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            ts,
+            DiscordPresence::Online,
+        );
         let nick = state.pm.get_by_discord_id(43).unwrap().nick.clone();
         assert_eq!(
             nick, "alice",

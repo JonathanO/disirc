@@ -283,9 +283,14 @@ pub fn route_discord_to_irc(
     if pm.get_by_discord_id(author_id).is_none() {
         let channels = vec![irc_channel.clone()];
         let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
-        if let Some(state) =
-            pm.introduce(author_id, author_name, author_display_name, &channels, ts)
-        {
+        if let Some(state) = pm.introduce(
+            author_id,
+            author_name,
+            author_display_name,
+            &channels,
+            ts,
+            DiscordPresence::Online,
+        ) {
             let uid = state.uid.clone();
             let nick = state.nick.clone();
             let chans = state.channels.clone();
@@ -420,7 +425,14 @@ mod tests {
     #[test]
     fn burst_one_pseudoclient_produces_introduce_join_burst_complete() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let irc = IrcState::default();
         let cmds = produce_burst_commands(&pm, &irc, 1_000);
         // IntroduceUser, JoinChannel, BurstComplete
@@ -433,7 +445,14 @@ mod tests {
     #[test]
     fn burst_introduce_uses_configured_ident_and_user_id_host() {
         let mut pm = make_pm(); // ident="bridge"
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let irc = IrcState::default();
         let cmds = produce_burst_commands(&pm, &irc, 1_000);
         if let S2SCommand::IntroduceUser { ident, host, .. } = &cmds[0] {
@@ -447,7 +466,14 @@ mod tests {
     #[test]
     fn burst_uses_channel_ts_from_irc_state() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let mut irc = IrcState::default();
         apply_irc_event(
             &mut irc,
@@ -472,7 +498,14 @@ mod tests {
     #[test]
     fn burst_falls_back_to_now_ts_when_channel_unknown() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#unknown".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#unknown".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let irc = IrcState::default();
         let cmds = produce_burst_commands(&pm, &irc, 7_777);
         let ts = cmds.iter().find_map(|c| {
@@ -488,8 +521,22 @@ mod tests {
     #[test]
     fn burst_last_command_is_always_burst_complete() {
         let mut pm = make_pm();
-        pm.introduce(1, "a", "A", &["#c1".to_string(), "#c2".to_string()], 0);
-        pm.introduce(2, "b", "B", &["#c1".to_string()], 0);
+        pm.introduce(
+            1,
+            "a",
+            "A",
+            &["#c1".to_string(), "#c2".to_string()],
+            0,
+            DiscordPresence::Online,
+        );
+        pm.introduce(
+            2,
+            "b",
+            "B",
+            &["#c1".to_string()],
+            0,
+            DiscordPresence::Online,
+        );
         let irc = IrcState::default();
         let cmds = produce_burst_commands(&pm, &irc, 0);
         assert!(matches!(cmds.last(), Some(S2SCommand::BurstComplete)));
@@ -500,7 +547,14 @@ mod tests {
     #[test]
     fn route_irc_own_uid_returns_none() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 0);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            0,
+            DiscordPresence::Online,
+        );
         let bridge_map = make_bridge_map();
         let irc = IrcState::default();
         // Find the UID that was assigned to alice
@@ -629,7 +683,14 @@ mod tests {
     #[test]
     fn route_discord_known_channel_returns_privmsg_commands() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 0);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            0,
+            DiscordPresence::Online,
+        );
         let bridge_map = make_bridge_map();
         let irc = IrcState::default();
         let cmds = route_discord_to_irc(
@@ -807,7 +868,14 @@ mod tests {
     #[test]
     fn irc_to_dm_routes_to_pseudoclient() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let uid = pm.get_by_discord_id(42).unwrap().uid.clone();
         let irc = IrcState::default();
         let cmd = route_irc_to_dm(
@@ -852,7 +920,14 @@ mod tests {
     #[test]
     fn dm_to_irc_with_nick_colon_addressing() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let mut irc = IrcState::default();
         // Add an external IRC user "bob".
         apply_irc_event(
@@ -890,7 +965,14 @@ mod tests {
     #[test]
     fn dm_to_irc_with_reply_context() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let mut irc = IrcState::default();
         apply_irc_event(
             &mut irc,
@@ -929,7 +1011,14 @@ mod tests {
     #[test]
     fn dm_to_irc_no_target_returns_help() {
         let mut pm = make_pm();
-        pm.introduce(42, "alice", "Alice", &["#general".to_string()], 500);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#general".to_string()],
+            500,
+            DiscordPresence::Online,
+        );
         let irc = IrcState::default();
         let result = route_dm_to_irc(&pm, &irc, 42, "just a random message", None, &NullResolver);
         assert!(

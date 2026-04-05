@@ -308,6 +308,7 @@ async fn e2e_discord_to_irc_message_relay() {
             channel_id: 111,
             author_id: 1001,
             author_name: "alice".into(),
+            author_display_name: "Alice".into(),
             content: "hello from discord".into(),
             attachments: vec![],
         })
@@ -534,6 +535,7 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
             channel_id: 111,
             author_id: 5001,
             author_name: "alice".into(),
+            author_display_name: "Alice".into(),
             content: "hey <@5002> check <#200> and <@&300>".into(),
             attachments: vec![],
         })
@@ -663,6 +665,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
             channel_id: 111,
             author_id: 10_001,
             author_name: "killtarget".into(),
+            author_display_name: "KillTarget".into(),
             content: "pre-kill probe".into(),
             attachments: vec![],
         })
@@ -696,6 +699,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
             channel_id: 111,
             author_id: 10_001,
             author_name: "killtarget".into(),
+            author_display_name: "KillTarget".into(),
             content: "post-kill probe".into(),
             attachments: vec![],
         })

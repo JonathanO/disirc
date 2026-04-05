@@ -208,6 +208,7 @@ impl DiscordHandler {
         channel_id: u64,
         author_id: u64,
         author_name: String,
+        author_display_name: String,
         content: String,
         attachments: Vec<String>,
     ) {
@@ -228,6 +229,7 @@ impl DiscordHandler {
                 channel_id,
                 author_id,
                 author_name,
+                author_display_name,
                 content,
                 attachments,
             })
@@ -342,10 +344,18 @@ impl EventHandler for DiscordHandler {
             )
             .await;
         } else {
+            let member_nick = msg.member.as_ref().and_then(|m| m.nick.as_deref());
+            let display_name = resolve_display_name(
+                member_nick,
+                msg.author.global_name.as_deref(),
+                &msg.author.name,
+            )
+            .to_owned();
             self.handle_message_event(
                 msg.channel_id.get(),
                 msg.author.id.get(),
                 msg.author.name.clone(),
+                display_name,
                 msg.content.clone(),
                 msg.attachments.iter().map(|a| a.url.clone()).collect(),
             )
@@ -463,8 +473,15 @@ mod tests {
     async fn relayed_message_emits_event() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[10], &[]); // channel 10 bridged, empty self-filter
-        h.handle_message_event(10, 99, "alice".into(), "hello".into(), vec![])
-            .await;
+        h.handle_message_event(
+            10,
+            99,
+            "alice".into(),
+            "Alice".into(),
+            "hello".into(),
+            vec![],
+        )
+        .await;
         let event = rx.try_recv().expect("expected MessageReceived event");
         assert!(matches!(
             event,
@@ -480,7 +497,7 @@ mod tests {
     async fn self_message_is_dropped() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[10], &[99]); // author 99 is in self-filter
-        h.handle_message_event(10, 99, "bot".into(), "echo".into(), vec![])
+        h.handle_message_event(10, 99, "bot".into(), "Bot".into(), "echo".into(), vec![])
             .await;
         assert!(
             rx.try_recv().is_err(),
@@ -492,7 +509,7 @@ mod tests {
     async fn non_bridged_channel_is_dropped() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[10], &[]); // only channel 10 bridged
-        h.handle_message_event(99, 1, "user".into(), "hi".into(), vec![])
+        h.handle_message_event(99, 1, "user".into(), "User".into(), "hi".into(), vec![])
             .await;
         assert!(
             rx.try_recv().is_err(),

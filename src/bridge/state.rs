@@ -114,20 +114,16 @@ pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event
 
         S2SEvent::UserKilled { uid, reason, .. } => {
             if let Some(ps) = pm.get_by_uid(uid) {
-                // One of our pseudoclients — remove from PM so it can be
-                // re-introduced on-demand or immediately (if configured).
+                // One of our pseudoclients — the old UID is dead on the
+                // network.  The PM entry stays (the user is still desired);
+                // the orchestrator handles reintroduction with a fresh UID.
                 tracing::debug!(
                     uid = %uid,
                     discord_id = ps.discord_user_id,
                     nick = %ps.nick,
                     reason = %reason,
-                    "pseudoclient killed — removing from PM"
+                    "pseudoclient killed"
                 );
-                let discord_id = ps.discord_user_id;
-                pm.quit(discord_id, "Killed");
-                // Clear the cached UID so reintroduction allocates a fresh one,
-                // avoiding UID collision with UnrealIRCd's kill state.
-                pm.forget_uid(discord_id);
             } else {
                 // External IRC user — remove from nick map.
                 tracing::debug!(uid = %uid, reason = %reason, "external user killed");
@@ -796,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn kill_removes_pseudoclient_from_pm() {
+    fn kill_keeps_pseudoclient_in_pm() {
         let mut state = IrcState::default();
         let mut pm = make_pm();
         pm.introduce(
@@ -819,18 +815,16 @@ mod tests {
             },
         );
 
+        // PM entry stays — the user is still desired.  The orchestrator
+        // handles reintroduction with a fresh UID.
         assert!(
-            pm.get_by_discord_id(77).is_none(),
-            "pseudoclient should be removed from PM after KILL"
-        );
-        assert!(
-            pm.get_by_uid(&uid).is_none(),
-            "pseudoclient UID should be removed from PM after KILL"
+            pm.get_by_discord_id(77).is_some(),
+            "pseudoclient should remain in PM after KILL"
         );
     }
 
     #[test]
-    fn kill_clears_uid_cache_so_reintroduction_gets_fresh_uid() {
+    fn refresh_uid_after_kill_gives_fresh_uid() {
         let mut state = IrcState::default();
         let mut pm = make_pm();
         pm.introduce(
@@ -844,7 +838,6 @@ mod tests {
         .expect("introduce should succeed");
         let old_uid = pm.get_by_discord_id(77).unwrap().uid.clone();
 
-        // Kill the pseudoclient.
         apply_irc_event(
             &mut state,
             &mut pm,
@@ -853,23 +846,14 @@ mod tests {
                 reason: "Killed".to_string(),
             },
         );
-        assert!(pm.get_by_discord_id(77).is_none());
 
-        // Re-introduce — should get a different UID.
-        pm.introduce(
-            77,
-            "alice",
-            "Alice",
-            &["#general".to_string()],
-            2000,
-            DiscordPresence::Online,
-        )
-        .expect("reintroduce should succeed");
-        let new_uid = pm.get_by_discord_id(77).unwrap().uid.clone();
+        // refresh_uid allocates a fresh UID for reintroduction.
+        let s = pm.refresh_uid(77).expect("should still exist");
+        let new_uid = s.uid.clone();
 
         assert_ne!(
             old_uid, new_uid,
-            "reintroduced pseudoclient must get a fresh UID to avoid collision; old={old_uid}, new={new_uid}"
+            "refresh_uid must allocate a fresh UID; old={old_uid}, new={new_uid}"
         );
     }
 

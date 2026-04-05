@@ -495,6 +495,25 @@ impl PseudoclientManager {
         self.by_discord_id.values()
     }
 
+    /// Allocate a fresh UID for an existing pseudoclient after a KILL.
+    ///
+    /// The PM entry stays; only the UID is replaced.  Returns a reference
+    /// to the updated state, or `None` if no pseudoclient exists.
+    pub fn refresh_uid(&mut self, discord_user_id: u64) -> Option<&PseudoclientState> {
+        self.forget_uid(discord_user_id);
+        let new_uid = self
+            .uid_generator
+            .get_or_create(discord_user_id)
+            .to_string();
+
+        let state = self.by_discord_id.get_mut(&discord_user_id)?;
+        let old_uid = std::mem::replace(&mut state.uid, new_uid.clone());
+        self.uid_to_discord.remove(&old_uid);
+        self.uid_to_discord.insert(new_uid, discord_user_id);
+
+        self.by_discord_id.get(&discord_user_id)
+    }
+
     /// Update the stored presence for a pseudoclient.
     ///
     /// Returns `true` if the pseudoclient was found and updated, `false` if

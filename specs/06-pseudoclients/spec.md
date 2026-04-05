@@ -59,19 +59,20 @@ Multiple bridged channels: one `SJOIN` per channel.
 If the IRC link is **not** ready, the pseudoclient is created in memory only.
 It will be sent to IRC when the link becomes ready (see Burst below).
 
-### Burst on BurstComplete
+### Burst on LinkUp
 
-When the remote IRC server's burst completes (EOS received), the bridge sends
-its own burst:
+When the IRC S2S handshake completes (LinkUp), the bridge sends its burst
+and goes live immediately:
 
 1. Walk all pseudoclients in `PseudoclientManager`.
 2. For each pseudoclient, emit `UID` + `SJOIN` commands.
 3. Emit `AWAY` for pseudoclients with Idle, DnD, or Offline presence.
 4. Send our `EOS`.
 
-Nick collisions with external nicks from the remote burst are handled by the
-KILL handler — if UnrealIRCd kills a colliding pseudoclient, it is
-reintroduced with a suffixed nick.
+Both sides burst concurrently — we don't wait for the remote burst.  Nick
+collisions with external nicks are handled by the KILL handler — if
+UnrealIRCd kills a colliding pseudoclient, it is reintroduced with a
+suffixed nick.
 
 ### Messages before IRC ready
 

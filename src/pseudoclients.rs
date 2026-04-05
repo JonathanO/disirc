@@ -209,6 +209,8 @@ pub struct PseudoclientState {
     pub discord_user_id: u64,
     pub uid: String,
     pub nick: String,
+    /// Original Discord username (the unique @handle).
+    pub username: String,
     pub display_name: String,
     pub channels: Vec<String>,
 }
@@ -283,6 +285,7 @@ impl PseudoclientManager {
             discord_user_id,
             uid: uid.clone(),
             nick: nick.clone(),
+            username: username.to_string(),
             display_name: display_name.to_string(),
             channels: channels.to_vec(),
         };

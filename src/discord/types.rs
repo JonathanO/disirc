@@ -55,6 +55,8 @@ pub enum DiscordEvent {
         channel_id: u64,
         author_id: u64,
         author_name: String,
+        /// Display name (guild nick → global name → username).
+        author_display_name: String,
         content: String,
         /// CDN URLs of any attachments, in order.
         attachments: Vec<String>,

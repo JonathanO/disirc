@@ -221,6 +221,7 @@ impl BridgeState {
             self.pm.get_by_uid(uid).map(|ps| {
                 (
                     ps.discord_user_id,
+                    ps.username.clone(),
                     ps.display_name.clone(),
                     ps.channels.clone(),
                 )
@@ -232,7 +233,7 @@ impl BridgeState {
         apply_irc_event(&mut self.irc_state, &mut self.pm, event);
 
         // Re-introduce killed pseudoclients if configured.
-        if let Some((discord_id, display_name, channels)) = killed_pseudoclient
+        if let Some((discord_id, username, display_name, channels)) = killed_pseudoclient
             && self.config.pseudoclients.reintroduce_on_kill
             && self.irc_state.is_link_up()
         {
@@ -248,12 +249,6 @@ impl BridgeState {
                     "not re-introducing killed pseudoclient — killed again within 30s cooldown"
                 );
             } else {
-                let username = self
-                    .discord_state
-                    .usernames
-                    .get(&discord_id)
-                    .cloned()
-                    .unwrap_or_else(|| display_name.clone());
                 let cmds = introduce_pseudoclient(
                     &mut self.pm,
                     &self.irc_state,
@@ -322,6 +317,7 @@ impl BridgeState {
             channel_id,
             author_id,
             author_name,
+            author_display_name,
             content,
             attachments,
         } = event
@@ -332,11 +328,11 @@ impl BridgeState {
             let cmds = route_discord_to_irc(
                 &mut self.pm,
                 &self.bridge_map,
-                &self.discord_state,
                 &self.irc_state,
                 *channel_id,
                 *author_id,
                 author_name,
+                author_display_name,
                 content,
                 attachments,
                 None,
@@ -940,8 +936,8 @@ mod tests {
                 user_id: 8001,
                 guild_id: 999,
                 presence: DiscordPresence::Online,
-                username: None,
-                display_name: None,
+                username: Some("Charlie".into()),
+                display_name: Some("Charlie".into()),
             },
             ts + 30,
         );

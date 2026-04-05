@@ -245,11 +245,11 @@ fn format_dm_to_irc(content: &str, resolver: &dyn DiscordResolver) -> String {
 pub fn route_discord_to_irc(
     pm: &mut PseudoclientManager,
     bridge_map: &BridgeMap,
-    discord_state: &DiscordState,
     irc_state: &IrcState,
     channel_id: u64,
     author_id: u64,
     author_name: &str,
+    author_display_name: &str,
     content: &str,
     attachments: &[String],
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
@@ -262,22 +262,14 @@ pub fn route_discord_to_irc(
     let irc_channel = bridge.irc_channel.clone();
 
     // On-demand introduction: ensure a pseudoclient exists for this author.
+    // Use the event-carried username and display name directly.
     let mut cmds = Vec::new();
     if pm.get_by_discord_id(author_id).is_none() {
-        // author_name is the Discord username (from msg.author.name).
-        let username = discord_state
-            .usernames
-            .get(&author_id)
-            .cloned()
-            .unwrap_or_else(|| author_name.to_string());
-        let display_name = discord_state
-            .display_names
-            .get(&author_id)
-            .cloned()
-            .unwrap_or_else(|| username.clone());
         let channels = vec![irc_channel.clone()];
         let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
-        if let Some(state) = pm.introduce(author_id, &username, &display_name, &channels, ts) {
+        if let Some(state) =
+            pm.introduce(author_id, author_name, author_display_name, &channels, ts)
+        {
             let uid = state.uid.clone();
             let nick = state.nick.clone();
             let chans = state.channels.clone();
@@ -287,7 +279,7 @@ pub fn route_discord_to_irc(
                 nick,
                 ident: pm.ident().to_string(),
                 host,
-                realname: display_name,
+                realname: author_display_name.to_string(),
             });
             for channel in &chans {
                 cmds.push(S2SCommand::JoinChannel {
@@ -600,16 +592,15 @@ mod tests {
     fn route_discord_unmapped_channel_returns_empty() {
         let mut pm = make_pm();
         let bridge_map = make_bridge_map();
-        let ds = DiscordState::default();
         let irc = IrcState::default();
         let cmds = route_discord_to_irc(
             &mut pm,
             &bridge_map,
-            &ds,
             &irc,
             999, // not in bridge_map
             1,
             "alice",
+            "Alice",
             "hello",
             &[],
             None,
@@ -624,15 +615,14 @@ mod tests {
         let mut pm = make_pm();
         pm.introduce(42, "alice", "Alice", &["#general".to_string()], 0);
         let bridge_map = make_bridge_map();
-        let ds = DiscordState::default();
         let irc = IrcState::default();
         let cmds = route_discord_to_irc(
             &mut pm,
             &bridge_map,
-            &ds,
             &irc,
             111,
             42,
+            "alice",
             "Alice",
             "hello",
             &[],
@@ -652,16 +642,15 @@ mod tests {
     fn route_discord_on_demand_introduction_when_author_unknown() {
         let mut pm = make_pm();
         let bridge_map = make_bridge_map();
-        let ds = DiscordState::default();
         let irc = IrcState::default();
         // author_id 77 has no pseudoclient yet
         let cmds = route_discord_to_irc(
             &mut pm,
             &bridge_map,
-            &ds,
             &irc,
             111,
             77,
+            "newuser",
             "newuser",
             "first message",
             &[],
@@ -679,20 +668,18 @@ mod tests {
     }
 
     #[test]
-    fn route_discord_on_demand_uses_cached_display_name() {
+    fn route_discord_on_demand_uses_event_carried_display_name() {
         let mut pm = make_pm();
         let bridge_map = make_bridge_map();
-        let mut ds = DiscordState::default();
-        ds.display_names.insert(77, "CachedName".to_string());
         let irc = IrcState::default();
         route_discord_to_irc(
             &mut pm,
             &bridge_map,
-            &ds,
             &irc,
             111,
             77,
-            "fallback_name",
+            "someuser",
+            "EventName",
             "hi",
             &[],
             None,
@@ -700,24 +687,23 @@ mod tests {
             &NullResolver,
         );
         let state = pm.get_by_discord_id(77).expect("should be introduced");
-        assert_eq!(state.display_name, "CachedName");
+        assert_eq!(state.display_name, "EventName");
     }
 
     #[test]
     fn route_discord_on_demand_emits_introduce_and_join_commands() {
         let mut pm = make_pm();
         let bridge_map = make_bridge_map();
-        let ds = DiscordState::default();
         let irc = IrcState::default();
         // author_id 77 has no pseudoclient — on-demand introduction should
         // produce IntroduceUser + JoinChannel commands alongside SendMessage.
         let cmds = route_discord_to_irc(
             &mut pm,
             &bridge_map,
-            &ds,
             &irc,
             111,
             77,
+            "newuser",
             "newuser",
             "first message",
             &[],

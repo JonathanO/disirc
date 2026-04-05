@@ -1,4 +1,4 @@
-use crate::discord::DiscordCommand;
+use crate::discord::{DiscordCommand, DiscordPresence};
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::S2SCommand;
 use crate::pseudoclients::PseudoclientManager;
@@ -37,6 +37,22 @@ pub fn produce_burst_commands(
                 channel: channel.clone(),
                 ts: irc_state.ts_for_channel(channel).unwrap_or(now_ts),
             });
+        }
+        // Set initial away status based on stored presence.
+        match state.presence {
+            DiscordPresence::Idle => cmds.push(S2SCommand::SetAway {
+                uid: state.uid.clone(),
+                reason: "Idle".to_string(),
+            }),
+            DiscordPresence::DoNotDisturb => cmds.push(S2SCommand::SetAway {
+                uid: state.uid.clone(),
+                reason: "Do Not Disturb".to_string(),
+            }),
+            DiscordPresence::Offline => cmds.push(S2SCommand::SetAway {
+                uid: state.uid.clone(),
+                reason: "Offline".to_string(),
+            }),
+            DiscordPresence::Online => {}
         }
     }
     cmds.push(S2SCommand::BurstComplete);

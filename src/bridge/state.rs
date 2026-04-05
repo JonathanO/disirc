@@ -314,6 +314,8 @@ pub fn apply_discord_event(
             if let Some(s) = pm.get_by_discord_id(*user_id) {
                 let uid = s.uid.clone();
                 let nick = s.nick.clone();
+                // Keep stored presence current for burst re-introduction.
+                pm.update_presence(*user_id, *presence);
                 tracing::debug!(
                     user_id,
                     %nick,
@@ -418,6 +420,8 @@ pub(crate) fn introduce_pseudoclient(
         let nick = s.nick.clone();
         let chans = s.channels.clone();
         let host = format!("{user_id}.discord.com");
+        // Store the initial presence so burst re-introduction can emit AWAY.
+        pm.update_presence(user_id, presence);
         cmds.push(S2SCommand::IntroduceUser {
             uid: uid.clone(),
             nick,

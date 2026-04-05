@@ -68,22 +68,25 @@ LinkUp is a no-op — the bridge starts `NotReady` and stays there until
 
 | Phase | IRC events | Discord events | Our burst |
 |-------|-----------|----------------|-----------|
-| **NotReady** | Remote burst registers external nicks; LinkUp is a no-op | Buffered in `deferred_discord_events` | Not sent |
-| **Ready** | Processed normally (messages routed, state updated) | Processed immediately | Sent on entry (existing pseudoclients + deferred replay + EOS) |
+| **NotReady** | Remote burst registers external nicks; LinkUp is a no-op | State always updated (PM, DiscordState); IRC commands **not** emitted; messages dropped | Not sent |
+| **Ready** | Processed normally (messages routed, state updated) | State updated **and** IRC commands emitted immediately | Sent on entry (all pseudoclients + AWAY + EOS) |
+
+Discord events are never buffered. They always update `PseudoclientManager`
+and `DiscordState` immediately. The difference between phases is only whether
+IRC commands are emitted.
 
 ## First connect flow
 
 ```
 1. IRC handshake completes
 2. LinkUp (no-op — already NotReady)
-3. Discord GUILD_CREATE → MemberSnapshot → buffered
-4. Remote burst: UIDs, SJOINs → external nicks registered in PseudoclientManager
+3. Discord GUILD_CREATE → MemberSnapshot → pseudoclients created in PM
+   (no IRC commands emitted — link not ready)
+4. Remote burst: UIDs, SJOINs → external nicks registered
 5. Remote EOS → BurstComplete → phase = Ready
 6. Our burst sent:
-   a. produce_burst_commands() — empty on first connect (no pseudoclients yet)
-   b. Replay deferred MemberSnapshot → introduce_pseudoclient for each online member
-      → UID + SJOIN commands for each pseudoclient
-   c. Our EOS
+   a. produce_burst_commands() — UIDs + SJOINs + AWAY for all pseudoclients
+   b. Our EOS
 7. Bridge is live — messages relay bidirectionally
 ```
 
@@ -91,19 +94,18 @@ LinkUp is a no-op — the bridge starts `NotReady` and stays there until
 
 ```
 1. LinkDown → phase = NotReady
-   - Deferred events cleared
    - External nicks cleared
-   - Pseudoclients remain in PseudoclientManager (not quit)
-2. New Discord events arrive → buffered (phase is NotReady)
+   - Pseudoclients remain in PseudoclientManager
+2. Discord events continue to update PM state normally
+   (new members introduced, presence changes recorded, messages dropped)
 3. IRC reconnects → handshake completes
 4. LinkUp (no-op — already NotReady)
 5. Remote burst arrives → external nicks re-registered
 6. Remote EOS → BurstComplete → phase = Ready
 7. Our burst sent:
    a. produce_burst_commands() — re-introduces all existing pseudoclients
-      (UIDs + SJOINs for each, using stored state)
-   b. Replay any deferred Discord events (may introduce new members)
-   c. Our EOS
+      (UIDs + SJOINs + AWAY for each)
+   b. Our EOS
 8. If a nick collision occurs (external user took a pseudoclient's nick),
    UnrealIRCd sends KILL → KILL handler re-introduces with a fresh UID
 ```

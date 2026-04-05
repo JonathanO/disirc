@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::discord::DiscordPresence;
 use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams};
 
 // ---------------------------------------------------------------------------
@@ -213,6 +214,7 @@ pub struct PseudoclientState {
     pub username: String,
     pub display_name: String,
     pub channels: Vec<String>,
+    pub presence: DiscordPresence,
 }
 
 /// Manages all pseudoclients and their state.
@@ -288,6 +290,7 @@ impl PseudoclientManager {
             username: username.to_string(),
             display_name: display_name.to_string(),
             channels: channels.to_vec(),
+            presence: DiscordPresence::Online,
         };
 
         self.known_nicks.insert(&nick);
@@ -489,6 +492,19 @@ impl PseudoclientManager {
     /// Iterate over all active pseudoclient states.
     pub fn iter_states(&self) -> impl Iterator<Item = &PseudoclientState> {
         self.by_discord_id.values()
+    }
+
+    /// Update the stored presence for a pseudoclient.
+    ///
+    /// Returns `true` if the pseudoclient was found and updated, `false` if
+    /// no pseudoclient exists for `discord_user_id`.
+    pub fn update_presence(&mut self, discord_user_id: u64, presence: DiscordPresence) -> bool {
+        if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
+            state.presence = presence;
+            true
+        } else {
+            false
+        }
     }
 }
 

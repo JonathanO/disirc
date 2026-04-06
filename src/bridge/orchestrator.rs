@@ -91,11 +91,11 @@ pub struct HandlerOutput {
 
 /// All mutable bridge state, with synchronous handler methods.
 pub struct BridgeState {
-    pub config: Config,
-    pub bridge_map: BridgeMap,
-    pub pm: PseudoclientManager,
-    pub irc_state: IrcState,
-    pub discord_state: DiscordState,
+    pub(crate) config: Config,
+    pub(crate) bridge_map: BridgeMap,
+    pub(crate) pm: PseudoclientManager,
+    pub(crate) irc_state: IrcState,
+    pub(crate) discord_state: DiscordState,
     /// Current IRC link lifecycle phase.
     link_phase: LinkPhase,
     /// Whether the remote server's burst (`EOS`) has been received since
@@ -103,7 +103,7 @@ pub struct BridgeState {
     /// happen immediately (remote nicks are known) or must be deferred.
     remote_burst_done: bool,
     /// Kill-reintroduction cooldowns: `discord_user_id` → epoch seconds.
-    pub kill_cooldowns: HashMap<u64, u64>,
+    pub(crate) kill_cooldowns: HashMap<u64, u64>,
 }
 
 impl BridgeState {

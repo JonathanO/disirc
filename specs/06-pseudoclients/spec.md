@@ -31,20 +31,55 @@ The sanitized nick is stable for the session. If the Discord user changes their 
 
 ## Lifecycle
 
+### State vs IRC commands
+
+Discord events **always** update `PseudoclientManager` state, regardless of
+whether the IRC link is connected.  IRC commands (UID, SJOIN, AWAY, QUIT) are
+only emitted when the link is `Ready`.
+
+This means pseudoclients exist in memory before they appear on IRC.  When the
+IRC link becomes ready (BurstComplete), all existing pseudoclients are burst to
+IRC in a single batch.
+
 ### Introduction
 
-A pseudoclient is introduced when:
-- The IRC link burst begins and the Discord user is **non-offline** in a bridged channel, **or**
-- A Discord user sends a message in a bridged channel and has no existing pseudoclient, **or**
-- A `PRESENCE_UPDATE` arrives for a user with no existing pseudoclient and the new status is non-offline (user came online after the initial burst).
+A pseudoclient is created in `PseudoclientManager` when:
+- A `MemberSnapshot` (from `GUILD_CREATE`) includes a **non-offline** member, **or**
+- A `PRESENCE_UPDATE` arrives for a user with no pseudoclient and non-offline status, **or**
+- A Discord user sends a message in a bridged channel and has no pseudoclient.
 
-Introduction sequence:
+If the IRC link is `Ready`, the introduction is immediately sent to IRC:
 ```
 :<our_sid> UID <nick> 1 <timestamp> <ident> <host> <uid> * +i 0 <realname> *
 :<our_sid> SJOIN <timestamp> <#channel> + :<uid>
 ```
 
 Multiple bridged channels: one `SJOIN` per channel.
+
+If the IRC link is **not** ready, the pseudoclient is created in memory only.
+It will be sent to IRC when the link becomes ready (see Burst below).
+
+### Burst on LinkUp
+
+When the IRC S2S handshake completes (LinkUp), the bridge sends its burst
+and goes live immediately:
+
+1. Walk all pseudoclients in `PseudoclientManager`.
+2. For each pseudoclient, emit `UID` + `SJOIN` commands.
+3. Emit `AWAY` for pseudoclients with Idle, DnD, or Offline presence.
+4. Send our `EOS`.
+
+Both sides burst concurrently — we don't wait for the remote burst.  Nick
+collisions with external nicks are handled by the KILL handler — if
+UnrealIRCd kills a colliding pseudoclient, it is reintroduced with a
+suffixed nick.
+
+### Messages before IRC ready
+
+Discord messages arriving before the IRC link is ready are **dropped**.  The
+pseudoclient is created (or already exists) in memory, but the message text is
+not relayed.  This is analogous to IRC netsplit behaviour where messages during
+a split are not delivered to the other side.
 
 ### Unknown user events (large-guild chunking)
 
@@ -57,8 +92,8 @@ Events received for a user with no existing pseudoclient are handled as follows:
 
 | Event | Behaviour |
 |---|---|
-| `DiscordEvent::MessageReceived` | Introduce pseudoclient on demand (see Introduction above), then relay the message. |
-| `DiscordEvent::PresenceUpdated` with non-offline status | Introduce pseudoclient (Introduction sequence), then apply the AWAY state for the new presence. This is how offline members who were excluded from the burst appear on IRC when they come online. |
+| `DiscordEvent::MessageReceived` | Introduce pseudoclient on demand, then relay the message (if IRC link is Ready; otherwise message is dropped). |
+| `DiscordEvent::PresenceUpdated` with non-offline status | Create pseudoclient and store presence. Emit IRC commands if link is Ready. |
 | `DiscordEvent::PresenceUpdated` with offline status | Silently drop. The user was never introduced; there is nothing to update or quit. |
 | `DiscordEvent::MemberRemoved` | Silently drop. No pseudoclient exists to quit. |
 
@@ -108,11 +143,13 @@ When a `[[bridge]]` entry is removed via config reload:
 ## State tracking
 
 `disirc` maintains an in-memory map of:
-- `discord_user_id → PseudoclientState { uid, nick, channels }`
+- `discord_user_id → PseudoclientState { uid, nick, username, display_name, channels, presence }`
 - `irc_nick → discord_user_id` (for reverse lookup)
 - `irc_uid → discord_user_id`
 
-This state is rebuilt from scratch on every reconnect (IRC burst + Discord member fetch).
+Pseudoclient state persists across IRC reconnects.  On reconnect, all existing
+pseudoclients are re-burst to the new link.  State is only cleared when a
+pseudoclient is explicitly quit (member removal, offline with quit-on-offline).
 
 ## SVSNICK handling
 

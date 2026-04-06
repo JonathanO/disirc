@@ -84,7 +84,7 @@ pub async fn run_bridge(
 
             maybe_event = discord_event_rx.recv() => {
                 let Some(event) = maybe_event else { break };
-                let output = bridge.handle_discord_event(event, unix_now());
+                let output = bridge.handle_discord_event(&event, unix_now());
                 for cmd in output.irc_commands {
                     let _ = irc_cmd_tx.send(cmd).await;
                 }

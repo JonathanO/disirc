@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::config::Config;
-use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence};
+use crate::discord::{DiscordCommand, DiscordEvent};
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::{S2SCommand, S2SEvent};
 use crate::pseudoclients::PseudoclientManager;
@@ -27,12 +27,12 @@ use super::state::{
 
 /// Whether the IRC link is ready for pseudoclient traffic.
 ///
-/// Discord events are buffered while `NotReady` and processed once `Ready`.
-/// `BurstComplete` (remote EOS) transitions to `Ready`; `LinkDown` resets
-/// to `NotReady`.
+/// Discord events always update state immediately.  IRC commands are only
+/// emitted when `Ready`.  `LinkUp` sends our burst and transitions to
+/// `Ready`; `LinkDown` resets to `NotReady`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LinkPhase {
-    /// Link is down or bursting — Discord events are buffered.
+    /// Link is down or bursting — IRC commands are suppressed.
     NotReady,
     /// Burst complete; pseudoclients can be introduced and messages relayed.
     Ready,
@@ -98,8 +98,6 @@ pub struct BridgeState {
     pub discord_state: DiscordState,
     /// Current IRC link lifecycle phase.
     link_phase: LinkPhase,
-    /// Discord events buffered during the uplink burst.
-    deferred_discord_events: Vec<DiscordEvent>,
     /// Kill-reintroduction cooldowns: `discord_user_id` → epoch seconds.
     pub kill_cooldowns: HashMap<u64, u64>,
 }
@@ -114,7 +112,6 @@ impl BridgeState {
             irc_state: IrcState::default(),
             discord_state: DiscordState::default(),
             link_phase: LinkPhase::NotReady,
-            deferred_discord_events: Vec::new(),
             kill_cooldowns: HashMap::new(),
         }
     }
@@ -124,41 +121,24 @@ impl BridgeState {
         let mut output = HandlerOutput::default();
 
         match event {
-            S2SEvent::LinkDown { .. } => {
-                self.link_phase = LinkPhase::NotReady;
-                self.deferred_discord_events.clear();
-                self.pm.clear_external_nicks();
-            }
-            S2SEvent::BurstComplete => {
+            S2SEvent::LinkUp => {
                 self.link_phase = LinkPhase::Ready;
 
-                // Send our burst: re-introduce existing pseudoclients
-                // (on reconnect; empty on first connect), replay deferred
-                // Discord events (which may introduce more), then send
-                // our EOS.  Nick collisions with external users from the
-                // remote burst are resolved by the KILL handler.
-                //
-                // produce_burst_commands appends BurstComplete (EOS) but
-                // we want EOS after deferred replay, so strip it and add
-                // it explicitly at the end.
-                let burst = produce_burst_commands(&self.pm, &self.irc_state, now_ts);
-                output.irc_commands.extend(
-                    burst
-                        .into_iter()
-                        .filter(|c| !matches!(c, S2SCommand::BurstComplete)),
-                );
-
-                // Replay buffered Discord events now that all IRC nicks are
-                // registered from the remote burst.
-                let deferred: Vec<_> = self.deferred_discord_events.drain(..).collect();
-                for event in deferred {
-                    let inner = self.process_discord_event(&event, now_ts);
-                    output.irc_commands.extend(inner.irc_commands);
-                    output.discord_commands.extend(inner.discord_commands);
-                }
-
-                // Our EOS — signals end of our burst.
-                output.irc_commands.push(S2SCommand::BurstComplete);
+                // Send our burst and go live immediately.  We don't need
+                // to wait for the remote burst — IRC S2S allows both sides
+                // to burst concurrently.  Any Discord events processed
+                // while the link was down have already updated PM state;
+                // the burst captures the current snapshot.  Nick collisions
+                // are handled by the KILL handler.
+                output.irc_commands.extend(produce_burst_commands(
+                    &self.pm,
+                    &self.irc_state,
+                    now_ts,
+                ));
+            }
+            S2SEvent::LinkDown { .. } => {
+                self.link_phase = LinkPhase::NotReady;
+                self.pm.clear_external_nicks();
             }
             S2SEvent::MessageReceived {
                 from_uid,
@@ -216,6 +196,7 @@ impl BridgeState {
             _ => {}
         }
 
+        // Identify killed pseudoclient before apply_irc_event runs.
         // Capture pseudoclient identity before apply_irc_event removes it.
         let killed_pseudoclient = if let S2SEvent::UserKilled { uid, .. } = event {
             self.pm.get_by_uid(uid).map(|ps| {
@@ -224,6 +205,7 @@ impl BridgeState {
                     ps.username.clone(),
                     ps.display_name.clone(),
                     ps.channels.clone(),
+                    ps.presence,
                 )
             })
         } else {
@@ -233,19 +215,19 @@ impl BridgeState {
         apply_irc_event(&mut self.irc_state, &mut self.pm, event);
 
         // Re-introduce killed pseudoclients if configured.
-        if let Some((discord_id, username, display_name, channels)) = killed_pseudoclient
+        // apply_irc_event already removed the PM entry and cleared the UID
+        // cache.  introduce_pseudoclient will allocate a fresh UID and
+        // re-resolve the nick against current known_nicks (which may now
+        // include the external nick that caused the collision).
+        if let Some((discord_id, username, display_name, channels, presence)) = killed_pseudoclient
             && self.config.pseudoclients.reintroduce_on_kill
-            && self.irc_state.is_link_up()
         {
             let cooldown_secs = 30u64;
-            // Check and prune in one step: remove the entry if expired,
-            // then check whether it survived.
             self.kill_cooldowns
                 .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
             if self.kill_cooldowns.contains_key(&discord_id) {
                 tracing::warn!(
                     discord_id,
-                    nick = %display_name,
                     "not re-introducing killed pseudoclient — killed again within 30s cooldown"
                 );
             } else {
@@ -256,44 +238,37 @@ impl BridgeState {
                     &username,
                     &display_name,
                     &channels,
-                    DiscordPresence::Online,
+                    presence,
                     now_ts,
                 );
-                let new_uid = self
-                    .pm
-                    .get_by_discord_id(discord_id)
-                    .map(|ps| ps.uid.as_str());
                 tracing::debug!(
                     discord_id,
-                    nick = %display_name,
-                    new_uid = ?new_uid,
                     cmd_count = cmds.len(),
                     "re-introducing killed pseudoclient"
                 );
                 self.kill_cooldowns.insert(discord_id, now_ts);
                 output.irc_commands.extend(cmds);
             }
+            // If reintroduce_on_kill is false, the PM entry was already
+            // removed by apply_irc_event — the operator's kill is respected.
         }
 
         output
     }
 
     /// Handle a Discord event.  Returns commands to send to IRC and Discord.
-    pub fn handle_discord_event(&mut self, event: DiscordEvent, now_ts: u64) -> HandlerOutput {
-        // Buffer events until the IRC link is ready.  Events arriving while
-        // the link is NotReady are replayed after BurstComplete.
-        // Without this, state would be updated (e.g. pm.introduce()) but the
-        // resulting IRC commands would be silently dropped, leaving
-        // pseudoclients marked as introduced but never sent to IRC.
-        if self.link_phase != LinkPhase::Ready {
-            self.deferred_discord_events.push(event);
-            return HandlerOutput::default();
-        }
-
-        self.process_discord_event(&event, now_ts)
+    ///
+    /// State is always updated immediately (so pseudoclients are tracked even
+    /// while the IRC link is down).  IRC commands are only emitted when the
+    /// link phase is `Ready`.
+    pub fn handle_discord_event(&mut self, event: &DiscordEvent, now_ts: u64) -> HandlerOutput {
+        self.process_discord_event(event, now_ts)
     }
 
-    /// Inner Discord event processing (used both live and for deferred replay).
+    /// Inner Discord event processing.
+    ///
+    /// State is always updated.  IRC commands (introductions, messages, DMs)
+    /// are only emitted when `link_phase == Ready`.
     fn process_discord_event(&mut self, event: &DiscordEvent, now_ts: u64) -> HandlerOutput {
         let mut output = HandlerOutput::default();
 
@@ -312,78 +287,81 @@ impl BridgeState {
             );
         }
 
-        // Route Discord messages to IRC.
-        if let DiscordEvent::MessageReceived {
-            channel_id,
-            author_id,
-            author_name,
-            author_display_name,
-            content,
-            attachments,
-        } = event
-        {
-            let resolver = BridgeDiscordResolver {
-                discord_state: &self.discord_state,
-            };
-            let cmds = route_discord_to_irc(
-                &mut self.pm,
-                &self.bridge_map,
-                &self.irc_state,
-                *channel_id,
-                *author_id,
+        // Route Discord messages to IRC (only when link is ready — messages
+        // arriving while the link is down are dropped).
+        if self.link_phase == LinkPhase::Ready {
+            if let DiscordEvent::MessageReceived {
+                channel_id,
+                author_id,
                 author_name,
                 author_display_name,
                 content,
                 attachments,
-                None,
-                now_ts,
-                &resolver,
-            );
-            output.irc_commands.extend(cmds);
-        }
+            } = event
+            {
+                let resolver = BridgeDiscordResolver {
+                    discord_state: &self.discord_state,
+                };
+                let cmds = route_discord_to_irc(
+                    &mut self.pm,
+                    &self.bridge_map,
+                    &self.irc_state,
+                    *channel_id,
+                    *author_id,
+                    author_name,
+                    author_display_name,
+                    content,
+                    attachments,
+                    None,
+                    now_ts,
+                    &resolver,
+                );
+                output.irc_commands.extend(cmds);
+            }
 
-        // Route Discord DMs to IRC.
-        if let DiscordEvent::DmReceived {
-            author_id,
-            content,
-            referenced_content,
-            ..
-        } = event
-            && self.config.formatting.dm_bridging
-        {
-            let resolver = BridgeDiscordResolver {
-                discord_state: &self.discord_state,
-            };
-            match route_dm_to_irc(
-                &self.pm,
-                &self.irc_state,
-                *author_id,
+            // Route Discord DMs to IRC.
+            if let DiscordEvent::DmReceived {
+                author_id,
                 content,
-                referenced_content.as_deref(),
-                &resolver,
-            ) {
-                DmRouteResult::Relay {
-                    from_uid,
-                    target_uid,
-                    text,
-                } => {
-                    output.irc_commands.push(S2SCommand::SendMessage {
+                referenced_content,
+                ..
+            } = event
+                && self.config.formatting.dm_bridging
+            {
+                let resolver = BridgeDiscordResolver {
+                    discord_state: &self.discord_state,
+                };
+                match route_dm_to_irc(
+                    &self.pm,
+                    &self.irc_state,
+                    *author_id,
+                    content,
+                    referenced_content.as_deref(),
+                    &resolver,
+                ) {
+                    DmRouteResult::Relay {
                         from_uid,
-                        target: target_uid,
+                        target_uid,
                         text,
-                        timestamp: None,
-                    });
-                }
-                DmRouteResult::Error(msg) => {
-                    output.discord_commands.push(DiscordCommand::SendBotDm {
-                        recipient_user_id: *author_id,
-                        text: msg,
-                    });
+                    } => {
+                        output.irc_commands.push(S2SCommand::SendMessage {
+                            from_uid,
+                            target: target_uid,
+                            text,
+                            timestamp: None,
+                        });
+                    }
+                    DmRouteResult::Error(msg) => {
+                        output.discord_commands.push(DiscordCommand::SendBotDm {
+                            recipient_user_id: *author_id,
+                            text: msg,
+                        });
+                    }
                 }
             }
         }
 
-        // Apply state update and optionally forward introduce commands.
+        // Always apply state update; only forward IRC commands when link is ready.
         let cmds = apply_discord_event(
             &mut self.discord_state,
             &mut self.pm,
@@ -458,7 +436,7 @@ mod tests {
     use crate::config::{
         BridgeEntry, Config, DiscordConfig, FormattingConfig, IrcConfig, PseudoclientConfig,
     };
-    use crate::discord::MemberInfo;
+    use crate::discord::{DiscordPresence, MemberInfo};
 
     fn test_config() -> Config {
         Config {
@@ -486,91 +464,17 @@ mod tests {
         }
     }
 
-    /// Discord events during the uplink burst must be buffered and replayed
-    /// after BurstComplete, ensuring IRC nicks from the burst are registered
-    /// before pseudoclients are introduced (avoiding nick collisions).
-    #[test]
-    fn pseudoclient_deferred_until_burst_complete_avoids_nick_collision() {
-        let mut state = BridgeState::new(&test_config());
-        let ts = 1_000_000;
-
-        // LinkUp — no commands, already NotReady.
-        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        assert!(
-            out.irc_commands.is_empty(),
-            "LinkUp should not emit any commands"
-        );
-
-        // Discord user "jono" appears in MemberSnapshot during uplink burst.
-        let out = state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 3001,
-                    username: "jono".into(),
-                    display_name: "jono".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-            },
-            ts,
-        );
-        // Must be buffered — no commands yet.
-        assert!(
-            out.irc_commands.is_empty(),
-            "Discord events during uplink burst must be buffered; got: {:?}",
-            out.irc_commands
-        );
-
-        // IRC user "jono" introduced in the uplink burst.
-        state.handle_irc_event(
-            &S2SEvent::UserIntroduced {
-                uid: "001JONO01".into(),
-                nick: "jono".into(),
-                server_sid: "001".into(),
-                realname: "Jono".into(),
-                host: "example.com".into(),
-                ident: "jono".into(),
-            },
-            ts,
-        );
-
-        // Uplink BurstComplete — deferred events should replay.
-        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
-
-        // Find the IntroduceUser command for the pseudoclient.
-        let nick = out
-            .irc_commands
-            .iter()
-            .find_map(|c| {
-                if let S2SCommand::IntroduceUser { nick, .. } = c {
-                    Some(nick.clone())
-                } else {
-                    None
-                }
-            })
-            .expect("pseudoclient should be introduced after BurstComplete");
-
-        assert_ne!(
-            nick, "jono",
-            "pseudoclient must get a suffixed nick to avoid collision; got: {nick}"
-        );
-    }
-
-    /// After BurstComplete, Discord events should be processed immediately
-    /// (not buffered).
+    /// After BurstComplete, Discord events should produce IRC commands
+    /// immediately (link phase is Ready).
     #[test]
     fn discord_events_processed_after_burst_complete() {
         let mut state = BridgeState::new(&test_config());
         let ts = 1_000_000;
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
 
         let out = state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
+            &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 4001,
@@ -589,7 +493,177 @@ mod tests {
             out.irc_commands
                 .iter()
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
-            "after BurstComplete, Discord events should produce commands immediately"
+            "after BurstComplete, Discord events should produce IRC commands immediately"
+        );
+    }
+
+    /// Discord events update PM state even when the IRC link is not ready,
+    /// but no IRC commands are emitted.
+    #[test]
+    fn discord_events_update_state_when_link_not_ready() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Link is NotReady (no LinkUp yet).
+        let out = state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 3001,
+                    username: "jono".into(),
+                    display_name: "jono".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+
+        // No IRC commands emitted while link is not ready.
+        assert!(
+            out.irc_commands.is_empty(),
+            "no IRC commands when link is not ready; got: {:?}",
+            out.irc_commands
+        );
+
+        // But pseudoclient state IS updated.
+        assert!(
+            state.pm.get_by_discord_id(3001).is_some(),
+            "pseudoclient should exist in PM even though link is not ready"
+        );
+    }
+
+    /// Messages received when link is not ready are dropped (not queued).
+    #[test]
+    fn messages_dropped_when_link_not_ready() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Introduce a pseudoclient while link is not ready.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+
+        // Send a message while link is not ready.
+        let out = state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hello world".into(),
+                attachments: vec![],
+            },
+            ts,
+        );
+
+        assert!(
+            out.irc_commands.is_empty(),
+            "messages should be dropped when link is not ready"
+        );
+    }
+
+    /// BurstComplete emits AWAY for pseudoclients with non-Online presence.
+    #[test]
+    fn burst_includes_away_for_idle_pseudoclients() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Introduce a pseudoclient with Idle presence while link is not ready.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 5001,
+                    username: "idler".into(),
+                    display_name: "Idler".into(),
+                    presence: DiscordPresence::Idle,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+
+        // Link up, burst complete — burst sent.
+        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Should have IntroduceUser + JoinChannel + SetAway + BurstComplete (EOS).
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "burst should include IntroduceUser"
+        );
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Idle")),
+            "burst should include SetAway for idle pseudoclient; got: {:?}",
+            out.irc_commands
+        );
+    }
+
+    /// Presence change while link is down is stored and reflected in burst AWAY.
+    #[test]
+    fn presence_change_while_not_ready_reflected_in_burst() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        // Introduce online user while link is not ready.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 6001,
+                    username: "frank".into(),
+                    display_name: "Frank".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+
+        // User goes DnD while link is still not ready.
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 6001,
+                guild_id: 999,
+                presence: DiscordPresence::DoNotDisturb,
+                username: Some("frank".into()),
+                display_name: Some("Frank".into()),
+            },
+            ts + 10,
+        );
+
+        // Link comes up — burst sent on BurstComplete.
+        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts + 20);
+
+        // Burst should include AWAY for the DnD presence.
+        assert!(
+            out.irc_commands.iter().any(
+                |c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Do Not Disturb")
+            ),
+            "burst should reflect DnD presence set while link was down; got: {:?}",
+            out.irc_commands
         );
     }
 
@@ -604,9 +678,8 @@ mod tests {
 
         // Set up: link up, burst complete, introduce pseudoclient.
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         let out = state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
+            &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 5001,
@@ -663,7 +736,14 @@ mod tests {
     #[test]
     fn irc_resolver_finds_pseudoclient() {
         let mut pm = PseudoclientManager::new("002", "bridge");
-        pm.introduce(42, "alice", "Alice", &["#test".to_string()], 1000);
+        pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let resolver = BridgeIrcResolver { pm: &pm };
         assert_eq!(resolver.resolve_nick("alice"), Some("42".to_string()));
     }
@@ -700,50 +780,6 @@ mod tests {
 
     // --- LinkDown recovery ---
 
-    /// Deferred Discord events from a previous connection must be discarded
-    /// on LinkDown.  If they survive, the next BurstComplete would replay
-    /// stale events from a connection that no longer exists.
-    #[test]
-    fn link_down_clears_deferred_discord_events() {
-        let mut state = BridgeState::new(&test_config());
-        let ts = 1_000_000;
-
-        // LinkUp → buffer a Discord event during burst.
-        state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 7001,
-                    username: "Alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-            },
-            ts,
-        );
-        assert!(
-            !state.deferred_discord_events.is_empty(),
-            "event should be buffered during burst"
-        );
-
-        // Link drops before BurstComplete.
-        state.handle_irc_event(
-            &S2SEvent::LinkDown {
-                reason: "connection lost".into(),
-            },
-            ts,
-        );
-
-        assert!(
-            state.deferred_discord_events.is_empty(),
-            "deferred events must be cleared on LinkDown"
-        );
-    }
-
     /// External nicks (known_nicks) from a previous connection must be cleared
     /// on LinkDown.  If they survive, pseudoclient nick collision avoidance
     /// would incorrectly suffix nicks for users who quit while the link was
@@ -753,7 +789,7 @@ mod tests {
         let mut state = BridgeState::new(&test_config());
         let ts = 1_000_000;
 
-        // Set up: link up, burst with IRC user "alice", burst complete.
+        // Set up: link up (burst sent), then IRC user "alice" introduced.
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_irc_event(
             &S2SEvent::UserIntroduced {
@@ -766,12 +802,16 @@ mod tests {
             },
             ts,
         );
-        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
 
         // "alice" is now a known external nick — pseudoclient would be suffixed.
-        state
-            .pm
-            .introduce(42, "alice", "Alice", &["#test".to_string()], ts);
+        state.pm.introduce(
+            42,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            ts,
+            DiscordPresence::Online,
+        );
         let suffixed = state.pm.get_by_discord_id(42).unwrap().nick.clone();
         assert_ne!(suffixed, "alice", "should be suffixed before LinkDown");
         // Clean up the test introduction.
@@ -787,9 +827,14 @@ mod tests {
 
         // After LinkDown, "alice" should no longer be known.
         // A new pseudoclient introduction should get the exact nick.
-        state
-            .pm
-            .introduce(43, "alice", "Alice", &["#test".to_string()], ts);
+        state.pm.introduce(
+            43,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            ts,
+            DiscordPresence::Online,
+        );
         let nick = state.pm.get_by_discord_id(43).unwrap().nick.clone();
         assert_eq!(
             nick, "alice",
@@ -804,7 +849,6 @@ mod tests {
         let mut state = BridgeState::new(&test_config());
         let ts = 1_000_000;
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
 
         // Introduce an external IRC user so messages come from a known UID.
         state.handle_irc_event(
@@ -866,9 +910,8 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         let out = state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
+            &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 8001,
@@ -932,7 +975,7 @@ mod tests {
         // Third kill after cooldown expires — should reintroduce again.
         // Re-introduce manually since the cooldown suppressed it.
         state.handle_discord_event(
-            DiscordEvent::PresenceUpdated {
+            &DiscordEvent::PresenceUpdated {
                 user_id: 8001,
                 guild_id: 999,
                 presence: DiscordPresence::Online,
@@ -990,7 +1033,7 @@ mod tests {
         );
     }
 
-    // --- Discord event buffering gate ---
+    // --- Discord event IRC command gate ---
 
     #[test]
     fn discord_state_cmds_not_forwarded_after_link_down() {
@@ -999,7 +1042,6 @@ mod tests {
 
         // Link up, burst complete — phase is Ready.
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
 
         // Link drops — phase returns to NotReady.
         state.handle_irc_event(
@@ -1009,9 +1051,10 @@ mod tests {
             ts,
         );
 
-        // Discord event while link is down — should not produce IRC commands.
+        // Discord event while link is down — should not produce IRC commands
+        // but should still update state.
         let out = state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
+            &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 9001,
@@ -1029,54 +1072,9 @@ mod tests {
             out.irc_commands.is_empty(),
             "Discord events when link is down should not produce IRC commands"
         );
-    }
-
-    /// Discord events arriving before LinkUp (phase=Down) must be buffered
-    /// and replayed after BurstComplete, not silently dropped.
-    #[test]
-    fn discord_event_before_link_up_replayed_after_burst() {
-        let mut state = BridgeState::new(&test_config());
-        let ts = 1_000_000;
-
-        // Discord MemberSnapshot arrives before IRC link is up.
-        let out = state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 9002,
-                    username: "Eve".into(),
-                    display_name: "Eve".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-            },
-            ts,
-        );
         assert!(
-            out.irc_commands.is_empty(),
-            "should be buffered, not processed"
-        );
-        assert!(
-            state.pm.get_by_discord_id(9002).is_none(),
-            "pseudoclient should not be introduced yet"
-        );
-
-        // IRC link comes up, burst completes.
-        state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
-
-        // The buffered MemberSnapshot should now be replayed.
-        assert!(
-            out.irc_commands
-                .iter()
-                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
-            "buffered MemberSnapshot should produce IntroduceUser after BurstComplete"
-        );
-        assert!(
-            state.pm.get_by_discord_id(9002).is_some(),
-            "Eve should be introduced after replay"
+            state.pm.get_by_discord_id(9001).is_some(),
+            "pseudoclient state should be updated even when link is down"
         );
     }
 
@@ -1087,10 +1085,9 @@ mod tests {
         let mut state = BridgeState::new(&test_config());
         let ts = 1_000_000;
 
-        // First connect: introduce a pseudoclient.
-        state.handle_irc_event(&S2SEvent::LinkUp, ts);
-        let out = state.handle_discord_event(
-            DiscordEvent::MemberSnapshot {
+        // Introduce a pseudoclient while link is not ready.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
                 members: vec![MemberInfo {
                     user_id: 7777,
@@ -1104,15 +1101,16 @@ mod tests {
             },
             ts,
         );
-        assert!(out.irc_commands.is_empty(), "buffered during burst");
-        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        let frank_uid = state.pm.get_by_discord_id(7777).unwrap().uid.clone();
+
+        // First connect: burst sent on BurstComplete.
+        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
         assert!(
             out.irc_commands
                 .iter()
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
-            "Frank should be introduced on first connect"
+            "Frank should be introduced via burst on first connect"
         );
-        let frank_uid = state.pm.get_by_discord_id(7777).unwrap().uid.clone();
 
         // IRC link drops.
         state.handle_irc_event(
@@ -1121,12 +1119,10 @@ mod tests {
             },
             ts + 100,
         );
-        // Frank still exists in pm.
         assert!(state.pm.get_by_discord_id(7777).is_some());
 
-        // Reconnect: link up, remote burst, burst complete.
-        state.handle_irc_event(&S2SEvent::LinkUp, ts + 200);
-        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts + 200);
+        // Reconnect: burst sent on BurstComplete.
+        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts + 200);
 
         // Frank should be re-introduced with the same UID.
         let reintroduced = out
@@ -1152,26 +1148,18 @@ mod tests {
         );
     }
 
-    /// Our EOS is sent on BurstComplete, not LinkUp.
+    /// Our burst (including EOS) is sent on BurstComplete.
     #[test]
-    fn eos_sent_on_burst_complete_not_link_up() {
+    fn burst_sent_on_link_up() {
         let mut state = BridgeState::new(&test_config());
         let ts = 1_000_000;
 
         let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
         assert!(
-            !out.irc_commands
-                .iter()
-                .any(|c| matches!(c, S2SCommand::BurstComplete)),
-            "LinkUp must not send EOS"
-        );
-
-        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
-        assert!(
             out.irc_commands
                 .iter()
                 .any(|c| matches!(c, S2SCommand::BurstComplete)),
-            "BurstComplete must send our EOS"
+            "LinkUp must send our EOS"
         );
     }
 }

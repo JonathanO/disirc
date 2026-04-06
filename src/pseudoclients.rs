@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::discord::DiscordPresence;
 use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams};
 
 // ---------------------------------------------------------------------------
@@ -213,6 +214,7 @@ pub struct PseudoclientState {
     pub username: String,
     pub display_name: String,
     pub channels: Vec<String>,
+    pub presence: DiscordPresence,
 }
 
 /// Manages all pseudoclients and their state.
@@ -269,6 +271,7 @@ impl PseudoclientManager {
         display_name: &str,
         channels: &[String],
         timestamp: u64,
+        presence: DiscordPresence,
     ) -> Option<&PseudoclientState> {
         if self.by_discord_id.contains_key(&discord_user_id) {
             return None;
@@ -288,6 +291,7 @@ impl PseudoclientManager {
             username: username.to_string(),
             display_name: display_name.to_string(),
             channels: channels.to_vec(),
+            presence,
         };
 
         self.known_nicks.insert(&nick);
@@ -489,6 +493,19 @@ impl PseudoclientManager {
     /// Iterate over all active pseudoclient states.
     pub fn iter_states(&self) -> impl Iterator<Item = &PseudoclientState> {
         self.by_discord_id.values()
+    }
+
+    /// Update the stored presence for a pseudoclient.
+    ///
+    /// Returns `true` if the pseudoclient was found and updated, `false` if
+    /// no pseudoclient exists for `discord_user_id`.
+    pub fn update_presence(&mut self, discord_user_id: u64, presence: DiscordPresence) -> bool {
+        if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
+            state.presence = presence;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -749,7 +766,14 @@ mod tests {
     fn introduce_allocates_state() {
         let mut mgr = make_manager();
         let state = mgr
-            .introduce(100, "alice", "Alice Display", &["#test".to_string()], 1000)
+            .introduce(
+                100,
+                "alice",
+                "Alice Display",
+                &["#test".to_string()],
+                1000,
+                DiscordPresence::Online,
+            )
             .expect("should introduce");
 
         assert_eq!(state.nick, "alice");
@@ -764,7 +788,14 @@ mod tests {
         let mut mgr = make_manager();
         let channels = vec!["#a".to_string(), "#b".to_string(), "#c".to_string()];
         let state = mgr
-            .introduce(100, "alice", "Alice", &channels, 1000)
+            .introduce(
+                100,
+                "alice",
+                "Alice",
+                &channels,
+                1000,
+                DiscordPresence::Online,
+            )
             .expect("should introduce");
 
         assert_eq!(state.channels, channels);
@@ -773,8 +804,22 @@ mod tests {
     #[test]
     fn introduce_duplicate_returns_none() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
-        let result = mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
+        let result = mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         assert!(result.is_none());
     }
 
@@ -787,7 +832,14 @@ mod tests {
     #[test]
     fn introduce_updates_state_maps() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
 
         assert!(!mgr.is_empty());
         assert!(mgr.get_by_discord_id(100).is_some());
@@ -801,7 +853,14 @@ mod tests {
         let mut mgr = make_manager();
         mgr.register_external_nick("alice");
         let state = mgr
-            .introduce(100, "alice", "Alice", &["#test".to_string()], 1000)
+            .introduce(
+                100,
+                "alice",
+                "Alice",
+                &["#test".to_string()],
+                1000,
+                DiscordPresence::Online,
+            )
             .expect("should introduce");
 
         assert_eq!(state.nick, "alice_");
@@ -815,7 +874,14 @@ mod tests {
     #[test]
     fn quit_generates_message() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let uid = mgr.get_by_discord_id(100).unwrap().uid.clone();
         let removed = mgr.quit(100, "Disconnected from Discord").unwrap();
         assert_eq!(removed.uid, uid);
@@ -825,7 +891,14 @@ mod tests {
     #[test]
     fn quit_cleans_state() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         mgr.quit(100, "bye");
         assert!(mgr.get_by_discord_id(100).is_none());
         assert!(mgr.get_by_nick("alice").is_none());
@@ -845,7 +918,14 @@ mod tests {
     #[test]
     fn join_channel_generates_sjoin() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#a".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#a".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let msg = mgr.join_channel(100, "#b", 1001).unwrap();
         assert_eq!(msg.prefix, Some("0D0".to_string()));
         let IrcCommand::Sjoin(ref s) = msg.command else {
@@ -858,7 +938,14 @@ mod tests {
     #[test]
     fn join_channel_already_in_returns_none() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#a".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#a".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         assert!(mgr.join_channel(100, "#a", 1001).is_none());
     }
 
@@ -877,6 +964,7 @@ mod tests {
             "Alice",
             &["#a".to_string(), "#b".to_string()],
             1000,
+            DiscordPresence::Online,
         );
         let result = mgr.part_channel(100, "#a", "Bridge channel removed");
         let PartResult::Part(ref msg) = result else {
@@ -896,7 +984,14 @@ mod tests {
     #[test]
     fn part_channel_last_channel_quits() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#a".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#a".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let result = mgr.part_channel(100, "#a", "Bridge channel removed");
         let PartResult::Quit(ref msg) = result else {
             panic!("expected Quit, got {result:?}");
@@ -916,7 +1011,14 @@ mod tests {
     #[test]
     fn part_channel_not_in_channel() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#a".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#a".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         assert_eq!(mgr.part_channel(100, "#b", "bye"), PartResult::NotFound);
     }
 
@@ -927,7 +1029,14 @@ mod tests {
     #[test]
     fn svsnick_updates_nick() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let uid = mgr.get_by_discord_id(100).unwrap().uid.clone();
 
         assert!(mgr.apply_svsnick(&uid, "forced_nick"));
@@ -948,7 +1057,14 @@ mod tests {
         mgr.register_external_nick("bob");
         // bob is taken — collision
         let state = mgr
-            .introduce(100, "bob", "Bob", &["#test".to_string()], 1000)
+            .introduce(
+                100,
+                "bob",
+                "Bob",
+                &["#test".to_string()],
+                1000,
+                DiscordPresence::Online,
+            )
             .expect("should introduce");
         assert_eq!(state.nick, "bob_");
 
@@ -956,7 +1072,14 @@ mod tests {
         mgr.unregister_external_nick("bob");
         // Introduce another user named bob — should get "bob" this time
         let state2 = mgr
-            .introduce(200, "bob", "Bob2", &["#test".to_string()], 1001)
+            .introduce(
+                200,
+                "bob",
+                "Bob2",
+                &["#test".to_string()],
+                1001,
+                DiscordPresence::Online,
+            )
             .expect("should introduce");
         assert_eq!(state2.nick, "bob");
     }
@@ -968,7 +1091,14 @@ mod tests {
     #[test]
     fn is_our_uid() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let uid = mgr.get_by_discord_id(100).unwrap().uid.clone();
         assert!(mgr.is_our_uid(&uid));
         assert!(!mgr.is_our_uid("UNKNOWN"));
@@ -977,7 +1107,14 @@ mod tests {
     #[test]
     fn get_by_uid() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         let uid = mgr.get_by_discord_id(100).unwrap().uid.clone();
         let state = mgr.get_by_uid(&uid).unwrap();
         assert_eq!(state.discord_user_id, 100);
@@ -986,7 +1123,14 @@ mod tests {
     #[test]
     fn reset_clears_everything() {
         let mut mgr = make_manager();
-        mgr.introduce(100, "alice", "Alice", &["#test".to_string()], 1000);
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
         mgr.register_external_nick("bob");
         mgr.reset();
         assert_eq!(mgr.count(), 0);

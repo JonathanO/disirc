@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::discord::DiscordPresence;
+use crate::irc::S2SCommand;
 use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams};
 
 // ---------------------------------------------------------------------------
@@ -218,6 +219,39 @@ pub struct PseudoclientState {
     /// Set after a KILL during the burst window.  The pseudoclient will be
     /// reintroduced (with nick re-resolution) when `BurstComplete` arrives.
     pub needs_reintroduce: bool,
+}
+
+impl PseudoclientState {
+    /// Build the `S2SCommand::IntroduceUser` for this pseudoclient.
+    pub fn introduce_command(&self, ident: &str) -> S2SCommand {
+        S2SCommand::IntroduceUser {
+            uid: self.uid.clone(),
+            nick: self.nick.clone(),
+            ident: ident.to_string(),
+            host: format!("{}.discord.com", self.discord_user_id),
+            realname: self.display_name.clone(),
+        }
+    }
+
+    /// Build the AWAY command for this pseudoclient's current presence.
+    /// Returns `None` for Online (no away status).
+    pub fn away_command(&self) -> Option<S2SCommand> {
+        match self.presence {
+            DiscordPresence::Idle => Some(S2SCommand::SetAway {
+                uid: self.uid.clone(),
+                reason: "Idle".to_string(),
+            }),
+            DiscordPresence::DoNotDisturb => Some(S2SCommand::SetAway {
+                uid: self.uid.clone(),
+                reason: "Do Not Disturb".to_string(),
+            }),
+            DiscordPresence::Offline => Some(S2SCommand::SetAway {
+                uid: self.uid.clone(),
+                reason: "Offline".to_string(),
+            }),
+            DiscordPresence::Online => None,
+        }
+    }
 }
 
 /// Manages all pseudoclients and their state.
@@ -859,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn introduce_allocates_state() {
+    fn introduce_creates_state_and_updates_maps() {
         let mut mgr = make_manager();
         let state = mgr
             .introduce(
@@ -872,11 +906,19 @@ mod tests {
             )
             .expect("should introduce");
 
+        // Returned state has correct fields.
         assert_eq!(state.nick, "alice");
         assert_eq!(state.display_name, "Alice Display");
         assert_eq!(state.discord_user_id, 100);
         assert_eq!(state.channels, vec!["#test".to_string()]);
         assert!(!state.uid.is_empty());
+
+        // Internal maps are updated.
+        assert!(!mgr.is_empty());
+        assert!(mgr.get_by_discord_id(100).is_some());
+        assert!(mgr.get_by_nick("alice").is_some());
+        assert!(mgr.get_by_nick("Alice").is_some()); // case-insensitive
+        assert_eq!(mgr.count(), 1);
     }
 
     #[test]
@@ -923,25 +965,6 @@ mod tests {
     fn is_empty_true_when_no_pseudoclients() {
         let mgr = make_manager();
         assert!(mgr.is_empty());
-    }
-
-    #[test]
-    fn introduce_updates_state_maps() {
-        let mut mgr = make_manager();
-        mgr.introduce(
-            100,
-            "alice",
-            "Alice",
-            &["#test".to_string()],
-            1000,
-            DiscordPresence::Online,
-        );
-
-        assert!(!mgr.is_empty());
-        assert!(mgr.get_by_discord_id(100).is_some());
-        assert!(mgr.get_by_nick("alice").is_some());
-        assert!(mgr.get_by_nick("Alice").is_some()); // case-insensitive
-        assert_eq!(mgr.count(), 1);
     }
 
     #[test]

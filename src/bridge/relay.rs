@@ -148,25 +148,7 @@ mod tests {
     use crate::discord::DiscordCommand;
     use crate::irc::S2SCommand;
 
-    struct NullResolver;
-    impl DiscordResolver for NullResolver {
-        fn resolve_user(&self, _: &str) -> Option<String> {
-            None
-        }
-        fn resolve_channel(&self, _: &str) -> Option<String> {
-            None
-        }
-        fn resolve_role(&self, _: &str) -> Option<String> {
-            None
-        }
-    }
-
-    struct NullIrcResolver;
-    impl IrcMentionResolver for NullIrcResolver {
-        fn resolve_nick(&self, _: &str) -> Option<String> {
-            None
-        }
-    }
+    use super::super::test_util::{NullIrcResolver, NullResolver};
 
     // --- discord_to_irc_commands ---
 

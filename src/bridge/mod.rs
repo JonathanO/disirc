@@ -12,6 +12,8 @@ pub mod orchestrator;
 mod relay;
 mod routing;
 mod state;
+#[cfg(test)]
+mod test_util;
 
 use tokio::sync::mpsc;
 

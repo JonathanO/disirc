@@ -28,14 +28,7 @@ pub fn produce_burst_commands(
         if state.needs_reintroduce {
             continue;
         }
-        let host = format!("{}.discord.com", state.discord_user_id);
-        cmds.push(S2SCommand::IntroduceUser {
-            uid: state.uid.clone(),
-            nick: state.nick.clone(),
-            ident: pm.ident().to_string(),
-            host,
-            realname: state.display_name.clone(),
-        });
+        cmds.push(state.introduce_command(pm.ident()));
         for channel in &state.channels {
             cmds.push(S2SCommand::JoinChannel {
                 uid: state.uid.clone(),
@@ -44,20 +37,8 @@ pub fn produce_burst_commands(
             });
         }
         // Set initial away status based on stored presence.
-        match state.presence {
-            DiscordPresence::Idle => cmds.push(S2SCommand::SetAway {
-                uid: state.uid.clone(),
-                reason: "Idle".to_string(),
-            }),
-            DiscordPresence::DoNotDisturb => cmds.push(S2SCommand::SetAway {
-                uid: state.uid.clone(),
-                reason: "Do Not Disturb".to_string(),
-            }),
-            DiscordPresence::Offline => cmds.push(S2SCommand::SetAway {
-                uid: state.uid.clone(),
-                reason: "Offline".to_string(),
-            }),
-            DiscordPresence::Online => {}
+        if let Some(away) = state.away_command() {
+            cmds.push(away);
         }
     }
     cmds.push(S2SCommand::BurstComplete);
@@ -295,6 +276,7 @@ pub fn route_discord_to_irc(
     if pm.get_by_discord_id(author_id).is_none() {
         let channels = vec![irc_channel.clone()];
         let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
+        let ident = pm.ident().to_string();
         if let Some(state) = pm.introduce(
             author_id,
             author_name,
@@ -304,16 +286,8 @@ pub fn route_discord_to_irc(
             DiscordPresence::Online,
         ) {
             let uid = state.uid.clone();
-            let nick = state.nick.clone();
             let chans = state.channels.clone();
-            let host = format!("{author_id}.discord.com");
-            cmds.push(S2SCommand::IntroduceUser {
-                uid: uid.clone(),
-                nick,
-                ident: pm.ident().to_string(),
-                host,
-                realname: author_display_name.to_string(),
-            });
+            cmds.push(state.introduce_command(&ident));
             for channel in &chans {
                 cmds.push(S2SCommand::JoinChannel {
                     uid: uid.clone(),
@@ -374,31 +348,11 @@ mod tests {
 
     use crate::config::BridgeEntry;
     use crate::discord::DiscordCommand;
-    use crate::formatting::DiscordResolver;
     use crate::irc::{S2SCommand, S2SEvent};
     use crate::pseudoclients::PseudoclientManager;
 
     use super::super::state::apply_irc_event;
-
-    struct NullResolver;
-    impl DiscordResolver for NullResolver {
-        fn resolve_user(&self, _: &str) -> Option<String> {
-            None
-        }
-        fn resolve_channel(&self, _: &str) -> Option<String> {
-            None
-        }
-        fn resolve_role(&self, _: &str) -> Option<String> {
-            None
-        }
-    }
-
-    struct NullIrcResolver;
-    impl IrcMentionResolver for NullIrcResolver {
-        fn resolve_nick(&self, _: &str) -> Option<String> {
-            None
-        }
-    }
+    use super::super::test_util::{NullIrcResolver, NullResolver};
 
     fn make_pm() -> PseudoclientManager {
         PseudoclientManager::new("001", "bridge")

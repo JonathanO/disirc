@@ -446,19 +446,12 @@ pub(crate) fn introduce_pseudoclient(
     now_ts: u64,
 ) -> Vec<S2SCommand> {
     let mut cmds = Vec::new();
+    let ident = pm.ident().to_string();
 
     if let Some(s) = pm.introduce(user_id, username, display_name, channels, now_ts, presence) {
         let uid = s.uid.clone();
-        let nick = s.nick.clone();
         let chans = s.channels.clone();
-        let host = format!("{user_id}.discord.com");
-        cmds.push(S2SCommand::IntroduceUser {
-            uid: uid.clone(),
-            nick,
-            ident: pm.ident().to_string(),
-            host,
-            realname: display_name.to_string(),
-        });
+        cmds.push(s.introduce_command(&ident));
         for channel in &chans {
             let ts = irc_state.ts_for_channel(channel).unwrap_or(now_ts);
             cmds.push(S2SCommand::JoinChannel {
@@ -469,16 +462,8 @@ pub(crate) fn introduce_pseudoclient(
         }
         // Set initial away if introduced as Idle/DnD (e.g. from burst).
         // Online needs no ClearAway — new users default to not-away.
-        match presence {
-            DiscordPresence::Idle => cmds.push(S2SCommand::SetAway {
-                uid,
-                reason: "Idle".to_string(),
-            }),
-            DiscordPresence::DoNotDisturb => cmds.push(S2SCommand::SetAway {
-                uid,
-                reason: "Do Not Disturb".to_string(),
-            }),
-            _ => {}
+        if let Some(away) = s.away_command() {
+            cmds.push(away);
         }
     }
 

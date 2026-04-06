@@ -23,6 +23,11 @@ pub fn produce_burst_commands(
 ) -> Vec<S2SCommand> {
     let mut cmds = Vec::new();
     for state in pm.iter_states() {
+        // Skip pseudoclients pending reintroduction — their old UID is
+        // dead and they'll be reintroduced after BurstComplete.
+        if state.needs_reintroduce {
+            continue;
+        }
         let host = format!("{}.discord.com", state.discord_user_id);
         cmds.push(S2SCommand::IntroduceUser {
             uid: state.uid.clone(),
@@ -277,9 +282,16 @@ pub fn route_discord_to_irc(
     };
     let irc_channel = bridge.irc_channel.clone();
 
-    // On-demand introduction: ensure a pseudoclient exists for this author.
-    // Use the event-carried username and display name directly.
+    // On-demand introduction: ensure a live pseudoclient exists for this author.
+    // If the entry is marked needs_reintroduce (killed, pending deferred
+    // reintroduction), remove it first so we can reintroduce fresh.
     let mut cmds = Vec::new();
+    if pm
+        .get_by_discord_id(author_id)
+        .is_some_and(|ps| ps.needs_reintroduce)
+    {
+        pm.remove_marked(author_id);
+    }
     if pm.get_by_discord_id(author_id).is_none() {
         let channels = vec![irc_channel.clone()];
         let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);

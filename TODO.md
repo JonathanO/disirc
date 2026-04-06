@@ -33,9 +33,7 @@ None.
 - **Metrics / observability** — Structured metrics for operators: message counts (per direction), pseudoclient count, link uptime, reconnect count. Could expose via a simple HTTP endpoint or structured log events.
 - **Dynamic configuration** — Allow operators to change bridge settings at runtime from within IRC (e.g. via PRIVMSG to the bridge server) or Discord (e.g. bot commands). Currently config changes require editing `config.toml` and sending SIGHUP.
 - **Configurable quit-on-offline** — Currently pseudoclients persist when a Discord user goes offline (set AWAY instead of QUIT). A config option `pseudoclients.quit_on_offline` could quit them instead, optionally with an idle delay before quitting. See spec 06 "Presence policy" section.
-- **Deferred reintroduce after KILL** — Since we burst on LinkUp (before the remote burst), nick collisions during the burst window cause KILL → reintroduce → KILL loops. Reintroduction should be deferred until after the remote burst completes (BurstComplete), and optionally on a configurable timer. While deferred, the pseudoclient should be suppressed from other introduction paths (on-demand, presence update) to prevent the same loop. The existing 30s cooldown mitigates but doesn't solve this — a proper solution tracks "pending reintroduce" state per pseudoclient.
-- **Username change tracking** — Discord usernames can change (rarely). Detect username changes and update the pseudoclient nick via NICK command.
-- **Revisit orchestrator state handling** — Consider splitting BridgeState into focused sub-objects (IrcBridge, DiscordBridge) that own related state, with the orchestrator coordinating between them. Would improve encapsulation and reduce parameter passing.
+- **Configurable KILL reintroduce delay** — Currently reintroduction after BurstComplete is immediate. A configurable timer would allow IRC operators time to address the issue before the pseudoclient reappears. Requires async plumbing (timer in the bridge loop).
 
 ## Completed features (post-v1)
 
@@ -46,6 +44,10 @@ None.
 - ~~**LinkPhase state machine**~~ — PR #24 merged. Replaced boolean flags with `LinkPhase` enum. Simplified kill cooldown.
 - ~~**Pseudoclient hostnames**~~ — PR #23. Changed from `sanitize_nick.host_suffix` to `{user_id}.discord.com`.
 - ~~**Presence fixes**~~ — PR #25. Cache display names for offline members, extract display name from presence_update payload, AWAY :Offline for offline users, proper burst on BurstComplete (not LinkUp), re-burst on reconnect, buffer Discord events when link is Down.
+- ~~**Username as nick**~~ — PR #26. Use Discord username for IRC nick (stable, unique, IRC-safe), display name for GECOS.
+- ~~**Event-carried names**~~ — PR #28. Pseudoclient introduction uses names from events directly, not DiscordState caches. Remove usernames cache.
+- ~~**Immediate Discord processing**~~ — PR #29. Discord events always update PM state immediately. No event buffer. LinkUp sends burst + sets Ready. BurstComplete is a no-op for phase. Presence stored in PseudoclientState. Messages before IRC ready dropped (netsplit behaviour).
+- ~~**Deferred KILL reintroduce**~~ — PR #30. KILLs during burst window defer reintroduction to BurstComplete for nick re-resolution. PM entry kept with `needs_reintroduce` flag. Entries suppressed from burst, message routing, and presence updates until reintroduced.
 
 ## Bugs fixed during integration
 

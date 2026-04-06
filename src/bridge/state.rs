@@ -314,20 +314,47 @@ pub fn apply_discord_event(
             if let Some(s) = pm.get_by_discord_id(*user_id) {
                 let needs_reintroduce = s.needs_reintroduce;
                 let uid = s.uid.clone();
-                let nick = s.nick.clone();
-                // Always keep stored presence current (for burst/reintroduce).
+
+                // Always keep stored state current (presence, username,
+                // display name).  These persist across reconnects and
+                // reintroductions.
                 pm.update_presence(*user_id, *presence);
+                if let Some(new_display) = display_name.as_ref().filter(|d| !d.is_empty())
+                    && let Some(ps) = pm.get_by_discord_id_mut(*user_id)
+                {
+                    ps.display_name.clone_from(new_display);
+                }
+
                 if needs_reintroduce {
+                    // Update stored username — it'll be used when we
+                    // reintroduce on BurstComplete.
+                    if let Some(new_username) = username.as_ref().filter(|u| !u.is_empty())
+                        && let Some(ps) = pm.get_by_discord_id_mut(*user_id)
+                    {
+                        ps.username.clone_from(new_username);
+                    }
                     return vec![];
                 }
-                tracing::debug!(
-                    user_id,
-                    %nick,
-                    %uid,
-                    ?presence,
-                    "PresenceUpdated — updating away status"
-                );
-                return match presence {
+
+                // Detect username change → IRC NICK command.
+                let mut cmds = Vec::new();
+                if let Some(new_username) = username.as_ref().filter(|u| !u.is_empty())
+                    && let Some((old_nick, new_nick)) = pm.rename(*user_id, new_username)
+                {
+                    tracing::debug!(
+                        user_id,
+                        %old_nick,
+                        %new_nick,
+                        "PresenceUpdated — username changed, sending NICK"
+                    );
+                    cmds.push(S2SCommand::ChangeNick {
+                        uid: uid.clone(),
+                        new_nick,
+                    });
+                }
+
+                // Append AWAY status command.
+                cmds.extend(match presence {
                     DiscordPresence::Online => vec![S2SCommand::ClearAway { uid }],
                     DiscordPresence::Idle => vec![S2SCommand::SetAway {
                         uid,
@@ -341,7 +368,8 @@ pub fn apply_discord_event(
                         uid,
                         reason: "Offline".to_string(),
                     }],
-                };
+                });
+                return cmds;
             }
             // Not yet introduced — only introduce for non-offline presence.
             if !presence.is_non_offline() {
@@ -1671,6 +1699,112 @@ mod tests {
                 .any(|c| matches!(c, S2SCommand::ClearAway { .. })),
             "returning online should clear away"
         );
+    }
+
+    #[test]
+    fn presence_updated_username_change_emits_nick_command() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        // Introduce with username "olduser".
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![MemberInfo {
+                    user_id: 50,
+                    username: "olduser".into(),
+                    display_name: "Old User".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            1000,
+        );
+        assert_eq!(pm.get_by_discord_id(50).unwrap().nick, "olduser");
+
+        // Presence update with a new username.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+                username: Some("newuser".into()),
+                display_name: Some("New User".into()),
+            },
+            1001,
+        );
+
+        // Should have a ChangeNick command.
+        assert!(
+            cmds.iter().any(
+                |c| matches!(c, S2SCommand::ChangeNick { new_nick, .. } if new_nick == "newuser")
+            ),
+            "username change should emit ChangeNick; got: {cmds:?}"
+        );
+        // PM state should be updated.
+        let ps = pm.get_by_discord_id(50).unwrap();
+        assert_eq!(ps.nick, "newuser");
+        assert_eq!(ps.username, "newuser");
+        assert_eq!(ps.display_name, "New User");
+    }
+
+    #[test]
+    fn presence_updated_same_username_no_nick_command() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![MemberInfo {
+                    user_id: 50,
+                    username: "sameuser".into(),
+                    display_name: "Same".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            1000,
+        );
+
+        // Presence update with same username — no NICK command.
+        let cmds = apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Idle,
+                username: Some("sameuser".into()),
+                display_name: Some("Same".into()),
+            },
+            1001,
+        );
+
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, S2SCommand::ChangeNick { .. })),
+            "same username should not emit ChangeNick"
+        );
+        // Should still have the AWAY command.
+        assert!(cmds.iter().any(|c| matches!(c, S2SCommand::SetAway { .. })));
     }
 
     #[test]

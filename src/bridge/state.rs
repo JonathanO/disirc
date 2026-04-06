@@ -114,18 +114,18 @@ pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event
 
         S2SEvent::UserKilled { uid, reason, .. } => {
             if let Some(ps) = pm.get_by_uid(uid) {
-                // One of our pseudoclients — remove from PM so the
-                // orchestrator can reintroduce with a fresh UID and
-                // nick (re-resolved against current known_nicks).
+                // One of our pseudoclients — mark for reintroduction.
+                // The PM entry is kept; the orchestrator decides whether
+                // to reintroduce immediately or defer to BurstComplete.
+                let discord_id = ps.discord_user_id;
                 tracing::debug!(
                     uid = %uid,
-                    discord_id = ps.discord_user_id,
+                    discord_id,
                     nick = %ps.nick,
                     reason = %reason,
-                    "pseudoclient killed — removing from PM"
+                    "pseudoclient killed — marking for reintroduce"
                 );
-                let discord_id = ps.discord_user_id;
-                pm.quit(discord_id, "Killed");
+                pm.mark_needs_reintroduce(discord_id);
                 pm.forget_uid(discord_id);
             } else {
                 // External IRC user — remove from nick map.
@@ -310,11 +310,16 @@ pub fn apply_discord_event(
 
             // If the user is already introduced, update their away status
             // even if they went offline (AWAY :Offline rather than QUIT).
+            // Skip entries marked needs_reintroduce — they're not on IRC.
             if let Some(s) = pm.get_by_discord_id(*user_id) {
+                let needs_reintroduce = s.needs_reintroduce;
                 let uid = s.uid.clone();
                 let nick = s.nick.clone();
-                // Keep stored presence current for burst re-introduction.
+                // Always keep stored presence current (for burst/reintroduce).
                 pm.update_presence(*user_id, *presence);
+                if needs_reintroduce {
+                    return vec![];
+                }
                 tracing::debug!(
                     user_id,
                     %nick,
@@ -795,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn kill_removes_pseudoclient_from_pm() {
+    fn kill_marks_pseudoclient_needs_reintroduce() {
         let mut state = IrcState::default();
         let mut pm = make_pm();
         pm.introduce(
@@ -818,16 +823,18 @@ mod tests {
             },
         );
 
-        // PM entry removed — the orchestrator reintroduces with a fresh
-        // UID and re-resolved nick if reintroduce_on_kill is enabled.
+        // PM entry stays but is marked for reintroduction.
+        let ps = pm
+            .get_by_discord_id(77)
+            .expect("PM entry should remain after KILL");
         assert!(
-            pm.get_by_discord_id(77).is_none(),
-            "pseudoclient should be removed from PM after KILL"
+            ps.needs_reintroduce,
+            "pseudoclient should be marked needs_reintroduce"
         );
     }
 
     #[test]
-    fn kill_clears_uid_cache_so_reintroduction_gets_fresh_uid() {
+    fn kill_then_reintroduce_gets_fresh_uid() {
         let mut state = IrcState::default();
         let mut pm = make_pm();
         pm.introduce(
@@ -850,7 +857,8 @@ mod tests {
             },
         );
 
-        // Reintroduce — should get a different UID.
+        // Quit the marked entry, then reintroduce — should get a fresh UID.
+        pm.quit(77, "reintroduce");
         pm.introduce(
             77,
             "alice",

@@ -215,6 +215,9 @@ pub struct PseudoclientState {
     pub display_name: String,
     pub channels: Vec<String>,
     pub presence: DiscordPresence,
+    /// Set after a KILL during the burst window.  The pseudoclient will be
+    /// reintroduced (with nick re-resolution) when `BurstComplete` arrives.
+    pub needs_reintroduce: bool,
 }
 
 /// Manages all pseudoclients and their state.
@@ -292,6 +295,7 @@ impl PseudoclientManager {
             display_name: display_name.to_string(),
             channels: channels.to_vec(),
             presence,
+            needs_reintroduce: false,
         };
 
         self.known_nicks.insert(&nick);
@@ -493,6 +497,38 @@ impl PseudoclientManager {
     /// Iterate over all active pseudoclient states.
     pub fn iter_states(&self) -> impl Iterator<Item = &PseudoclientState> {
         self.by_discord_id.values()
+    }
+
+    /// Remove a pseudoclient entry that was previously marked with
+    /// `mark_needs_reintroduce`.  Unlike `quit`, this does NOT touch
+    /// `known_nicks` — those were already cleaned up when the pseudoclient
+    /// was marked.
+    pub fn remove_marked(&mut self, discord_user_id: u64) -> Option<PseudoclientState> {
+        self.by_discord_id.remove(&discord_user_id)
+    }
+
+    /// Clear all `needs_reintroduce` flags (e.g. on `LinkDown`; a fresh
+    /// connection starts clean; all pseudoclients will be burst normally).
+    pub fn clear_needs_reintroduce(&mut self) {
+        for state in self.by_discord_id.values_mut() {
+            state.needs_reintroduce = false;
+        }
+    }
+
+    /// Mark a pseudoclient as needing reintroduction after a KILL.
+    ///
+    /// The entry stays in PM (the user is still desired) but the old UID
+    /// is dead on the network.  `produce_burst_commands` will skip entries
+    /// with this flag.  The orchestrator clears the flag after reintroduction.
+    pub fn mark_needs_reintroduce(&mut self, discord_user_id: u64) {
+        if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
+            state.needs_reintroduce = true;
+            // Remove from nick/uid maps since the identity is dead on IRC.
+            self.nick_to_discord
+                .remove(&state.nick.to_ascii_lowercase());
+            self.uid_to_discord.remove(&state.uid);
+            self.known_nicks.remove(&state.nick);
+        }
     }
 
     /// Update the stored presence for a pseudoclient.

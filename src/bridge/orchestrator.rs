@@ -98,6 +98,10 @@ pub struct BridgeState {
     pub discord_state: DiscordState,
     /// Current IRC link lifecycle phase.
     link_phase: LinkPhase,
+    /// Whether the remote server's burst (`EOS`) has been received since
+    /// the last `LinkUp`.  Used to decide whether KILL reintroduction can
+    /// happen immediately (remote nicks are known) or must be deferred.
+    remote_burst_done: bool,
     /// Kill-reintroduction cooldowns: `discord_user_id` → epoch seconds.
     pub kill_cooldowns: HashMap<u64, u64>,
 }
@@ -112,6 +116,7 @@ impl BridgeState {
             irc_state: IrcState::default(),
             discord_state: DiscordState::default(),
             link_phase: LinkPhase::NotReady,
+            remote_burst_done: false,
             kill_cooldowns: HashMap::new(),
         }
     }
@@ -123,13 +128,15 @@ impl BridgeState {
         match event {
             S2SEvent::LinkUp => {
                 self.link_phase = LinkPhase::Ready;
+                self.remote_burst_done = false;
 
                 // Send our burst and go live immediately.  We don't need
                 // to wait for the remote burst — IRC S2S allows both sides
                 // to burst concurrently.  Any Discord events processed
                 // while the link was down have already updated PM state;
                 // the burst captures the current snapshot.  Nick collisions
-                // are handled by the KILL handler.
+                // are handled by the KILL handler (deferred to BurstComplete
+                // so nick re-resolution has the remote nicks available).
                 output.irc_commands.extend(produce_burst_commands(
                     &self.pm,
                     &self.irc_state,
@@ -138,7 +145,32 @@ impl BridgeState {
             }
             S2SEvent::LinkDown { .. } => {
                 self.link_phase = LinkPhase::NotReady;
+                self.remote_burst_done = false;
                 self.pm.clear_external_nicks();
+                self.pm.clear_needs_reintroduce();
+            }
+            S2SEvent::BurstComplete => {
+                self.remote_burst_done = true;
+
+                // Reintroduce any pseudoclients that were killed during
+                // the burst window.  known_nicks is now populated from the
+                // remote burst, so nick re-resolution will pick non-
+                // colliding nicks.
+                let pending: Vec<u64> = self
+                    .pm
+                    .iter_states()
+                    .filter(|s| s.needs_reintroduce)
+                    .map(|s| s.discord_user_id)
+                    .collect();
+                for discord_id in pending {
+                    let cmds = self.reintroduce_killed(discord_id, now_ts);
+                    tracing::debug!(
+                        discord_id,
+                        cmd_count = cmds.len(),
+                        "deferred reintroduce after BurstComplete"
+                    );
+                    output.irc_commands.extend(cmds);
+                }
             }
             S2SEvent::MessageReceived {
                 from_uid,
@@ -197,63 +229,78 @@ impl BridgeState {
         }
 
         // Identify killed pseudoclient before apply_irc_event runs.
-        // Capture pseudoclient identity before apply_irc_event removes it.
-        let killed_pseudoclient = if let S2SEvent::UserKilled { uid, .. } = event {
-            self.pm.get_by_uid(uid).map(|ps| {
-                (
-                    ps.discord_user_id,
-                    ps.username.clone(),
-                    ps.display_name.clone(),
-                    ps.channels.clone(),
-                    ps.presence,
-                )
-            })
+        let killed_discord_id = if let S2SEvent::UserKilled { uid, .. } = event {
+            self.pm.get_by_uid(uid).map(|ps| ps.discord_user_id)
         } else {
             None
         };
 
+        // apply_irc_event marks the pseudoclient as needs_reintroduce
+        // and clears its UID cache.
         apply_irc_event(&mut self.irc_state, &mut self.pm, event);
 
-        // Re-introduce killed pseudoclients if configured.
-        // apply_irc_event already removed the PM entry and cleared the UID
-        // cache.  introduce_pseudoclient will allocate a fresh UID and
-        // re-resolve the nick against current known_nicks (which may now
-        // include the external nick that caused the collision).
-        if let Some((discord_id, username, display_name, channels, presence)) = killed_pseudoclient
-            && self.config.pseudoclients.reintroduce_on_kill
-        {
-            let cooldown_secs = 30u64;
-            self.kill_cooldowns
-                .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
-            if self.kill_cooldowns.contains_key(&discord_id) {
-                tracing::warn!(
-                    discord_id,
-                    "not re-introducing killed pseudoclient — killed again within 30s cooldown"
-                );
-            } else {
-                let cmds = introduce_pseudoclient(
-                    &mut self.pm,
-                    &self.irc_state,
-                    discord_id,
-                    &username,
-                    &display_name,
-                    &channels,
-                    presence,
-                    now_ts,
-                );
-                tracing::debug!(
-                    discord_id,
-                    cmd_count = cmds.len(),
-                    "re-introducing killed pseudoclient"
-                );
-                self.kill_cooldowns.insert(discord_id, now_ts);
-                output.irc_commands.extend(cmds);
+        // Handle killed pseudoclients.
+        if let Some(discord_id) = killed_discord_id {
+            if !self.config.pseudoclients.reintroduce_on_kill {
+                // Operator's kill respected — remove from PM entirely.
+                self.pm.quit(discord_id, "Killed");
+            } else if self.remote_burst_done {
+                // Remote burst is done — known_nicks is populated, safe to
+                // reintroduce immediately with nick re-resolution.
+                let cooldown_secs = 30u64;
+                self.kill_cooldowns
+                    .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
+                if self.kill_cooldowns.contains_key(&discord_id) {
+                    tracing::warn!(
+                        discord_id,
+                        "not re-introducing killed pseudoclient — killed again within 30s cooldown"
+                    );
+                } else {
+                    let cmds = self.reintroduce_killed(discord_id, now_ts);
+                    tracing::debug!(
+                        discord_id,
+                        cmd_count = cmds.len(),
+                        "re-introducing killed pseudoclient immediately"
+                    );
+                    self.kill_cooldowns.insert(discord_id, now_ts);
+                    output.irc_commands.extend(cmds);
+                }
             }
-            // If reintroduce_on_kill is false, the PM entry was already
-            // removed by apply_irc_event — the operator's kill is respected.
+            // else: remote_burst_done is false — the pseudoclient is marked
+            // needs_reintroduce by apply_irc_event.  BurstComplete will
+            // reintroduce it once known_nicks is populated.
         }
 
         output
+    }
+
+    /// Remove a killed pseudoclient and reintroduce with a fresh UID and
+    /// re-resolved nick.  Returns the IRC commands for the new introduction.
+    fn reintroduce_killed(&mut self, discord_id: u64, now_ts: u64) -> Vec<S2SCommand> {
+        let Some(ps) = self.pm.get_by_discord_id(discord_id) else {
+            return vec![];
+        };
+        let username = ps.username.clone();
+        let display_name = ps.display_name.clone();
+        let channels = ps.channels.clone();
+        let presence = ps.presence;
+
+        if ps.needs_reintroduce {
+            self.pm.remove_marked(discord_id);
+        } else {
+            self.pm.quit(discord_id, "Killed");
+        }
+
+        introduce_pseudoclient(
+            &mut self.pm,
+            &self.irc_state,
+            discord_id,
+            &username,
+            &display_name,
+            &channels,
+            presence,
+            now_ts,
+        )
     }
 
     /// Handle a Discord event.  Returns commands to send to IRC and Discord.
@@ -676,8 +723,9 @@ mod tests {
         let mut state = BridgeState::new(&config);
         let ts = 1_000_000;
 
-        // Set up: link up, burst complete, introduce pseudoclient.
+        // Set up: link up, remote burst done, introduce pseudoclient.
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         let out = state.handle_discord_event(
             &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
@@ -910,6 +958,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         let out = state.handle_discord_event(
             &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
@@ -971,36 +1020,13 @@ mod tests {
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
             "second kill within cooldown must not reintroduce"
         );
-
-        // Third kill after cooldown expires — should reintroduce again.
-        // Re-introduce manually since the cooldown suppressed it.
-        state.handle_discord_event(
-            &DiscordEvent::PresenceUpdated {
-                user_id: 8001,
-                guild_id: 999,
-                presence: DiscordPresence::Online,
-                username: Some("Charlie".into()),
-                display_name: Some("Charlie".into()),
-            },
-            ts + 30,
-        );
-        let uid3 = state
-            .pm
-            .get_by_discord_id(8001)
-            .map(|s| s.uid.clone())
-            .expect("should be introduced via presence");
-        let out = state.handle_irc_event(
-            &S2SEvent::UserKilled {
-                uid: uid3,
-                reason: "third kill".into(),
-            },
-            ts + 30,
-        );
+        // Pseudoclient is marked needs_reintroduce but blocked by cooldown.
         assert!(
-            out.irc_commands
-                .iter()
-                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
-            "kill after cooldown expires should reintroduce"
+            state
+                .pm
+                .get_by_discord_id(8001)
+                .is_some_and(|ps| ps.needs_reintroduce),
+            "should be marked for deferred reintroduce"
         );
     }
 
@@ -1160,6 +1186,93 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, S2SCommand::BurstComplete)),
             "LinkUp must send our EOS"
+        );
+    }
+
+    /// KILL during burst window (before BurstComplete) defers reintroduction.
+    #[test]
+    fn kill_during_burst_deferred_to_burst_complete() {
+        let mut config = test_config();
+        config.pseudoclients.reintroduce_on_kill = true;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        // Introduce pseudoclient while link is down, then link up.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 6001,
+                    username: "victim".into(),
+                    display_name: "Victim".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+            },
+            ts,
+        );
+        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        let old_uid = out
+            .irc_commands
+            .iter()
+            .find_map(|c| {
+                if let S2SCommand::IntroduceUser { uid, .. } = c {
+                    Some(uid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("should burst pseudoclient");
+
+        // KILL arrives before BurstComplete (nick collision from remote burst).
+        let out = state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid: old_uid,
+                reason: "Nick collision".into(),
+            },
+            ts,
+        );
+
+        // Should NOT reintroduce immediately — defer to BurstComplete.
+        assert!(
+            !out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "KILL during burst window should not reintroduce immediately"
+        );
+
+        // Register the colliding external nick (as the remote burst would).
+        state.handle_irc_event(
+            &S2SEvent::UserIntroduced {
+                uid: "001EXTAAA".into(),
+                nick: "victim".into(),
+                server_sid: "001".into(),
+                realname: "External".into(),
+                host: "example.com".into(),
+                ident: "ext".into(),
+            },
+            ts,
+        );
+
+        // BurstComplete — should reintroduce with a suffixed nick.
+        let out = state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        let new_nick = out
+            .irc_commands
+            .iter()
+            .find_map(|c| {
+                if let S2SCommand::IntroduceUser { nick, .. } = c {
+                    Some(nick.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("BurstComplete should reintroduce the killed pseudoclient");
+
+        assert_ne!(
+            new_nick, "victim",
+            "reintroduced nick should be suffixed to avoid collision; got: {new_nick}"
         );
     }
 }

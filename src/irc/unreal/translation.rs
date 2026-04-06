@@ -305,6 +305,17 @@ pub fn translate_outbound(
             }]
         }
 
+        S2SCommand::ChangeNick { uid, new_nick } => {
+            vec![IrcMessage {
+                tags: vec![],
+                prefix: Some(uid.clone()),
+                command: IrcCommand::Nick {
+                    new_nick: new_nick.clone(),
+                    timestamp: now_ts,
+                },
+            }]
+        }
+
         S2SCommand::SetAway { uid, reason } => {
             vec![IrcMessage {
                 tags: vec![],
@@ -1101,6 +1112,30 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         assert!(matches!(msgs[0].command, IrcCommand::Eos));
         assert_eq!(msgs[0].prefix, Some(SID.into()));
+    }
+
+    // -----------------------------------------------------------------------
+    // translate_outbound — ChangeNick → NICK
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn outbound_change_nick_produces_nick_with_uid_prefix() {
+        let cmd = S2SCommand::ChangeNick {
+            uid: UID.into(),
+            new_nick: "newnick".into(),
+        };
+        let msgs = translate_outbound(&cmd, SID, false, 1_700_000_000);
+        assert_eq!(msgs.len(), 1);
+        let IrcCommand::Nick {
+            new_nick,
+            timestamp,
+        } = &msgs[0].command
+        else {
+            panic!("expected Nick command");
+        };
+        assert_eq!(new_nick, "newnick");
+        assert_eq!(*timestamp, 1_700_000_000);
+        assert_eq!(msgs[0].prefix, Some(UID.into()));
     }
 
     // -----------------------------------------------------------------------

@@ -430,6 +430,14 @@ impl PseudoclientManager {
         self.by_discord_id.get(&discord_user_id)
     }
 
+    /// Mutable lookup by Discord user ID.
+    pub fn get_by_discord_id_mut(
+        &mut self,
+        discord_user_id: u64,
+    ) -> Option<&mut PseudoclientState> {
+        self.by_discord_id.get_mut(&discord_user_id)
+    }
+
     /// Look up a pseudoclient by IRC nick (case-insensitive).
     #[must_use]
     pub fn get_by_nick(&self, nick: &str) -> Option<&PseudoclientState> {
@@ -529,6 +537,58 @@ impl PseudoclientManager {
             self.uid_to_discord.remove(&state.uid);
             self.known_nicks.remove(&state.nick);
         }
+    }
+
+    /// Rename a pseudoclient after a Discord username change.
+    ///
+    /// Sanitises the new username, resolves collisions against `known_nicks`,
+    /// and updates all internal maps.  Returns `Some((old_nick, new_nick))` if
+    /// the nick actually changed, `None` if the user doesn't exist or the
+    /// username/nick is unchanged.
+    pub fn rename(&mut self, discord_user_id: u64, new_username: &str) -> Option<(String, String)> {
+        let state = self.by_discord_id.get(&discord_user_id)?;
+        if state.username == new_username {
+            return None;
+        }
+
+        let old_nick = state.nick.clone();
+        let uid = state.uid.clone();
+
+        // Resolve the new nick without our own nick in known_nicks (to
+        // avoid treating our current nick as a collision with ourselves).
+        self.known_nicks.remove(&old_nick);
+        let new_nick = resolve_nick(
+            &sanitize_nick(new_username),
+            discord_user_id,
+            &uid,
+            &self.known_nicks,
+        );
+        // Always re-register a nick — either the old one (unchanged) or
+        // the new one.  This avoids a remove-then-maybe-restore pattern.
+        self.known_nicks.insert(&new_nick);
+
+        if new_nick == old_nick {
+            // Sanitised nick didn't change — just update the username.
+            self.by_discord_id
+                .get_mut(&discord_user_id)
+                .expect("just looked up")
+                .username = new_username.to_string();
+            return None;
+        }
+
+        // Update nick maps: remove old, insert new.
+        self.nick_to_discord.remove(&old_nick.to_ascii_lowercase());
+        self.nick_to_discord
+            .insert(new_nick.to_ascii_lowercase(), discord_user_id);
+
+        let state = self
+            .by_discord_id
+            .get_mut(&discord_user_id)
+            .expect("just looked up");
+        state.nick.clone_from(&new_nick);
+        state.username = new_username.to_string();
+
+        Some((old_nick, new_nick))
     }
 
     /// Update the stored presence for a pseudoclient.
@@ -945,6 +1005,81 @@ mod tests {
     fn quit_unknown_returns_none() {
         let mut mgr = make_manager();
         assert!(mgr.quit(999, "bye").is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // PseudoclientManager — rename
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn rename_changes_nick_and_username() {
+        let mut mgr = make_manager();
+        mgr.introduce(
+            100,
+            "oldname",
+            "Old",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
+
+        let result = mgr.rename(100, "newname");
+        assert_eq!(result, Some(("oldname".to_string(), "newname".to_string())));
+
+        let ps = mgr.get_by_discord_id(100).unwrap();
+        assert_eq!(ps.nick, "newname");
+        assert_eq!(ps.username, "newname");
+        // Old nick should be gone from lookup.
+        assert!(mgr.get_by_nick("oldname").is_none());
+        // New nick should work.
+        assert!(mgr.get_by_nick("newname").is_some());
+    }
+
+    #[test]
+    fn rename_same_username_returns_none() {
+        let mut mgr = make_manager();
+        mgr.introduce(
+            100,
+            "same",
+            "Same",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
+
+        assert_eq!(mgr.rename(100, "same"), None);
+        assert_eq!(mgr.get_by_discord_id(100).unwrap().nick, "same");
+    }
+
+    #[test]
+    fn rename_with_collision_suffixes_nick() {
+        let mut mgr = make_manager();
+        mgr.introduce(
+            100,
+            "alice",
+            "Alice",
+            &["#test".to_string()],
+            1000,
+            DiscordPresence::Online,
+        );
+        // Register external nick "bob" so renaming to "bob" collides.
+        mgr.register_external_nick("bob");
+
+        let result = mgr.rename(100, "bob");
+        assert!(result.is_some());
+        let (old, new) = result.unwrap();
+        assert_eq!(old, "alice");
+        assert_ne!(new, "bob", "should be suffixed due to collision");
+        assert!(
+            new.starts_with("bob"),
+            "should start with 'bob'; got: {new}"
+        );
+    }
+
+    #[test]
+    fn rename_nonexistent_returns_none() {
+        let mut mgr = make_manager();
+        assert_eq!(mgr.rename(999, "anything"), None);
     }
 
     // -------------------------------------------------------------------

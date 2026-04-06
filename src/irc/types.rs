@@ -175,6 +175,9 @@ pub enum S2SCommand {
         text: String,
     },
 
+    /// Change a pseudoclient's nick.
+    ChangeNick { uid: String, new_nick: String },
+
     /// Set a pseudoclient's away status.
     SetAway { uid: String, reason: String },
 

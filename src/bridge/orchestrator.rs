@@ -17,7 +17,9 @@ use super::routing::{
     DmRouteResult, produce_burst_commands, route_discord_to_irc, route_dm_to_irc,
     route_irc_to_discord, route_irc_to_dm, update_guild_irc_channels,
 };
-use super::state::{DiscordState, IrcState, apply_discord_event, apply_irc_event};
+use super::state::{
+    DiscordState, IrcState, apply_discord_event, apply_irc_event, introduce_pseudoclient,
+};
 
 // ---------------------------------------------------------------------------
 // Link phase
@@ -195,8 +197,17 @@ impl BridgeState {
         }
 
         // Identify killed pseudoclient before apply_irc_event runs.
-        let killed_discord_id = if let S2SEvent::UserKilled { uid, .. } = event {
-            self.pm.get_by_uid(uid).map(|ps| ps.discord_user_id)
+        // Capture pseudoclient identity before apply_irc_event removes it.
+        let killed_pseudoclient = if let S2SEvent::UserKilled { uid, .. } = event {
+            self.pm.get_by_uid(uid).map(|ps| {
+                (
+                    ps.discord_user_id,
+                    ps.username.clone(),
+                    ps.display_name.clone(),
+                    ps.channels.clone(),
+                    ps.presence,
+                )
+            })
         } else {
             None
         };
@@ -204,51 +215,42 @@ impl BridgeState {
         apply_irc_event(&mut self.irc_state, &mut self.pm, event);
 
         // Re-introduce killed pseudoclients if configured.
-        // The PM entry is kept by apply_irc_event; we just refresh the UID.
-        if let Some(discord_id) = killed_discord_id {
-            if self.config.pseudoclients.reintroduce_on_kill {
-                let cooldown_secs = 30u64;
-                self.kill_cooldowns
-                    .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
-                if self.kill_cooldowns.contains_key(&discord_id) {
-                    tracing::warn!(
-                        discord_id,
-                        "not re-introducing killed pseudoclient — killed again within 30s cooldown"
-                    );
-                } else if let Some(s) = self.pm.refresh_uid(discord_id) {
-                    let uid = s.uid.clone();
-                    let nick = s.nick.clone();
-                    let display_name = s.display_name.clone();
-                    let chans = s.channels.clone();
-                    let host = format!("{discord_id}.discord.com");
-                    let ident = self.pm.ident().to_string();
-                    tracing::debug!(
-                        discord_id,
-                        %nick,
-                        %uid,
-                        "re-introducing killed pseudoclient with fresh UID"
-                    );
-                    output.irc_commands.push(S2SCommand::IntroduceUser {
-                        uid: uid.clone(),
-                        nick,
-                        ident,
-                        host,
-                        realname: display_name,
-                    });
-                    for channel in &chans {
-                        let ts = self.irc_state.ts_for_channel(channel).unwrap_or(now_ts);
-                        output.irc_commands.push(S2SCommand::JoinChannel {
-                            uid: uid.clone(),
-                            channel: channel.clone(),
-                            ts,
-                        });
-                    }
-                    self.kill_cooldowns.insert(discord_id, now_ts);
-                }
+        // apply_irc_event already removed the PM entry and cleared the UID
+        // cache.  introduce_pseudoclient will allocate a fresh UID and
+        // re-resolve the nick against current known_nicks (which may now
+        // include the external nick that caused the collision).
+        if let Some((discord_id, username, display_name, channels, presence)) = killed_pseudoclient
+            && self.config.pseudoclients.reintroduce_on_kill
+        {
+            let cooldown_secs = 30u64;
+            self.kill_cooldowns
+                .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
+            if self.kill_cooldowns.contains_key(&discord_id) {
+                tracing::warn!(
+                    discord_id,
+                    "not re-introducing killed pseudoclient — killed again within 30s cooldown"
+                );
             } else {
-                // Operator's kill respected — remove from PM.
-                self.pm.quit(discord_id, "Killed");
+                let cmds = introduce_pseudoclient(
+                    &mut self.pm,
+                    &self.irc_state,
+                    discord_id,
+                    &username,
+                    &display_name,
+                    &channels,
+                    presence,
+                    now_ts,
+                );
+                tracing::debug!(
+                    discord_id,
+                    cmd_count = cmds.len(),
+                    "re-introducing killed pseudoclient"
+                );
+                self.kill_cooldowns.insert(discord_id, now_ts);
+                output.irc_commands.extend(cmds);
             }
+            // If reintroduce_on_kill is false, the PM entry was already
+            // removed by apply_irc_event — the operator's kill is respected.
         }
 
         output

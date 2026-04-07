@@ -1,0 +1,75 @@
+# Mutation testing: run on PR diffs for fast feedback, full run on demand.
+
+name: Mutation Testing
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+on:
+  pull_request:
+    paths:
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutants.yml"
+      - "Cargo.*"
+      - "src/**"
+      - "tests/**"
+  workflow_dispatch:
+
+jobs:
+  incremental-mutants:
+    name: Mutants (PR diff)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Generate diff
+        run: git diff origin/${{ github.base_ref }}.. | tee pr.diff
+
+      - name: Run mutants on diff
+        run: cargo mutants --no-shuffle -vV --in-diff pr.diff --in-place
+
+      - name: Archive mutants.out
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-incremental.out
+          path: mutants.out
+
+  full-mutants:
+    name: Mutants (full)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Run all mutants
+        run: cargo mutants -vV --in-place
+
+      - name: Archive mutants.out
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-full.out
+          path: mutants.out

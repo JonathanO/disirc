@@ -233,7 +233,7 @@ async fn wait_for_bridge_in_links(
         if tokio::time::Instant::now() >= deadline {
             panic!("Timed out after {timeout_secs}s: {bridge_name:?} not found in LINKS");
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
@@ -292,17 +292,13 @@ async fn e2e_discord_to_irc_message_relay() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 0,
         })
         .await
         .unwrap();
 
-    // Wait for any line mentioning Alice (NICK intro, JOIN, etc.) to confirm
-    // her pseudoclient has been introduced to the network.
-    client
-        .expect_line_containing("alice", Duration::from_secs(10))
-        .await;
-
-    // Now relay a Discord message from Alice.
+    // Lazy channel membership: Alice is introduced but not in any channel
+    // yet. She'll join when she speaks. Send a message to trigger the join.
     tasks
         .discord_event_tx
         .send(DiscordEvent::MessageReceived {
@@ -356,14 +352,15 @@ async fn e2e_irc_to_discord_message_relay() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 1002,
         })
         .await
         .unwrap();
 
-    // Wait for the pseudoclient JOIN to confirm the bridge is in the channel.
-    client
-        .expect_line_containing("bridgeuser", Duration::from_secs(10))
-        .await;
+    // Lazy membership: bridgeuser is introduced but not in the channel.
+    // The bridge receives IRC messages via S2S regardless of pseudoclient
+    // channel membership.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Send an IRC message from the test client.
     client.send_privmsg("#e2e-test", "hello from irc").await;
@@ -421,6 +418,7 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 0,
         })
         .await
         .unwrap();
@@ -428,8 +426,21 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
     // Now wait for the link to come up (this triggers the burst).
     wait_for_bridge_in_links(&mut client, "bridge.test.net", 15).await;
 
-    // EarlyUser must appear via the burst even though the snapshot arrived
-    // before the link was established.
+    // EarlyUser was introduced in the burst (UID sent) but hasn't joined
+    // any channel yet (lazy membership).  Send a message to trigger the join.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MessageReceived {
+            channel_id: 111,
+            author_id: 3001,
+            author_name: "earlyuser".into(),
+            author_display_name: "EarlyUser".into(),
+            content: "hello from early user".into(),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
     client
         .expect_line_containing("earlyuser", Duration::from_secs(10))
         .await;
@@ -466,11 +477,27 @@ async fn e2e_pseudoclient_appears_on_irc() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 0,
         })
         .await
         .unwrap();
 
-    // The test IRC client should see TestUser's pseudoclient JOIN #e2e-test.
+    // Lazy membership: TestUser joins when they speak. Send a message
+    // to trigger the join.
+    tasks
+        .discord_event_tx
+        .send(DiscordEvent::MessageReceived {
+            channel_id: 111,
+            author_id: 2001,
+            author_name: "testuser".into(),
+            author_display_name: "TestUser".into(),
+            content: "hello from testuser".into(),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    // The test IRC client should see TestUser's pseudoclient in the channel.
     client
         .expect_line_containing("testuser", Duration::from_secs(10))
         .await;
@@ -517,19 +544,13 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
             // Include a channel and role for testing those mention types too.
             channel_names: [(200, "general".to_string())].into_iter().collect(),
             role_names: [(300, "Moderator".to_string())].into_iter().collect(),
+            bot_user_id: 5001,
         })
         .await
         .unwrap();
 
-    // Wait for both pseudoclients to be introduced (two JOINs).
-    client
-        .expect_line_containing("JOIN", Duration::from_secs(10))
-        .await;
-    client
-        .expect_line_containing("JOIN", Duration::from_secs(10))
-        .await;
-
-    // Alice sends a message mentioning Bob by Discord ID, a channel, and a role.
+    // Lazy channel membership: pseudoclients join when they speak.
+    // Alice will join when her message is relayed below.
     tasks
         .discord_event_tx
         .send(DiscordEvent::MessageReceived {
@@ -590,13 +611,15 @@ async fn e2e_irc_mention_resolved_to_discord_id() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 6001,
         })
         .await
         .unwrap();
 
-    client
-        .expect_line_containing("bob", Duration::from_secs(10))
-        .await;
+    // Lazy membership: Bob is introduced but not in the channel.
+    // Mention resolution works regardless — it's a PM nick lookup.
+    // Small delay to let the bridge process the MemberSnapshot.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // IRC user mentions @Bob — should resolve to <@6001> in the Discord command.
     client
@@ -655,6 +678,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 0,
         })
         .await
         .unwrap();
@@ -691,7 +715,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
         .await;
 
     // Small delay to let the bridge process the KILL and reintroduce.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Confirm reintroduction by having the pseudoclient speak again.
     tasks
@@ -754,14 +778,14 @@ async fn e2e_irc_privmsg_to_pseudoclient_relays_as_dm() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 0,
         })
         .await
         .unwrap();
 
-    // Wait for Alice's pseudoclient to appear on IRC.
-    client
-        .expect_line_containing("alice", Duration::from_secs(10))
-        .await;
+    // Lazy membership: Alice is introduced but not in any channel.
+    // Wait briefly for the bridge to process the MemberSnapshot.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Send a /msg to Alice's pseudoclient nick. UnrealIRCd resolves nick→UID
     // and delivers the PRIVMSG to the bridge via S2S.
@@ -814,13 +838,13 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 0,
         })
         .await
         .unwrap();
 
-    client
-        .expect_line_containing("alice", Duration::from_secs(10))
-        .await;
+    // Lazy membership: wait for bridge to process MemberSnapshot.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Alice DMs the bridge bot with nick-colon addressing to testbot.
     tasks
@@ -872,13 +896,13 @@ async fn e2e_discord_dm_unresolvable_sends_help() {
             channel_ids: vec![111],
             channel_names: std::collections::HashMap::new(),
             role_names: std::collections::HashMap::new(),
+            bot_user_id: 0,
         })
         .await
         .unwrap();
 
-    client
-        .expect_line_containing("alice", Duration::from_secs(10))
-        .await;
+    // Lazy membership: wait for bridge to process MemberSnapshot.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Alice DMs the bot with no addressing — should get a help message back.
     tasks

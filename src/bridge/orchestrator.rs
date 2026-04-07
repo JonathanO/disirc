@@ -533,6 +533,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -565,6 +566,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -602,6 +604,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -644,6 +647,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -686,6 +690,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -739,6 +744,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -891,6 +897,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn link_down_clears_needs_reintroduce_flags() {
+        let mut config = test_config();
+        config.pseudoclients.reintroduce_on_kill = true;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        // Introduce a pseudoclient.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 4001,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        let uid = out
+            .irc_commands
+            .iter()
+            .find_map(|c| {
+                if let S2SCommand::IntroduceUser { uid, .. } = c {
+                    Some(uid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("should introduce alice");
+
+        // Kill during burst window — deferred, needs_reintroduce set.
+        state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid,
+                reason: "test".into(),
+            },
+            ts,
+        );
+        assert!(
+            state
+                .pm
+                .get_by_discord_id(4001)
+                .is_some_and(|ps| ps.needs_reintroduce),
+        );
+
+        // LinkDown should clear the flag.
+        state.handle_irc_event(
+            &S2SEvent::LinkDown {
+                reason: "test".into(),
+            },
+            ts,
+        );
+        assert!(
+            !state
+                .pm
+                .get_by_discord_id(4001)
+                .is_some_and(|ps| ps.needs_reintroduce),
+            "LinkDown should clear needs_reintroduce flags"
+        );
+    }
+
     // --- IRC→Discord message relay ---
 
     /// Helper: set up a bridge with link up, burst complete, and a pseudoclient.
@@ -972,6 +1046,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -1092,6 +1167,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -1125,6 +1201,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );
@@ -1211,6 +1288,7 @@ mod tests {
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             ts,
         );

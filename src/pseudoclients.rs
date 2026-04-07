@@ -356,6 +356,27 @@ impl PseudoclientManager {
         Some(state)
     }
 
+    /// Ensure a pseudoclient is in a channel.  Returns `JoinChannel` if
+    /// they weren't already in it, `None` if they were (or don't exist).
+    pub fn ensure_in_channel(
+        &mut self,
+        discord_user_id: u64,
+        channel: &str,
+        timestamp: u64,
+    ) -> Option<S2SCommand> {
+        let state = self.by_discord_id.get_mut(&discord_user_id)?;
+        if state.channels.iter().any(|c| c == channel) {
+            return None;
+        }
+        let uid = state.uid.clone();
+        state.channels.push(channel.to_string());
+        Some(S2SCommand::JoinChannel {
+            uid,
+            channel: channel.to_string(),
+            ts: timestamp,
+        })
+    }
+
     /// Join an existing pseudoclient to an additional channel.
     ///
     /// Returns the SJOIN message, or `None` if the pseudoclient doesn't exist

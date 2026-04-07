@@ -224,6 +224,7 @@ pub(crate) fn snapshot_from_cache(
         // already populated them; this snapshot only adds new members.
         channel_names: std::collections::HashMap::new(),
         role_names: std::collections::HashMap::new(),
+        bot_user_id: cache.current_user().id.get(),
     })
 }
 

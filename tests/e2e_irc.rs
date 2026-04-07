@@ -45,6 +45,7 @@ fn e2e_config(host: &str, s2s_port: u16) -> Config {
         pseudoclients: PseudoclientConfig {
             ident: "discord".into(),
             reintroduce_on_kill: false,
+            dm_bridging: true,
         },
         formatting: disirc::config::FormattingConfig::default(),
         bridges: vec![BridgeEntry {
@@ -718,10 +719,9 @@ async fn e2e_killed_pseudoclient_reintroduced() {
 // ---------------------------------------------------------------------------
 
 /// Config with dm_bridging enabled.
+/// DM config — same as default (dm_bridging defaults to true).
 fn e2e_dm_config(host: &str, s2s_port: u16) -> Config {
-    let mut config = e2e_config(host, s2s_port);
-    config.formatting.dm_bridging = true;
-    config
+    e2e_config(host, s2s_port)
 }
 
 /// IRC→Discord DM: an IRC user /msg's a pseudoclient, and the bridge emits

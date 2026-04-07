@@ -34,6 +34,8 @@ None.
 - **Dynamic configuration** — Allow operators to change bridge settings at runtime from within IRC (e.g. via PRIVMSG to the bridge server) or Discord (e.g. bot commands). Currently config changes require editing `config.toml` and sending SIGHUP.
 - **Configurable quit-on-offline** — Currently pseudoclients persist when a Discord user goes offline (set AWAY instead of QUIT). A config option `pseudoclients.quit_on_offline` could quit them instead, optionally with an idle delay before quitting. See spec 06 "Presence policy" section.
 - **Configurable KILL reintroduce delay** — Currently reintroduction after BurstComplete is immediate. A configurable timer would allow IRC operators time to address the issue before the pseudoclient reappears. Requires async plumbing (timer in the bridge loop).
+- **Lazy channel membership** — Currently pseudoclients join all bridged IRC channels on introduction. Instead, only join a channel when the Discord user actually speaks in it. This better matches IRC conventions where users join channels they participate in.
+- **Persist channel membership** — Store pseudoclient channel memberships across restarts (e.g. in a simple file or SQLite) so users don't lose their channel joins on bridge restart. Without this, lazy channel membership would reset on every restart.
 
 ## Completed features (post-v1)
 

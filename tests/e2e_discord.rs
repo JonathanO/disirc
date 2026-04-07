@@ -108,11 +108,9 @@ fn full_config(secrets: &Secrets, host: &str, s2s_port: u16) -> Config {
         pseudoclients: PseudoclientConfig {
             ident: "discord".into(),
             reintroduce_on_kill: false,
-        },
-        formatting: disirc::config::FormattingConfig {
             dm_bridging: true,
-            ..disirc::config::FormattingConfig::default()
         },
+        formatting: disirc::config::FormattingConfig::default(),
         bridges: vec![
             BridgeEntry {
                 discord_channel_id: secrets.webhook_channel_id.to_string(),

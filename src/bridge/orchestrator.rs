@@ -191,7 +191,7 @@ impl BridgeState {
                     self.config.formatting.irc_nick_colon_mention,
                 ) {
                     output.discord_commands.push(cmd);
-                } else if self.config.formatting.dm_bridging
+                } else if self.config.pseudoclients.dm_bridging
                     && let Some(cmd) = route_irc_to_dm(
                         &self.pm,
                         &self.irc_state,
@@ -373,7 +373,7 @@ impl BridgeState {
                 referenced_content,
                 ..
             } = event
-                && self.config.formatting.dm_bridging
+                && self.config.pseudoclients.dm_bridging
             {
                 let resolver = BridgeDiscordResolver {
                     discord_state: &self.discord_state,
@@ -501,6 +501,7 @@ mod tests {
             pseudoclients: PseudoclientConfig {
                 ident: "discord".into(),
                 reintroduce_on_kill: false,
+                dm_bridging: true,
             },
             formatting: FormattingConfig::default(),
             bridges: vec![BridgeEntry {

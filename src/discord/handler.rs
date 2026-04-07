@@ -10,7 +10,7 @@ use serenity::model::guild::{Guild, Member};
 use serenity::model::id::GuildId;
 use serenity::model::user::{OnlineStatus, User};
 use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, info};
+use tracing::{info, trace};
 
 use crate::discord::types::{DiscordEvent, DiscordPresence, MemberInfo};
 
@@ -215,7 +215,7 @@ impl DiscordHandler {
         let channels = self.bridged_channel_ids.read().await;
         let filter = self.self_filter.read().await;
         if !should_relay_message(channel_id, author_id, &channels, &filter) {
-            debug!(
+            trace!(
                 channel_id,
                 author_id, "dropping non-bridged or self message"
             );

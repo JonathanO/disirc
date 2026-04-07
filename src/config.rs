@@ -114,6 +114,10 @@ pub struct PseudoclientConfig {
     /// IRC operator.  Default: false (re-introduced on next message only).
     #[serde(default)]
     pub reintroduce_on_kill: bool,
+    /// Bridge private messages between IRC `/msg` and Discord DMs.
+    /// Default: true.
+    #[serde(default = "default_true")]
+    pub dm_bridging: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -122,16 +126,12 @@ pub struct FormattingConfig {
     /// Convert leading `nick:` or `nick,` in IRC messages to Discord mentions.
     #[serde(default = "default_true")]
     pub irc_nick_colon_mention: bool,
-    /// Bridge private messages between IRC `/msg` and Discord DMs.
-    #[serde(default)]
-    pub dm_bridging: bool,
 }
 
 impl Default for FormattingConfig {
     fn default() -> Self {
         Self {
             irc_nick_colon_mention: true,
-            dm_bridging: false,
         }
     }
 }
@@ -440,6 +440,7 @@ impl Default for PseudoclientConfig {
         Self {
             ident: default_ident(),
             reintroduce_on_kill: false,
+            dm_bridging: true,
         }
     }
 }
@@ -1123,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn formatting_field_default_when_section_present_but_field_omitted() {
+    fn formatting_field_default_when_section_present_but_empty() {
         let toml = r##"
             [discord]
             token = "Bot abc123"
@@ -1135,7 +1136,6 @@ mod tests {
             sid = "0D0"
 
             [formatting]
-            dm_bridging = true
 
             [[bridge]]
             discord_channel_id = "123456789012345678"

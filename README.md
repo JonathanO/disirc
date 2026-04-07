@@ -97,34 +97,13 @@ Messages flow bidirectionally:
 
 ## Configuration
 
-```toml
-[discord]
-token = "Bot YOUR_TOKEN"
+See [`config.example.toml`](config.example.toml) for all options with comments. The key sections are:
 
-[irc]
-uplink = "irc.example.net"
-port = 6900
-tls = true
-link_name = "bridge.example.net"
-link_password = "your-link-password"
-sid = "0D0"
-
-[pseudoclients]
-ident = "discord"
-
-[formatting]
-# irc_nick_colon_mention = true   # convert leading "nick: " to Discord mentions
-# dm_bridging = false              # bridge IRC /msg <-> Discord DMs
-
-[[bridge]]
-discord_channel_id = "123456789012345678"
-irc_channel = "#general"
-webhook_url = "https://discord.com/api/webhooks/..."
-
-[[bridge]]
-discord_channel_id = "987654321098765432"
-irc_channel = "#dev"
-```
+- **`[discord]`** — bot token
+- **`[irc]`** — uplink address, link credentials, SID
+- **`[pseudoclients]`** — ident, DM bridging, KILL reintroduction
+- **`[formatting]`** — nick-colon mention conversion
+- **`[[bridge]]`** — one entry per Discord↔IRC channel pair, with optional webhook URL
 
 See [DEVELOPING.md](DEVELOPING.md) for development setup, testing, and local UnrealIRCd Docker instructions.
 

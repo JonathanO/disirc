@@ -127,6 +127,9 @@ pub struct PseudoclientConfig {
     /// required.  0 = disabled.  Default: 2592000 (30 days).
     #[serde(default = "default_offline_timeout")]
     pub offline_timeout_secs: u64,
+    /// Path to the JSON state file for persisting pseudoclient state across
+    /// restarts.  If absent, persistence is disabled.
+    pub state_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -460,6 +463,7 @@ impl Default for PseudoclientConfig {
             dm_bridging: true,
             channel_idle_timeout_secs: default_channel_idle_timeout(),
             offline_timeout_secs: default_offline_timeout(),
+            state_file: None,
         }
     }
 }

@@ -20,6 +20,7 @@ sid = "0D0"            # must match [0-9][A-Z0-9]{2}
 # ident = "discord"         # optional, default: "discord"
 # reintroduce_on_kill = false  # re-introduce pseudoclients after /kill, default: false
 # dm_bridging = true         # bridge IRC /msg <-> Discord DMs, default: true
+# state_file = "/var/lib/disirc/state.json"  # persist pseudoclient state across restarts
 
 # [formatting]
 # Convert leading "nick: " in IRC messages to Discord mentions.

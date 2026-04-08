@@ -13,6 +13,7 @@ Update it whenever a module is added, removed, or significantly refactored.
 | `src/main.rs` | Binary entry point — loads config, spawns the IRC connection task and Discord connection task via `tokio::spawn`, then runs the bridge loop on the main thread. The three components communicate via `tokio::sync::mpsc` channels. Uses `tracing-subscriber` with `RUST_LOG` env-filter. |
 | `src/config.rs` | Configuration file format (`Config`, `IrcConfig`, `BridgeEntry`, etc.) and validation. Read from `config.toml` at startup. Hot-reload support via `reload()` → `BridgeDiff`. |
 | `src/formatting/` | Bidirectional text transforms: Discord markdown ↔ IRC formatting codes, mention/emoji expansion, message splitting, truncation. No I/O. See below. |
+| `src/persist.rs` | State persistence: save and restore pseudoclient channel memberships, activity timestamps, and offline tracking across restarts. JSON file with atomic writes. |
 | `src/pseudoclients.rs` | Pseudoclient lifecycle and identity. Tracks Discord users as fake IRC clients; generates UID allocations, nick sanitisation, and builds the UnrealIRCd wire messages (UID/SJOIN/QUIT/PART) to introduce or remove them. |
 | `src/bridge/` | **Bridge processing layer.** Channel routing, state management, message relay, and the main event loop. No direct I/O; takes and returns protocol-agnostic types (`S2SCommand`, `DiscordCommand`). See below. |
 | `src/signal.rs` | OS signal handling (SIGTERM / Ctrl-C). `spawn_signal_handler()` returns an `mpsc::Receiver<ControlEvent>` that the bridge loop can `select!` on. |

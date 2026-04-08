@@ -48,6 +48,7 @@ fn e2e_config(host: &str, s2s_port: u16) -> Config {
             dm_bridging: true,
             channel_idle_timeout_secs: 0,
             offline_timeout_secs: 0,
+            state_file: None,
         },
         formatting: disirc::config::FormattingConfig::default(),
         bridges: vec![BridgeEntry {

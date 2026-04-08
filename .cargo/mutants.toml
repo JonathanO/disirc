@@ -9,7 +9,7 @@
 profile = "mutants"
 
 # Skip doctests (none in this project, avoids discovery overhead).
-test_flags = ["--all-targets"]
+additional_cargo_test_args = ["--all-targets"]
 
 exclude_re = [
     # protect_code_spans: replacing `t <= s` with `false` makes the code always

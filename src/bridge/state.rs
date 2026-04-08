@@ -334,7 +334,7 @@ pub fn apply_discord_event(
                 // Always keep stored state current (presence, username,
                 // display name).  These persist across reconnects and
                 // reintroductions.
-                pm.update_presence(*user_id, *presence);
+                pm.update_presence(*user_id, *presence, now_ts);
                 if let Some(new_display) = display_name.as_ref().filter(|d| !d.is_empty())
                     && let Some(ps) = pm.get_by_discord_id_mut(*user_id)
                 {

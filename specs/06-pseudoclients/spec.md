@@ -113,9 +113,31 @@ Quit message:
 
 ### Presence policy
 
-By default, pseudoclients persist while the user is a guild member, regardless of online status. Away status (see `03-discord-connection.md`) reflects presence without quitting. This avoids noisy join/quit spam for users who frequently go offline.
+By default, pseudoclients persist while the user is a guild member, regardless of online status. Away status (see `03-discord-connection.md`) reflects presence without quitting.
 
-If a future config option `pseudoclients.quit_on_offline = true` is set, pseudoclients are quit when the user goes offline and re-introduced when they come back online.
+### Idle timeouts
+
+Two configurable timeouts clean up inactive pseudoclients:
+
+**Channel idle timeout** (`pseudoclients.channel_idle_timeout_secs`, default: 1209600 = 2 weeks):
+A pseudoclient is PARTed from a channel if it hasn't sent a message
+there within this period.  The pseudoclient remains on IRC (in other
+channels or with no channels).  If the user speaks in that channel
+again, lazy join re-adds them.  Set to 0 to disable.
+
+**Offline timeout** (`pseudoclients.offline_timeout_secs`, default: 2592000 = 30 days):
+A pseudoclient whose Discord presence is Offline is QUITed if it
+hasn't sent a message in **any** channel within this period.  Both
+conditions must be true: the user must be offline AND globally idle.
+This handles users who are "invisible" (offline presence but still
+active).  Set to 0 to disable.
+
+The bridge bot's pseudoclient is exempt from both timeouts — it must
+remain in all bridged channels for S2S message routing.
+
+Timeouts are checked periodically (every 60 seconds).  State is always
+updated (PARTs/QUITs applied to PM), but IRC commands are only emitted
+when the link is Ready.
 
 ## Channel membership
 

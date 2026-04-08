@@ -46,6 +46,8 @@ fn e2e_config(host: &str, s2s_port: u16) -> Config {
             ident: "discord".into(),
             reintroduce_on_kill: false,
             dm_bridging: true,
+            channel_idle_timeout_secs: 0,
+            offline_timeout_secs: 0,
         },
         formatting: disirc::config::FormattingConfig::default(),
         bridges: vec![BridgeEntry {

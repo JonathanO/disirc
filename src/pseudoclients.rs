@@ -219,6 +219,13 @@ pub struct PseudoclientState {
     /// Set after a KILL during the burst window.  The pseudoclient will be
     /// reintroduced (with nick re-resolution) when `BurstComplete` arrives.
     pub needs_reintroduce: bool,
+    /// Last time the user sent a message in any channel (Unix seconds).
+    pub last_active: u64,
+    /// Per-channel last activity time (Unix seconds).
+    pub channel_last_active: std::collections::HashMap<String, u64>,
+    /// When the user's presence changed to Offline (Unix seconds).
+    /// `None` if the user is not offline.
+    pub went_offline_at: Option<u64>,
 }
 
 impl PseudoclientState {
@@ -330,6 +337,9 @@ impl PseudoclientManager {
             channels: channels.to_vec(),
             presence,
             needs_reintroduce: false,
+            last_active: timestamp,
+            channel_last_active: std::collections::HashMap::new(),
+            went_offline_at: (presence == DiscordPresence::Offline).then_some(timestamp),
         };
 
         self.known_nicks.insert(&nick);
@@ -650,12 +660,41 @@ impl PseudoclientManager {
     ///
     /// Returns `true` if the pseudoclient was found and updated, `false` if
     /// no pseudoclient exists for `discord_user_id`.
-    pub fn update_presence(&mut self, discord_user_id: u64, presence: DiscordPresence) -> bool {
+    pub fn update_presence(
+        &mut self,
+        discord_user_id: u64,
+        presence: DiscordPresence,
+        now_ts: u64,
+    ) -> bool {
         if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
+            // Track when the user went offline.  Only update the timestamp
+            // on the transition to offline — repeated Offline updates keep
+            // the original timestamp.
+            state.went_offline_at = match presence {
+                DiscordPresence::Offline => state.went_offline_at.or(Some(now_ts)),
+                _ => None,
+            };
             state.presence = presence;
             true
         } else {
             false
+        }
+    }
+
+    /// Record that a pseudoclient sent a message in a channel.
+    pub fn record_activity(&mut self, discord_user_id: u64, channel: &str, now_ts: u64) {
+        if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
+            state.last_active = now_ts;
+            state
+                .channel_last_active
+                .insert(channel.to_string(), now_ts);
+        }
+    }
+
+    /// Record global activity without a channel (e.g. DMs).
+    pub fn record_global_activity(&mut self, discord_user_id: u64, now_ts: u64) {
+        if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
+            state.last_active = now_ts;
         }
     }
 }
@@ -940,6 +979,28 @@ mod tests {
         assert!(mgr.get_by_nick("alice").is_some());
         assert!(mgr.get_by_nick("Alice").is_some()); // case-insensitive
         assert_eq!(mgr.count(), 1);
+    }
+
+    #[test]
+    fn introduce_online_has_no_went_offline_at() {
+        let mut mgr = make_manager();
+        mgr.introduce(100, "alice", "Alice", &[], 1000, DiscordPresence::Online);
+        assert!(
+            mgr.get_by_discord_id(100)
+                .unwrap()
+                .went_offline_at
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn introduce_offline_has_went_offline_at() {
+        let mut mgr = make_manager();
+        mgr.introduce(100, "alice", "Alice", &[], 1000, DiscordPresence::Offline);
+        assert_eq!(
+            mgr.get_by_discord_id(100).unwrap().went_offline_at,
+            Some(1000)
+        );
     }
 
     #[test]

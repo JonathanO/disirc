@@ -118,6 +118,15 @@ pub struct PseudoclientConfig {
     /// Default: true.
     #[serde(default = "default_true")]
     pub dm_bridging: bool,
+    /// PART a pseudoclient from a channel after this many seconds of
+    /// inactivity in that channel.  0 = disabled.  Default: 1209600 (2 weeks).
+    #[serde(default = "default_channel_idle_timeout")]
+    pub channel_idle_timeout_secs: u64,
+    /// QUIT an offline pseudoclient after this many seconds of inactivity
+    /// across all channels.  Both offline presence AND global inactivity are
+    /// required.  0 = disabled.  Default: 2592000 (30 days).
+    #[serde(default = "default_offline_timeout")]
+    pub offline_timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -134,6 +143,14 @@ impl Default for FormattingConfig {
             irc_nick_colon_mention: true,
         }
     }
+}
+
+fn default_channel_idle_timeout() -> u64 {
+    1_209_600 // 2 weeks
+}
+
+fn default_offline_timeout() -> u64 {
+    2_592_000 // 30 days
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -441,6 +458,8 @@ impl Default for PseudoclientConfig {
             ident: default_ident(),
             reintroduce_on_kill: false,
             dm_bridging: true,
+            channel_idle_timeout_secs: default_channel_idle_timeout(),
+            offline_timeout_secs: default_offline_timeout(),
         }
     }
 }
@@ -521,6 +540,8 @@ mod tests {
         assert_eq!(cfg.pseudoclients.ident, "discord");
         assert_eq!(cfg.irc.connect_timeout, 15);
         assert!(cfg.formatting.irc_nick_colon_mention);
+        assert_eq!(cfg.pseudoclients.channel_idle_timeout_secs, 1_209_600);
+        assert_eq!(cfg.pseudoclients.offline_timeout_secs, 2_592_000);
     }
 
     #[test]

@@ -273,13 +273,16 @@ pub fn route_discord_to_irc(
     }
     if pm.get_by_discord_id(author_id).is_none() {
         let ident = pm.ident().to_string();
+        // Introduced on-demand from a message — the user wasn't in the
+        // MemberSnapshot or PresenceUpdated path, so they're likely
+        // invisible (offline presence but still active).
         if let Some(state) = pm.introduce(
             author_id,
             author_name,
             author_display_name,
             &[],
             now_ts,
-            DiscordPresence::Online,
+            DiscordPresence::Offline,
         ) {
             cmds.push(state.introduce_command(&ident));
         }
@@ -290,6 +293,9 @@ pub fn route_discord_to_irc(
     if let Some(join) = pm.ensure_in_channel(author_id, &irc_channel, ts) {
         cmds.push(join);
     }
+
+    // Record activity for idle timeout tracking.
+    pm.record_activity(author_id, &irc_channel, now_ts);
 
     let Some(ps) = pm.get_by_discord_id(author_id) else {
         return vec![];

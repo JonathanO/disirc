@@ -70,6 +70,7 @@ pub async fn run_bridge(
 ) {
     let mut bridge = BridgeState::new(config);
     let mut control_alive = true;
+    let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(60));
 
     loop {
         tokio::select! {
@@ -92,6 +93,13 @@ pub async fn run_bridge(
                 }
                 for cmd in output.discord_commands {
                     let _ = discord_cmd_tx.send(cmd).await;
+                }
+            }
+
+            _ = idle_tick.tick() => {
+                let output = bridge.check_idle_timeouts(unix_now());
+                for cmd in output.irc_commands {
+                    let _ = irc_cmd_tx.send(cmd).await;
                 }
             }
 

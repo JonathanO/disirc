@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::config::Config;
-use crate::discord::{DiscordCommand, DiscordEvent};
+use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence};
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::{S2SCommand, S2SEvent};
 use crate::pseudoclients::PseudoclientManager;
@@ -104,6 +104,8 @@ pub struct BridgeState {
     remote_burst_done: bool,
     /// Kill-reintroduction cooldowns: `discord_user_id` → epoch seconds.
     pub(crate) kill_cooldowns: HashMap<u64, u64>,
+    /// The Discord bot's own user ID (set from `MemberSnapshot`).
+    pub(crate) bot_user_id: u64,
 }
 
 impl BridgeState {
@@ -118,6 +120,7 @@ impl BridgeState {
             link_phase: LinkPhase::NotReady,
             remote_burst_done: false,
             kill_cooldowns: HashMap::new(),
+            bot_user_id: 0,
         }
     }
 
@@ -319,10 +322,11 @@ impl BridgeState {
     fn process_discord_event(&mut self, event: &DiscordEvent, now_ts: u64) -> HandlerOutput {
         let mut output = HandlerOutput::default();
 
-        // Populate guild→irc-channel map.
+        // Populate guild→irc-channel map and store bot user ID.
         if let DiscordEvent::MemberSnapshot {
             guild_id,
             channel_ids,
+            bot_user_id,
             ..
         } = event
         {
@@ -332,6 +336,7 @@ impl BridgeState {
                 *guild_id,
                 channel_ids,
             );
+            self.bot_user_id = *bot_user_id;
         }
 
         // Route Discord messages to IRC (only when link is ready — messages
@@ -391,6 +396,7 @@ impl BridgeState {
                         target_uid,
                         text,
                     } => {
+                        self.pm.record_global_activity(*author_id, now_ts);
                         output.irc_commands.push(S2SCommand::SendMessage {
                             from_uid,
                             target: target_uid,
@@ -418,6 +424,75 @@ impl BridgeState {
         );
         if self.link_phase == LinkPhase::Ready {
             output.irc_commands.extend(cmds);
+        }
+
+        output
+    }
+
+    /// Check for idle pseudoclients and emit PART/QUIT commands.
+    pub fn check_idle_timeouts(&mut self, now_ts: u64) -> HandlerOutput {
+        let mut output = HandlerOutput::default();
+        let channel_timeout = self.config.pseudoclients.channel_idle_timeout_secs;
+        let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
+        let bot_id = self.bot_user_id;
+
+        // Collect actions first to avoid borrow issues.
+        let mut parts: Vec<(u64, String)> = Vec::new();
+        let mut quits: Vec<u64> = Vec::new();
+
+        for state in self.pm.iter_states() {
+            if state.discord_user_id == bot_id || state.needs_reintroduce {
+                continue;
+            }
+
+            // Offline + globally idle: QUIT (skip channel checks — QUIT
+            // supersedes PART).
+            if offline_timeout > 0
+                && state.presence == DiscordPresence::Offline
+                && state
+                    .went_offline_at
+                    .is_some_and(|t| now_ts.saturating_sub(t) >= offline_timeout)
+                && now_ts.saturating_sub(state.last_active) >= offline_timeout
+            {
+                quits.push(state.discord_user_id);
+                continue;
+            }
+
+            // Channel idle: PART from channels where inactive.
+            if channel_timeout > 0 {
+                for ch in &state.channels {
+                    let last = state.channel_last_active.get(ch).copied().unwrap_or(0);
+                    if now_ts.saturating_sub(last) >= channel_timeout {
+                        parts.push((state.discord_user_id, ch.clone()));
+                    }
+                }
+            }
+        }
+
+        // Apply PARTs.
+        for (discord_id, channel) in parts {
+            if let Some(ps) = self.pm.get_by_discord_id_mut(discord_id) {
+                let uid = ps.uid.clone();
+                ps.channels.retain(|c| c != &channel);
+                ps.channel_last_active.remove(&channel);
+                output.irc_commands.push(S2SCommand::PartChannel {
+                    uid,
+                    channel,
+                    reason: Some("Idle timeout".to_string()),
+                });
+            }
+        }
+
+        // Apply QUITs.
+        for discord_id in quits {
+            if let Some(ps) = self.pm.get_by_discord_id(discord_id) {
+                let uid = ps.uid.clone();
+                output.irc_commands.push(S2SCommand::QuitUser {
+                    uid,
+                    reason: "Offline idle timeout".to_string(),
+                });
+            }
+            self.pm.quit(discord_id, "Offline idle timeout");
         }
 
         output
@@ -502,6 +577,8 @@ mod tests {
                 ident: "discord".into(),
                 reintroduce_on_kill: false,
                 dm_bridging: true,
+                channel_idle_timeout_secs: 0,
+                offline_timeout_secs: 0,
             },
             formatting: FormattingConfig::default(),
             bridges: vec![BridgeEntry {
@@ -1264,6 +1341,412 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, S2SCommand::BurstComplete)),
             "LinkUp must send our EOS"
+        );
+    }
+
+    // --- Idle timeouts ---
+
+    #[test]
+    fn channel_idle_timeout_parts_inactive_user() {
+        let mut config = test_config();
+        config.pseudoclients.channel_idle_timeout_secs = 100;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        // Introduce user, link up.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Send a message to join #test lazily.
+        state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hello".into(),
+                attachments: vec![],
+            },
+            ts,
+        );
+        assert!(
+            state
+                .pm
+                .get_by_discord_id(42)
+                .unwrap()
+                .channels
+                .contains(&"#test".to_string())
+        );
+
+        // Check at ts + 99: not yet expired.
+        let out = state.check_idle_timeouts(ts + 99);
+        assert!(
+            !out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::PartChannel { .. })),
+            "should not PART before timeout"
+        );
+
+        // Check at ts + 100: expired.
+        let out = state.check_idle_timeouts(ts + 100);
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::PartChannel { .. })),
+            "should PART after timeout; got: {:?}",
+            out.irc_commands
+        );
+        assert!(
+            state.pm.get_by_discord_id(42).unwrap().channels.is_empty(),
+            "channel should be removed from PM"
+        );
+    }
+
+    #[test]
+    fn offline_timeout_quits_idle_offline_user() {
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 200;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // User goes offline.
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 999,
+                presence: DiscordPresence::Offline,
+                username: Some("alice".into()),
+                display_name: Some("Alice".into()),
+            },
+            ts + 10,
+        );
+
+        // Check at ts + 209: not yet expired (offline for 199s, need 200).
+        let out = state.check_idle_timeouts(ts + 209);
+        assert!(
+            !out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::QuitUser { .. })),
+            "should not QUIT before timeout"
+        );
+
+        // Check at ts + 210: expired (offline for 200s).
+        let out = state.check_idle_timeouts(ts + 210);
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::QuitUser { .. })),
+            "should QUIT after timeout; got: {:?}",
+            out.irc_commands
+        );
+        assert!(
+            state.pm.get_by_discord_id(42).is_none(),
+            "pseudoclient should be removed from PM"
+        );
+    }
+
+    #[test]
+    fn offline_timeout_does_not_quit_active_offline_user() {
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 200;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // User goes offline but sends a message (invisible mode).
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 999,
+                presence: DiscordPresence::Offline,
+                username: Some("alice".into()),
+                display_name: Some("Alice".into()),
+            },
+            ts + 10,
+        );
+        // Message at ts + 150 — recently active.
+        state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "still here".into(),
+                attachments: vec![],
+            },
+            ts + 150,
+        );
+
+        // Check at ts + 210: offline for 200s but active 60s ago.
+        let out = state.check_idle_timeouts(ts + 210);
+        assert!(
+            !out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::QuitUser { .. })),
+            "should NOT quit an active-but-offline user"
+        );
+    }
+
+    #[test]
+    fn went_offline_at_cleared_when_coming_online() {
+        let mut state = BridgeState::new(&test_config());
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        // Go offline.
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 999,
+                presence: DiscordPresence::Offline,
+                username: Some("alice".into()),
+                display_name: Some("Alice".into()),
+            },
+            ts + 10,
+        );
+        assert!(
+            state
+                .pm
+                .get_by_discord_id(42)
+                .unwrap()
+                .went_offline_at
+                .is_some()
+        );
+
+        // Come back online.
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 999,
+                presence: DiscordPresence::Online,
+                username: Some("alice".into()),
+                display_name: Some("Alice".into()),
+            },
+            ts + 20,
+        );
+        assert!(
+            state
+                .pm
+                .get_by_discord_id(42)
+                .unwrap()
+                .went_offline_at
+                .is_none(),
+            "went_offline_at should be cleared when coming online"
+        );
+    }
+
+    #[test]
+    fn zero_timeout_disables_idle_checks() {
+        let mut config = test_config();
+        config.pseudoclients.channel_idle_timeout_secs = 0;
+        config.pseudoclients.offline_timeout_secs = 0;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hi".into(),
+                attachments: vec![],
+            },
+            ts,
+        );
+        // Go offline.
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 999,
+                presence: DiscordPresence::Offline,
+                username: Some("alice".into()),
+                display_name: Some("Alice".into()),
+            },
+            ts,
+        );
+
+        // Way past any reasonable timeout — but both are disabled (0).
+        let out = state.check_idle_timeouts(ts + 999_999_999);
+        assert!(
+            out.irc_commands.is_empty(),
+            "zero timeout should disable all idle checks"
+        );
+    }
+
+    #[test]
+    fn dm_activity_prevents_offline_timeout() {
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 200;
+        config.pseudoclients.dm_bridging = true;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Go offline.
+        state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 999,
+                presence: DiscordPresence::Offline,
+                username: Some("alice".into()),
+                display_name: Some("Alice".into()),
+            },
+            ts + 10,
+        );
+
+        // DM activity at ts + 150 — updates last_active globally.
+        state.pm.record_global_activity(42, ts + 150);
+
+        // At ts + 210: offline for 200s but globally active 60s ago.
+        let out = state.check_idle_timeouts(ts + 210);
+        assert!(
+            !out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::QuitUser { .. })),
+            "DM activity should prevent offline timeout"
+        );
+
+        // At ts + 350: offline for 340s AND last active 200s ago.
+        let out = state.check_idle_timeouts(ts + 350);
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::QuitUser { .. })),
+            "should QUIT after both offline and activity timeouts expire"
+        );
+    }
+
+    #[test]
+    fn bot_exempt_from_idle_timeouts() {
+        let mut config = test_config();
+        config.pseudoclients.channel_idle_timeout_secs = 1;
+        config.pseudoclients.offline_timeout_secs = 1;
+        let mut state = BridgeState::new(&config);
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 99,
+                    username: "bridgebot".into(),
+                    display_name: "BridgeBot".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 99,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Way past timeout.
+        let out = state.check_idle_timeouts(ts + 1_000_000);
+        assert!(
+            out.irc_commands.is_empty(),
+            "bot should be exempt from all timeouts"
         );
     }
 

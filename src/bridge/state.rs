@@ -499,7 +499,7 @@ pub(crate) fn introduce_pseudoclient(
 
 /// Apply persisted state (channels, timestamps) to a freshly-introduced
 /// pseudoclient.  Emits `JoinChannel` commands for restored channels.
-fn apply_seed(
+pub(crate) fn apply_seed(
     pm: &mut PseudoclientManager,
     irc_state: &IrcState,
     user_id: u64,

@@ -18,7 +18,8 @@ use super::routing::{
     route_irc_to_discord, route_irc_to_dm, update_guild_irc_channels,
 };
 use super::state::{
-    DiscordState, IrcState, apply_discord_event, apply_irc_event, introduce_pseudoclient,
+    DiscordState, IrcState, apply_discord_event, apply_irc_event, apply_seed,
+    introduce_pseudoclient,
 };
 
 // ---------------------------------------------------------------------------
@@ -379,6 +380,13 @@ impl BridgeState {
                     now_ts,
                     &resolver,
                 );
+                // On-demand introduction may have created a new pseudoclient.
+                // Apply persisted state (channels, timestamps) if available.
+                if let Some(seed) = self.seed_state.remove(author_id) {
+                    let seed_cmds =
+                        apply_seed(&mut self.pm, &self.irc_state, *author_id, seed, now_ts);
+                    output.irc_commands.extend(seed_cmds);
+                }
                 if !cmds.is_empty() {
                     self.state_dirty = true;
                 }
@@ -2125,6 +2133,82 @@ mod tests {
                 S2SCommand::JoinChannel { channel, .. } if channel == "#test"
             )),
             "should emit JoinChannel from seed"
+        );
+    }
+
+    #[test]
+    fn seed_state_applied_on_demand_introduction_via_message() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 500_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+
+        let mut state = BridgeState::new(&test_config(), seed);
+        let ts = 1_000_000;
+
+        // MemberSnapshot with user offline — seed not consumed.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Offline,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        assert!(state.pm.get_by_discord_id(42).is_none());
+        assert!(!state.seed_state.is_empty());
+
+        // User sends a message — on-demand introduction should consume seed.
+        let out = state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hello".into(),
+                attachments: vec![],
+            },
+            ts + 10,
+        );
+
+        let ps = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("should be introduced on demand");
+        assert!(
+            ps.channels.contains(&"#test".to_string()),
+            "seed channels should be restored on on-demand introduction; got: {:?}",
+            ps.channels
+        );
+        assert_eq!(
+            ps.last_active, 500_000,
+            "seed last_active should be restored"
+        );
+        assert!(
+            out.irc_commands.iter().any(|c| matches!(
+                c,
+                S2SCommand::JoinChannel { channel, .. } if channel == "#test"
+            )),
+            "should emit JoinChannel for restored channel; got: {:?}",
+            out.irc_commands
         );
     }
 

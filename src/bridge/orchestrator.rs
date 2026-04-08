@@ -2058,7 +2058,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_state_not_consumed_for_offline_members() {
+    fn seed_state_introduces_offline_member_with_persisted_channels() {
         use crate::persist::PersistedPseudoclient;
 
         let mut seed = HashMap::new();
@@ -2068,7 +2068,7 @@ mod tests {
                 channels: vec!["#test".to_string()],
                 last_active: 500_000,
                 channel_last_active: HashMap::new(),
-                went_offline_at: None,
+                went_offline_at: Some(600_000),
             },
         );
 
@@ -2077,7 +2077,64 @@ mod tests {
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
-        // Offline member — should NOT be introduced.
+        // Offline member WITH seed — should be introduced with persisted
+        // channels and AWAY :Offline.
+        let out = state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Offline,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+
+        let ps = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("offline user with seed should be introduced");
+        assert_eq!(
+            ps.channels,
+            vec!["#test"],
+            "seed channels should be restored"
+        );
+        assert_eq!(
+            ps.went_offline_at,
+            Some(600_000),
+            "went_offline_at should be restored for Offline user"
+        );
+        assert!(
+            out.irc_commands.iter().any(|c| matches!(
+                c,
+                S2SCommand::JoinChannel { channel, .. } if channel == "#test"
+            )),
+            "should emit JoinChannel for restored channel; got: {:?}",
+            out.irc_commands
+        );
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Offline")),
+            "should emit SetAway for offline user; got: {:?}",
+            out.irc_commands
+        );
+    }
+
+    #[test]
+    fn offline_member_without_seed_not_introduced() {
+        // Offline users with NO persisted state should still be skipped.
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
         state.handle_discord_event(
             &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
@@ -2095,49 +2152,16 @@ mod tests {
             ts,
         );
 
-        // Not introduced — seed should still be in the map.
         assert!(
             state.pm.get_by_discord_id(42).is_none(),
-            "offline user should not be introduced"
-        );
-        assert!(
-            !state.seed_state.is_empty(),
-            "seed should still be available for when user comes online"
-        );
-
-        // Now the user comes online via PresenceUpdated — seed should apply.
-        let out = state.handle_discord_event(
-            &DiscordEvent::PresenceUpdated {
-                user_id: 42,
-                guild_id: 999,
-                presence: DiscordPresence::Online,
-                username: Some("alice".into()),
-                display_name: Some("Alice".into()),
-            },
-            ts + 10,
-        );
-
-        let ps = state
-            .pm
-            .get_by_discord_id(42)
-            .expect("should be introduced");
-        assert_eq!(
-            ps.channels,
-            vec!["#test"],
-            "seed channels applied via PresenceUpdated"
-        );
-        assert_eq!(ps.last_active, 500_000, "seed last_active applied");
-        assert!(
-            out.irc_commands.iter().any(|c| matches!(
-                c,
-                S2SCommand::JoinChannel { channel, .. } if channel == "#test"
-            )),
-            "should emit JoinChannel from seed"
+            "offline user without seed should not be introduced"
         );
     }
 
+    /// User not in MemberSnapshot (large guild chunking) but has persisted
+    /// state.  On-demand introduction via message should consume the seed.
     #[test]
-    fn seed_state_applied_on_demand_introduction_via_message() {
+    fn seed_state_applied_on_demand_for_unchunked_user() {
         use crate::persist::PersistedPseudoclient;
 
         let mut seed = HashMap::new();
@@ -2154,16 +2178,11 @@ mod tests {
         let mut state = BridgeState::new(&test_config(), seed);
         let ts = 1_000_000;
 
-        // MemberSnapshot with user offline — seed not consumed.
+        // MemberSnapshot does NOT include user 42.
         state.handle_discord_event(
             &DiscordEvent::MemberSnapshot {
                 guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Offline,
-                }],
+                members: vec![],
                 channel_ids: vec![111],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
@@ -2195,7 +2214,7 @@ mod tests {
             .expect("should be introduced on demand");
         assert!(
             ps.channels.contains(&"#test".to_string()),
-            "seed channels should be restored on on-demand introduction; got: {:?}",
+            "seed channels should be restored; got: {:?}",
             ps.channels
         );
         assert_eq!(

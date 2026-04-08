@@ -250,7 +250,12 @@ pub fn apply_discord_event(
                 discord_state
                     .display_names
                     .insert(member.user_id, member.display_name.clone());
-                if !member.presence.is_non_offline() {
+                // Offline users are normally skipped (lazy introduction).
+                // Exception: if we have persisted state for them, they had
+                // active channel memberships before the restart and should
+                // be reintroduced with AWAY :Offline.
+                let has_seed = seed_state.contains_key(&member.user_id);
+                if !member.presence.is_non_offline() && !has_seed {
                     continue;
                 }
                 // All pseudoclients use lazy channel membership (join on

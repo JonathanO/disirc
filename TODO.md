@@ -6,7 +6,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-- **State persistence** ([specs/10-state-persistence](specs/10-state-persistence/TODO.md)) — persist pseudoclient channel memberships and timeout tracking across restarts (PR #39, pending merge)
+None.
 
 ## Spec status
 
@@ -49,6 +49,7 @@ None.
 - ~~**Event-carried names**~~ — PR #28. Pseudoclient introduction uses names from events directly, not DiscordState caches. Remove usernames cache.
 - ~~**Immediate Discord processing**~~ — PR #29. Discord events always update PM state immediately. No event buffer. LinkUp sends burst + sets Ready. BurstComplete is a no-op for phase. Presence stored in PseudoclientState. Messages before IRC ready dropped (netsplit behaviour).
 - ~~**Deferred KILL reintroduce**~~ — PR #30. KILLs during burst window defer reintroduction to BurstComplete for nick re-resolution. PM entry kept with `needs_reintroduce` flag. Entries suppressed from burst, message routing, and presence updates until reintroduced.
+- ~~**State persistence**~~ — PR #39. JSON state file persists pseudoclient channel memberships, activity timestamps, and offline tracking across restarts. Graceful shutdown via SIGTERM/SIGINT. Seed map restores channels for online, offline, and on-demand introduced users.
 
 ## Bugs fixed during integration
 

@@ -14,7 +14,7 @@ Tracks implementation status for each spec file.
 | [`specs/07-irc-message-types/spec.md`](specs/07-irc-message-types/spec.md) | Typed IRC message representation | Implemented |
 | [`specs/08-e2e-testing/spec.md`](specs/08-e2e-testing/spec.md) | End-to-end testing strategy | Implemented |
 | [`specs/09-dm-bridging/spec.md`](specs/09-dm-bridging/spec.md) | DM bridging (IRC↔Discord private messages) | Implemented |
-| [`specs/10-state-persistence/spec.md`](specs/10-state-persistence/spec.md) | Pseudoclient state persistence across restarts | In Progress |
+| [`specs/10-state-persistence/spec.md`](specs/10-state-persistence/spec.md) | Pseudoclient state persistence across restarts | Implemented |
 
 ## Statuses
 

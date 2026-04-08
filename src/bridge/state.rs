@@ -1,8 +1,5 @@
-use std::collections::HashMap;
-
 use crate::discord::{DiscordEvent, DiscordPresence};
 use crate::irc::{S2SCommand, S2SEvent};
-use crate::persist::PersistedPseudoclient;
 use crate::pseudoclients::PseudoclientManager;
 
 // ---------------------------------------------------------------------------
@@ -211,14 +208,12 @@ pub struct DiscordState {
 /// Returns the `S2SCommand`s that must be forwarded to the IRC connection
 /// module.  Caller supplies `now_ts` (Unix seconds) for UID/SJOIN timestamps
 /// when no stored channel timestamp is available.
-#[allow(clippy::implicit_hasher)]
 pub fn apply_discord_event(
     discord_state: &mut DiscordState,
     pm: &mut PseudoclientManager,
     irc_state: &IrcState,
     event: &DiscordEvent,
     now_ts: u64,
-    seed_state: &mut HashMap<u64, PersistedPseudoclient>,
 ) -> Vec<S2SCommand> {
     match event {
         DiscordEvent::MemberSnapshot {
@@ -250,12 +245,7 @@ pub fn apply_discord_event(
                 discord_state
                     .display_names
                     .insert(member.user_id, member.display_name.clone());
-                // Offline users are normally skipped (lazy introduction).
-                // Exception: if we have persisted state for them, they had
-                // active channel memberships before the restart and should
-                // be reintroduced with AWAY :Offline.
-                let has_seed = seed_state.contains_key(&member.user_id);
-                if !member.presence.is_non_offline() && !has_seed {
+                if !member.presence.is_non_offline() {
                     continue;
                 }
                 // All pseudoclients use lazy channel membership (join on
@@ -273,11 +263,6 @@ pub fn apply_discord_event(
                     member.presence,
                     now_ts,
                 ));
-                // Apply persisted state (channels, timestamps) if available.
-                // Bot is excluded — it eagerly joins all channels regardless.
-                if !is_bot && let Some(seed) = seed_state.remove(&member.user_id) {
-                    cmds.extend(apply_seed(pm, irc_state, member.user_id, seed, now_ts));
-                }
                 // On reload, the bot may already be introduced but needs
                 // to join any newly added channels.
                 if is_bot {
@@ -440,7 +425,7 @@ pub fn apply_discord_event(
                 "PresenceUpdated — introducing pseudoclient"
             );
             // Lazy channel membership: introduce with no channels.
-            let mut cmds = introduce_pseudoclient(
+            introduce_pseudoclient(
                 pm,
                 irc_state,
                 *user_id,
@@ -449,12 +434,7 @@ pub fn apply_discord_event(
                 &[],
                 *presence,
                 now_ts,
-            );
-            // Apply persisted state if available.
-            if let Some(seed) = seed_state.remove(user_id) {
-                cmds.extend(apply_seed(pm, irc_state, *user_id, seed, now_ts));
-            }
-            cmds
+            )
         }
 
         // MessageReceived is handled by the message relay paths, not here.
@@ -502,49 +482,6 @@ pub(crate) fn introduce_pseudoclient(
     cmds
 }
 
-/// Apply persisted state (channels, timestamps) to a freshly-introduced
-/// pseudoclient.  Emits `JoinChannel` commands for restored channels.
-pub(crate) fn apply_seed(
-    pm: &mut PseudoclientManager,
-    irc_state: &IrcState,
-    user_id: u64,
-    seed: PersistedPseudoclient,
-    now_ts: u64,
-) -> Vec<S2SCommand> {
-    let Some(state) = pm.get_by_discord_id_mut(user_id) else {
-        return vec![];
-    };
-
-    // Restore timestamps from persisted state.
-    state.last_active = seed.last_active;
-    state.channel_last_active = seed.channel_last_active;
-    // Only restore went_offline_at if the user is currently offline.
-    // If they're online now, the persisted value is stale and would
-    // poison update_presence's or(Some(now_ts)) on the next offline
-    // transition.
-    if state.presence == crate::discord::DiscordPresence::Offline {
-        state.went_offline_at = seed.went_offline_at;
-    }
-
-    // Restore channel memberships and emit JoinChannel commands.
-    let uid = state.uid.clone();
-    let mut cmds = Vec::new();
-    for channel in seed.channels {
-        if state.channels.contains(&channel) {
-            continue;
-        }
-        state.channels.push(channel.clone());
-        let ts = irc_state.ts_for_channel(&channel).unwrap_or(now_ts);
-        cmds.push(S2SCommand::JoinChannel {
-            uid: uid.clone(),
-            channel,
-            ts,
-        });
-    }
-
-    cmds
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -559,17 +496,6 @@ mod tests {
 
     fn make_pm() -> PseudoclientManager {
         PseudoclientManager::new("001", "bridge")
-    }
-
-    /// Wrapper for `apply_discord_event` that passes an empty seed map.
-    fn apply_event(
-        ds: &mut DiscordState,
-        pm: &mut PseudoclientManager,
-        irc: &IrcState,
-        event: &DiscordEvent,
-        now_ts: u64,
-    ) -> Vec<S2SCommand> {
-        apply_discord_event(ds, pm, irc, event, now_ts, &mut HashMap::new())
     }
 
     fn introduced(uid: &str, nick: &str) -> S2SEvent {
@@ -1125,7 +1051,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1165,7 +1091,7 @@ mod tests {
         let irc = IrcState::default();
 
         // Snapshot includes an offline member.
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1183,7 +1109,7 @@ mod tests {
 
         // Bob comes online — PresenceUpdated carries the username; display name
         // falls back to the cached value from the snapshot.
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1214,7 +1140,7 @@ mod tests {
         let irc = IrcState::default();
         // No cached names — the event carries them.
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1258,7 +1184,7 @@ mod tests {
         ds.display_names.insert(70, "Cached Display".to_string());
 
         // Event carries empty username — cannot introduce without a username.
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1292,7 +1218,7 @@ mod tests {
 
         // Event carries a username but empty display name — should fall back
         // to cached display name.
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1327,7 +1253,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1358,7 +1284,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1386,7 +1312,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1415,7 +1341,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1439,7 +1365,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1466,7 +1392,7 @@ mod tests {
         let irc = IrcState::default();
 
         // Introduce first
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1483,7 +1409,7 @@ mod tests {
         assert!(pm.get_by_discord_id(10).is_some());
 
         // Now remove
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1511,7 +1437,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1531,7 +1457,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1561,7 +1487,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1589,7 +1515,7 @@ mod tests {
         let irc = IrcState::default();
         // No display name cached for user 50 — should not introduce.
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1618,7 +1544,7 @@ mod tests {
         // Display name cached but no username — cannot introduce.
         ds.display_names.insert(50, "Eve".to_string());
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1646,7 +1572,7 @@ mod tests {
         let irc = IrcState::default();
 
         // First introduce via event-carried names.
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1661,7 +1587,7 @@ mod tests {
         );
 
         // Now presence update with Idle — should NOT produce a second IntroduceUser
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1695,7 +1621,7 @@ mod tests {
         let irc = IrcState::default();
 
         // Introduce via Online presence with event-carried names.
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1711,7 +1637,7 @@ mod tests {
         assert!(pm.get_by_discord_id(50).is_some());
 
         // User goes offline — should set away, not quit.
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1743,7 +1669,7 @@ mod tests {
         let irc = IrcState::default();
 
         // Introduce, then set idle (event-carried names for first introduction).
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1758,7 +1684,7 @@ mod tests {
         );
 
         // Come back online — should clear away.
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1786,7 +1712,7 @@ mod tests {
         let irc = IrcState::default();
 
         // Introduce with username "olduser".
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1812,7 +1738,7 @@ mod tests {
         assert!(pm.get_by_discord_id(50).unwrap().needs_reintroduce);
 
         // Presence update carries a new username while needs_reintroduce.
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1837,7 +1763,7 @@ mod tests {
         let irc = IrcState::default();
 
         // Introduce with username "olduser".
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1859,7 +1785,7 @@ mod tests {
         assert_eq!(pm.get_by_discord_id(50).unwrap().nick, "olduser");
 
         // Presence update with a new username.
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1893,7 +1819,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        apply_event(
+        apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1914,7 +1840,7 @@ mod tests {
         );
 
         // Presence update with same username — no NICK command.
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,
@@ -1944,7 +1870,7 @@ mod tests {
         let mut pm = make_pm();
         let irc = IrcState::default();
 
-        let cmds = apply_event(
+        let cmds = apply_discord_event(
             &mut ds,
             &mut pm,
             &irc,

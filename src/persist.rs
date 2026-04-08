@@ -79,7 +79,9 @@ pub fn load_state(path: &Path) -> Result<PersistedState, PersistError> {
 pub fn save_state(path: &Path, state: &PersistedState) -> Result<(), PersistError> {
     let json = serde_json::to_string_pretty(state)?;
 
-    let tmp_path = path.with_extension("json.tmp");
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp_path = path.with_file_name(tmp_name);
 
     let mut file = std::fs::File::create(&tmp_path)?;
     file.write_all(json.as_bytes())?;

@@ -29,10 +29,8 @@ pub fn spawn_signal_handler() -> mpsc::Receiver<ControlEvent> {
     #[cfg(unix)]
     tokio::spawn(unix_signal_loop(tx));
 
-    // On non-Unix: sender is moved into the above spawn or dropped here;
-    // either way the receiver silently never yields.
     #[cfg(not(unix))]
-    drop(tx);
+    tokio::spawn(non_unix_signal_loop(tx));
 
     rx
 }
@@ -90,6 +88,17 @@ async fn unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
     }
 }
 
+/// Non-Unix: only Ctrl-C (SIGINT equivalent) is available.
+#[cfg(not(unix))]
+// mutants::skip — platform-specific signal handling
+#[mutants::skip]
+async fn non_unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
+    if tokio::signal::ctrl_c().await.is_ok() {
+        tracing::info!("Ctrl-C received — initiating graceful shutdown");
+        let _ = tx.send(ControlEvent::Shutdown).await;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -101,17 +110,16 @@ mod tests {
     #[cfg(unix)]
     use std::time::Duration;
 
-    /// On non-Unix platforms the sender is dropped immediately, closing the
-    /// channel. recv() returns None at once — no events, no blocking.
-    /// The main loop simply never receives a reload event.
+    /// On non-Unix platforms, the signal handler waits for Ctrl-C.
+    /// Verify the channel stays open (handler is running, not dropped).
     #[cfg(not(unix))]
     #[tokio::test]
-    async fn non_unix_channel_closes_immediately() {
+    async fn non_unix_handler_keeps_channel_open() {
         let mut rx = spawn_signal_handler();
-        let result = rx.recv().await;
-        assert_eq!(
-            result, None,
-            "expected closed channel (None) on non-Unix platform"
+        let result = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
+        assert!(
+            result.is_err(),
+            "channel should stay open (handler waiting for Ctrl-C)"
         );
     }
 

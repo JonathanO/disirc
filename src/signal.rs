@@ -9,6 +9,8 @@ use tokio::sync::mpsc;
 pub enum ControlEvent {
     /// Config file should be reloaded (`SIGHUP` received on Unix).
     Reload,
+    /// Graceful shutdown requested (`SIGTERM` or `SIGINT`).
+    Shutdown,
 }
 
 // ---------------------------------------------------------------------------
@@ -48,12 +50,41 @@ async fn unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
             return;
         }
     };
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("failed to install SIGTERM handler: {e}");
+            return;
+        }
+    };
+    let mut sigint = match signal(SignalKind::interrupt()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("failed to install SIGINT handler: {e}");
+            return;
+        }
+    };
 
     loop {
-        sighup.recv().await;
-        tracing::info!("SIGHUP received — queuing config reload");
-        if tx.send(ControlEvent::Reload).await.is_err() {
-            // Receiver dropped — main task has exited; stop the loop.
+        let event = tokio::select! {
+            _ = sighup.recv() => {
+                tracing::info!("SIGHUP received — queuing config reload");
+                ControlEvent::Reload
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("SIGTERM received — initiating graceful shutdown");
+                ControlEvent::Shutdown
+            }
+            _ = sigint.recv() => {
+                tracing::info!("SIGINT received — initiating graceful shutdown");
+                ControlEvent::Shutdown
+            }
+        };
+        let is_shutdown = event == ControlEvent::Shutdown;
+        if tx.send(event).await.is_err() {
+            break;
+        }
+        if is_shutdown {
             break;
         }
     }

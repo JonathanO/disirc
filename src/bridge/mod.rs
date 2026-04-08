@@ -181,6 +181,7 @@ pub async fn run_bridge(
                             }
                         }
                     }
+                    Some(ControlEvent::Shutdown) => { break; }
                     None => { control_alive = false; }
                 }
             }

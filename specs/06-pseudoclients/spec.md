@@ -119,17 +119,41 @@ If a future config option `pseudoclients.quit_on_offline = true` is set, pseudoc
 
 ## Channel membership
 
-- A pseudoclient joins all bridged IRC channels it is a member of when introduced.
-- A pseudoclient does not join non-bridged channels.
+Pseudoclients use **lazy channel membership**: they are introduced to
+the IRC network without joining any channels.  A pseudoclient joins a
+bridged IRC channel only when the Discord user first sends a message in
+the corresponding Discord channel.
+
+This avoids populating IRC channel user lists with Discord users who
+never participate in that channel.
+
+The **first** pseudoclient introduced from a `MemberSnapshot` (typically
+the bridge bot) joins all bridged channels eagerly.  This ensures the
+bridge server has at least one user in each channel, which is required
+for IRC S2S message routing — UnrealIRCd only forwards PRIVMSGs to
+servers that have users in the channel.
+
+### On-demand JOIN
+
+When a Discord message arrives in a bridged channel and the
+pseudoclient exists but is not in the corresponding IRC channel:
+
+1. Emit `SJOIN` to join the pseudoclient to the channel.
+2. Update `PseudoclientState.channels` to include the new channel.
+3. Relay the message as normal.
+
+### Burst on reconnect
+
+On IRC reconnect, pseudoclients are re-burst with their current
+`channels` list — only channels they previously joined.  Membership
+persists in memory across reconnects but is lost on bridge restart.
 
 ### Runtime channel addition
 
 When a new `[[bridge]]` entry is added via config reload:
 
-1. Fetch the current Discord member list for the new channel.
-2. For each member, look up or create a pseudoclient (introduction sequence as normal if new).
-3. Send `SJOIN` for every existing pseudoclient that is a member of the new Discord channel.
-4. Begin relaying messages for the new channel pair.
+1. Begin relaying messages for the new channel pair.
+2. Pseudoclients join the new channel lazily when they speak in it.
 
 ### Runtime channel removal
 

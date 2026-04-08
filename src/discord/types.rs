@@ -106,6 +106,10 @@ pub enum DiscordEvent {
         channel_names: std::collections::HashMap<u64, String>,
         /// Discord role ID → role name, for mention resolution.
         role_names: std::collections::HashMap<u64, String>,
+        /// The bridge bot's Discord user ID.  Its pseudoclient joins all
+        /// bridged channels eagerly to ensure the bridge server has S2S
+        /// presence for IRC→Discord message routing.
+        bot_user_id: u64,
     },
 }
 

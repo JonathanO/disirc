@@ -263,9 +263,7 @@ pub fn route_discord_to_irc(
     };
     let irc_channel = bridge.irc_channel.clone();
 
-    // On-demand introduction: ensure a live pseudoclient exists for this author.
-    // If the entry is marked needs_reintroduce (killed, pending deferred
-    // reintroduction), remove it first so we can reintroduce fresh.
+    // Ensure a live pseudoclient exists for this author.
     let mut cmds = Vec::new();
     if pm
         .get_by_discord_id(author_id)
@@ -274,34 +272,29 @@ pub fn route_discord_to_irc(
         pm.remove_marked(author_id);
     }
     if pm.get_by_discord_id(author_id).is_none() {
-        let channels = vec![irc_channel.clone()];
-        let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
         let ident = pm.ident().to_string();
         if let Some(state) = pm.introduce(
             author_id,
             author_name,
             author_display_name,
-            &channels,
-            ts,
+            &[],
+            now_ts,
             DiscordPresence::Online,
         ) {
-            let uid = state.uid.clone();
-            let chans = state.channels.clone();
             cmds.push(state.introduce_command(&ident));
-            for channel in &chans {
-                cmds.push(S2SCommand::JoinChannel {
-                    uid: uid.clone(),
-                    channel: channel.clone(),
-                    ts,
-                });
-            }
         }
     }
 
-    let uid = match pm.get_by_discord_id(author_id) {
-        Some(s) => s.uid.clone(),
-        None => return vec![],
+    // Ensure the pseudoclient is in this channel (lazy join).
+    let ts = irc_state.ts_for_channel(&irc_channel).unwrap_or(now_ts);
+    if let Some(join) = pm.ensure_in_channel(author_id, &irc_channel, ts) {
+        cmds.push(join);
+    }
+
+    let Some(ps) = pm.get_by_discord_id(author_id) else {
+        return vec![];
     };
+    let uid = ps.uid.clone();
 
     cmds.extend(discord_to_irc_commands(
         &uid,
@@ -768,6 +761,54 @@ mod tests {
             cmds.iter()
                 .any(|c| matches!(c, S2SCommand::SendMessage { .. })),
             "message must still be sent; got: {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn route_discord_second_message_no_duplicate_join() {
+        let mut pm = make_pm();
+        let bridge_map = make_bridge_map();
+        let irc = IrcState::default();
+        // First message: introduces + joins + sends.
+        route_discord_to_irc(
+            &mut pm,
+            &bridge_map,
+            &irc,
+            111,
+            77,
+            "user",
+            "User",
+            "first",
+            &[],
+            None,
+            0,
+            &NullResolver,
+        );
+        // Second message in same channel: should NOT join again.
+        let cmds = route_discord_to_irc(
+            &mut pm,
+            &bridge_map,
+            &irc,
+            111,
+            77,
+            "user",
+            "User",
+            "second",
+            &[],
+            None,
+            0,
+            &NullResolver,
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, S2SCommand::JoinChannel { .. })),
+            "second message should not produce another JoinChannel"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, S2SCommand::SendMessage { .. })),
+            "second message should still be sent"
         );
     }
 

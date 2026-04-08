@@ -137,6 +137,7 @@ pub(crate) fn build_member_snapshot_event(
     channel_ids: Vec<u64>,
     channel_names: HashMap<u64, String>,
     role_names: HashMap<u64, String>,
+    bot_user_id: u64,
 ) -> DiscordEvent {
     // Include all members so their names are cached for later introduction
     // when they come online via PRESENCE_UPDATE.  Only non-offline members
@@ -162,6 +163,7 @@ pub(crate) fn build_member_snapshot_event(
         channel_ids,
         channel_names,
         role_names,
+        bot_user_id,
     }
 }
 
@@ -249,7 +251,8 @@ impl EventHandler for DiscordHandler {
             .await;
     }
 
-    async fn guild_create(&self, _ctx: Context, guild: Guild, _is_new: Option<bool>) {
+    async fn guild_create(&self, ctx: Context, guild: Guild, _is_new: Option<bool>) {
+        let bot_user_id = ctx.cache.current_user().id.get();
         let presences: HashMap<u64, DiscordPresence> = guild
             .presences
             .iter()
@@ -307,6 +310,7 @@ impl EventHandler for DiscordHandler {
             guild_channel_ids,
             channel_names,
             role_names,
+            bot_user_id,
         );
 
         if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
@@ -693,6 +697,7 @@ mod tests {
             vec![],
             HashMap::new(),
             HashMap::new(),
+            0,
         );
         let DiscordEvent::MemberSnapshot {
             guild_id,
@@ -725,6 +730,7 @@ mod tests {
             vec![],
             HashMap::new(),
             HashMap::new(),
+            0,
         );
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
@@ -761,6 +767,7 @@ mod tests {
             vec![],
             HashMap::new(),
             HashMap::new(),
+            0,
         );
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()
@@ -794,6 +801,7 @@ mod tests {
             vec![],
             HashMap::new(),
             HashMap::new(),
+            0,
         );
         let DiscordEvent::MemberSnapshot { members: infos, .. } = ev else {
             panic!()

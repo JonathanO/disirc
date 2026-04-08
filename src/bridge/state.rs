@@ -222,6 +222,7 @@ pub fn apply_discord_event(
             channel_ids: _,
             channel_names,
             role_names,
+            bot_user_id,
         } => {
             // Store channel/role names for mention resolution.
             discord_state
@@ -247,16 +248,31 @@ pub fn apply_discord_event(
                 if !member.presence.is_non_offline() {
                     continue;
                 }
+                // All pseudoclients use lazy channel membership (join on
+                // first message).  The bridge bot is an exception — it
+                // joins all bridged channels for S2S message routing.
+                let is_bot = member.user_id == *bot_user_id;
+                let intro_channels = if is_bot { &channels[..] } else { &[] };
                 cmds.extend(introduce_pseudoclient(
                     pm,
                     irc_state,
                     member.user_id,
                     &member.username,
                     &member.display_name,
-                    &channels,
+                    intro_channels,
                     member.presence,
                     now_ts,
                 ));
+                // On reload, the bot may already be introduced but needs
+                // to join any newly added channels.
+                if is_bot {
+                    for ch in &channels {
+                        let ts = irc_state.ts_for_channel(ch).unwrap_or(now_ts);
+                        if let Some(join) = pm.ensure_in_channel(member.user_id, ch, ts) {
+                            cmds.push(join);
+                        }
+                    }
+                }
             }
             tracing::debug!(guild_id, total = members.len(), "MemberSnapshot processed");
             cmds
@@ -297,10 +313,10 @@ pub fn apply_discord_event(
 
         DiscordEvent::PresenceUpdated {
             user_id,
-            guild_id,
             presence,
             username,
             display_name,
+            ..
         } => {
             // Cache/update display name if the presence payload carried it
             // (for mention resolution).
@@ -380,11 +396,6 @@ pub fn apply_discord_event(
                 );
                 return vec![];
             }
-            let channels = discord_state
-                .guild_irc_channels
-                .get(guild_id)
-                .cloned()
-                .unwrap_or_default();
             // Resolve username from event data; fall back is not possible
             // without the usernames cache — skip introduction if absent.
             let Some(username) = username.as_ref().filter(|s| !s.is_empty()) else {
@@ -413,13 +424,14 @@ pub fn apply_discord_event(
                 ?presence,
                 "PresenceUpdated — introducing pseudoclient"
             );
+            // Lazy channel membership: introduce with no channels.
             introduce_pseudoclient(
                 pm,
                 irc_state,
                 *user_id,
                 username,
                 &display_name,
-                &channels,
+                &[],
                 *presence,
                 now_ts,
             )
@@ -1048,6 +1060,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
                 members: vec![
                     member(10, "alice", DiscordPresence::Online),
                     member(20, "bob", DiscordPresence::Offline),
@@ -1087,6 +1100,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
                 members: vec![member(20, "bob", DiscordPresence::Offline)],
             },
             1000,
@@ -1248,6 +1262,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -1278,6 +1293,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
                 members: vec![member(10, "alice", DiscordPresence::Idle)],
             },
             1000,
@@ -1305,6 +1321,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
                 members: vec![member(10, "alice", DiscordPresence::DoNotDisturb)],
             },
             1000,
@@ -1333,6 +1350,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -1383,6 +1401,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
                 members: vec![member(10, "alice", DiscordPresence::Online)],
             },
             1000,
@@ -1687,6 +1706,57 @@ mod tests {
     }
 
     #[test]
+    fn presence_updated_stores_username_for_needs_reintroduce() {
+        let mut ds = make_discord_state_with_channels(1, &["#general"]);
+        let mut pm = make_pm();
+        let irc = IrcState::default();
+
+        // Introduce with username "olduser".
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 1,
+                members: vec![MemberInfo {
+                    user_id: 50,
+                    username: "olduser".into(),
+                    display_name: "Old".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            1000,
+        );
+
+        // Mark as needs_reintroduce (simulating a KILL).
+        pm.mark_needs_reintroduce(50);
+        pm.forget_uid(50);
+        assert!(pm.get_by_discord_id(50).unwrap().needs_reintroduce);
+
+        // Presence update carries a new username while needs_reintroduce.
+        apply_discord_event(
+            &mut ds,
+            &mut pm,
+            &irc,
+            &DiscordEvent::PresenceUpdated {
+                user_id: 50,
+                guild_id: 1,
+                presence: DiscordPresence::Online,
+                username: Some("newuser".into()),
+                display_name: Some("New".into()),
+            },
+            1001,
+        );
+
+        // The stored username should be updated for when we reintroduce.
+        assert_eq!(pm.get_by_discord_id(50).unwrap().username, "newuser");
+    }
+
+    #[test]
     fn presence_updated_username_change_emits_nick_command() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
@@ -1708,6 +1778,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             1000,
         );
@@ -1763,6 +1834,7 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
             },
             1000,
         );
@@ -1793,21 +1865,10 @@ mod tests {
     }
 
     #[test]
-    fn member_snapshot_join_channel_uses_irc_state_ts() {
+    fn member_snapshot_bot_joins_channels_others_lazy() {
         let mut ds = make_discord_state_with_channels(1, &["#general"]);
         let mut pm = make_pm();
-        let mut irc = IrcState::default();
-
-        // Simulate a ChannelBurst so irc_state has a ts for #general
-        apply_irc_event(
-            &mut irc,
-            &mut pm,
-            &S2SEvent::ChannelBurst {
-                channel: "#general".to_string(),
-                ts: 5_000,
-                members: vec![],
-            },
-        );
+        let irc = IrcState::default();
 
         let cmds = apply_discord_event(
             &mut ds,
@@ -1818,18 +1879,30 @@ mod tests {
                 channel_ids: vec![],
                 channel_names: std::collections::HashMap::new(),
                 role_names: std::collections::HashMap::new(),
-                members: vec![member(10, "alice", DiscordPresence::Online)],
+                bot_user_id: 10,
+                members: vec![
+                    member(10, "bridgebot", DiscordPresence::Online),
+                    member(20, "bob", DiscordPresence::Online),
+                ],
             },
-            9_999,
+            1000,
         );
 
-        let join_ts = cmds.iter().find_map(|c| {
-            if let S2SCommand::JoinChannel { ts, .. } = c {
-                Some(*ts)
-            } else {
-                None
-            }
-        });
-        assert_eq!(join_ts, Some(5_000), "should use channel ts from IrcState");
+        // Bot (user_id 10) joins all channels for bridge S2S presence.
+        assert!(
+            !pm.get_by_discord_id(10).unwrap().channels.is_empty(),
+            "bot should join bridged channels"
+        );
+        // Other members use lazy membership.
+        assert!(
+            pm.get_by_discord_id(20).unwrap().channels.is_empty(),
+            "non-bot members should have empty channels (lazy)"
+        );
+        // Both should be introduced.
+        let introduce_count = cmds
+            .iter()
+            .filter(|c| matches!(c, S2SCommand::IntroduceUser { .. }))
+            .count();
+        assert_eq!(introduce_count, 2, "both members should be introduced");
     }
 }

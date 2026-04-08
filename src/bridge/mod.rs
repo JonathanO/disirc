@@ -39,6 +39,67 @@ pub use state::{DiscordState, IrcState, apply_discord_event, apply_irc_event};
 // Bridge loop
 // ---------------------------------------------------------------------------
 
+/// Load persisted seed state from the configured state file, if any.
+///
+/// Returns an empty map if persistence is disabled, the file doesn't exist,
+/// or the file is corrupt.  Errors are logged as warnings.
+// mutants::skip — I/O + config plumbing; tested via integration tests
+#[mutants::skip]
+fn load_seed_state(
+    config: &Config,
+) -> std::collections::HashMap<u64, crate::persist::PersistedPseudoclient> {
+    let Some(ref path_str) = config.pseudoclients.state_file else {
+        return std::collections::HashMap::new();
+    };
+    let path = std::path::Path::new(path_str);
+    match crate::persist::load_state(path) {
+        Ok(state) => {
+            let valid_channels: Vec<&str> = config
+                .bridges
+                .iter()
+                .map(|b| b.irc_channel.as_str())
+                .collect();
+            let seed = crate::persist::into_seed_map(state, &valid_channels);
+            tracing::info!(
+                path = %path.display(),
+                pseudoclients = seed.len(),
+                "Loaded persisted state"
+            );
+            seed
+        }
+        Err(crate::persist::PersistError::Io(ref e))
+            if e.kind() == std::io::ErrorKind::NotFound =>
+        {
+            tracing::info!(path = %path.display(), "No persisted state file — starting fresh");
+            std::collections::HashMap::new()
+        }
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to load persisted state — starting fresh");
+            std::collections::HashMap::new()
+        }
+    }
+}
+
+/// Save persisted state to disk if the dirty flag is set.
+// mutants::skip — I/O wrapper; tested via integration tests
+#[mutants::skip]
+fn maybe_save_state(bridge: &mut BridgeState) {
+    if !bridge.state_dirty {
+        return;
+    }
+    let Some(ref path_str) = bridge.config.pseudoclients.state_file else {
+        return;
+    };
+    let snapshot = crate::persist::snapshot_from_pm(&bridge.pm);
+    let path = std::path::Path::new(path_str);
+    if let Err(e) = crate::persist::save_state(path, &snapshot) {
+        tracing::warn!(path = %path.display(), error = %e, "Failed to save state");
+    } else {
+        tracing::debug!(path = %path.display(), "State saved");
+        bridge.state_dirty = false;
+    }
+}
+
 /// Current Unix timestamp in seconds.
 // mutants::skip — non-deterministic clock function; cannot be tested deterministically
 #[mutants::skip]
@@ -68,7 +129,8 @@ pub async fn run_bridge(
     discord_cmd_tx: mpsc::Sender<DiscordCommand>,
     mut control_rx: mpsc::Receiver<ControlEvent>,
 ) {
-    let mut bridge = BridgeState::new(config);
+    let seed_state = load_seed_state(config);
+    let mut bridge = BridgeState::new(config, seed_state);
     let mut control_alive = true;
     let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(60));
 
@@ -101,6 +163,7 @@ pub async fn run_bridge(
                 for cmd in output.irc_commands {
                     let _ = irc_cmd_tx.send(cmd).await;
                 }
+                maybe_save_state(&mut bridge);
             }
 
             maybe_ctrl = control_rx.recv(), if control_alive => {
@@ -118,9 +181,14 @@ pub async fn run_bridge(
                             }
                         }
                     }
+                    Some(ControlEvent::Shutdown) => { break; }
                     None => { control_alive = false; }
                 }
             }
         }
     }
+
+    // Final save on clean shutdown.
+    bridge.state_dirty = true;
+    maybe_save_state(&mut bridge);
 }

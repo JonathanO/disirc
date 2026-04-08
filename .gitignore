@@ -6,8 +6,8 @@
 config.toml
 
 # IDE
-.vscode/
-.idea/
+.vscode
+.idea
 *.iml
 
 # Generated test/mutation artifacts
@@ -19,3 +19,14 @@ proptest-regressions/
 # OS
 .DS_Store
 Thumbs.db
+
+# WSL2 character-device stubs (unreadable; breaks cargo-mutants copy mode)
+.bashrc
+.bash_profile
+.profile
+.zshrc
+.zprofile
+.gitconfig
+.gitmodules
+.ripgreprc
+.mcp.json

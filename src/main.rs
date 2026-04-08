@@ -73,29 +73,10 @@ async fn main() {
     )
     .await;
 
-    // Check spawned tasks for panics — await them with a short timeout
-    // so we catch panics that are still unwinding when run_bridge exits.
-    for (name, handle) in [("IRC", irc_handle), ("Discord", discord_handle)] {
-        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
-        match result {
-            Ok(Err(e)) if e.is_panic() => {
-                // Extract the actual panic message from the payload.
-                let panic = e.into_panic();
-                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                    (*s).to_string()
-                } else if let Some(s) = panic.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "unknown panic".to_string()
-                };
-                tracing::error!("{name} task panicked: {msg}");
-            }
-            Ok(Err(e)) => tracing::error!("{name} task failed: {e}"),
-            // Ok(Ok(())) — task exited cleanly.
-            // Err(_) — task still running after timeout (normal for IRC reconnect loop).
-            _ => {}
-        }
-    }
+    // Abort connection tasks — they run reconnect-forever loops and won't
+    // stop on their own.  The bridge loop has already saved state.
+    irc_handle.abort();
+    discord_handle.abort();
 
     tracing::info!("disirc shutting down");
 }

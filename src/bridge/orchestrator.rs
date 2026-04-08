@@ -106,11 +106,20 @@ pub struct BridgeState {
     pub(crate) kill_cooldowns: HashMap<u64, u64>,
     /// The Discord bot's own user ID (set from `MemberSnapshot`).
     pub(crate) bot_user_id: u64,
+    /// Persisted pseudoclient state loaded on startup.  Consumed entry-by-
+    /// entry as users are introduced.
+    pub(crate) seed_state: HashMap<u64, crate::persist::PersistedPseudoclient>,
+    /// Whether pseudoclient state has been modified since the last save.
+    pub(crate) state_dirty: bool,
 }
 
 impl BridgeState {
-    /// Create a new bridge state from config.
-    pub fn new(config: &Config) -> Self {
+    /// Create a new bridge state from config, optionally with persisted
+    /// pseudoclient state to restore on first `MemberSnapshot`.
+    pub fn new(
+        config: &Config,
+        seed_state: HashMap<u64, crate::persist::PersistedPseudoclient>,
+    ) -> Self {
         Self {
             config: config.clone(),
             bridge_map: BridgeMap::from_config(&config.bridges),
@@ -121,6 +130,8 @@ impl BridgeState {
             remote_burst_done: false,
             kill_cooldowns: HashMap::new(),
             bot_user_id: 0,
+            seed_state,
+            state_dirty: false,
         }
     }
 
@@ -368,6 +379,9 @@ impl BridgeState {
                     now_ts,
                     &resolver,
                 );
+                if !cmds.is_empty() {
+                    self.state_dirty = true;
+                }
                 output.irc_commands.extend(cmds);
             }
 
@@ -397,6 +411,7 @@ impl BridgeState {
                         text,
                     } => {
                         self.pm.record_global_activity(*author_id, now_ts);
+                        self.state_dirty = true;
                         output.irc_commands.push(S2SCommand::SendMessage {
                             from_uid,
                             target: target_uid,
@@ -422,9 +437,15 @@ impl BridgeState {
             event,
             now_ts,
         );
+        if !cmds.is_empty() {
+            self.state_dirty = true;
+        }
         if self.link_phase == LinkPhase::Ready {
             output.irc_commands.extend(cmds);
         }
+
+        // Apply persisted state for any users that were just introduced.
+        output.irc_commands.extend(self.apply_seeds(event, now_ts));
 
         output
     }
@@ -495,7 +516,112 @@ impl BridgeState {
             self.pm.quit(discord_id, "Offline idle timeout");
         }
 
+        if !output.irc_commands.is_empty() {
+            self.state_dirty = true;
+        }
+
         output
+    }
+
+    /// Apply persisted seed state for users referenced by a Discord event.
+    ///
+    /// For each user with an unconsumed seed entry:
+    /// - If already introduced (online in snapshot, or on-demand), restore
+    ///   channels and timestamps.
+    /// - If not yet introduced (offline in snapshot), introduce them now
+    ///   with their persisted channels and AWAY :Offline.
+    fn apply_seeds(&mut self, event: &DiscordEvent, now_ts: u64) -> Vec<S2SCommand> {
+        if self.seed_state.is_empty() {
+            return vec![];
+        }
+
+        // Collect (user_id, username, display_name) for users referenced
+        // by this event that have seed entries.  Bot is excluded — it
+        // eagerly joins all channels and should not use persisted state.
+        let bot_id = self.bot_user_id;
+        let candidates: Vec<(u64, String, String)> = match event {
+            DiscordEvent::MemberSnapshot { members, .. } => members
+                .iter()
+                .filter(|m| m.user_id != bot_id)
+                .map(|m| (m.user_id, m.username.clone(), m.display_name.clone()))
+                .collect(),
+            DiscordEvent::PresenceUpdated {
+                user_id,
+                username,
+                display_name,
+                ..
+            } => {
+                let uname = username.clone().unwrap_or_default();
+                let dname = display_name.clone().unwrap_or_default();
+                vec![(*user_id, uname, dname)]
+            }
+            DiscordEvent::MessageReceived {
+                author_id,
+                author_name,
+                author_display_name,
+                ..
+            } => vec![(*author_id, author_name.clone(), author_display_name.clone())],
+            _ => return vec![],
+        };
+
+        let mut cmds = Vec::new();
+        for (user_id, username, display_name) in candidates {
+            // If not yet in PM (offline user skipped by apply_discord_event),
+            // introduce them now so seed channels can be applied.
+            if self.pm.get_by_discord_id(user_id).is_none() {
+                cmds.extend(introduce_pseudoclient(
+                    &mut self.pm,
+                    &self.irc_state,
+                    user_id,
+                    &username,
+                    &display_name,
+                    &[],
+                    DiscordPresence::Offline,
+                    now_ts,
+                ));
+            }
+            if let Some(seed) = self.seed_state.remove(&user_id) {
+                cmds.extend(self.apply_seed(user_id, seed, now_ts));
+            }
+        }
+        if !cmds.is_empty() {
+            self.state_dirty = true;
+        }
+        cmds
+    }
+
+    /// Apply a single seed entry: restore channels and timestamps.
+    fn apply_seed(
+        &mut self,
+        user_id: u64,
+        seed: crate::persist::PersistedPseudoclient,
+        now_ts: u64,
+    ) -> Vec<S2SCommand> {
+        let Some(state) = self.pm.get_by_discord_id_mut(user_id) else {
+            return vec![];
+        };
+
+        state.last_active = seed.last_active;
+        state.channel_last_active = seed.channel_last_active;
+        if state.presence == DiscordPresence::Offline {
+            state.went_offline_at = seed.went_offline_at;
+        }
+
+        let uid = state.uid.clone();
+        let mut cmds = Vec::new();
+        for channel in seed.channels {
+            if state.channels.contains(&channel) {
+                continue;
+            }
+            state.channels.push(channel.clone());
+            let ts = self.irc_state.ts_for_channel(&channel).unwrap_or(now_ts);
+            cmds.push(S2SCommand::JoinChannel {
+                uid: uid.clone(),
+                channel,
+                ts,
+            });
+        }
+        cmds
     }
 
     /// Update config and return a `ReloadBridges` command if bridges changed.
@@ -579,6 +705,7 @@ mod tests {
                 dm_bridging: true,
                 channel_idle_timeout_secs: 0,
                 offline_timeout_secs: 0,
+                state_file: None,
             },
             formatting: FormattingConfig::default(),
             bridges: vec![BridgeEntry {
@@ -593,7 +720,7 @@ mod tests {
     /// immediately (link phase is Ready).
     #[test]
     fn discord_events_processed_after_burst_complete() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -627,7 +754,7 @@ mod tests {
     /// but no IRC commands are emitted.
     #[test]
     fn discord_events_update_state_when_link_not_ready() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         // Link is NotReady (no LinkUp yet).
@@ -665,7 +792,7 @@ mod tests {
     /// Messages received when link is not ready are dropped (not queued).
     #[test]
     fn messages_dropped_when_link_not_ready() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         // Introduce a pseudoclient while link is not ready.
@@ -708,7 +835,7 @@ mod tests {
     /// BurstComplete emits AWAY for pseudoclients with non-Online presence.
     #[test]
     fn burst_includes_away_for_idle_pseudoclients() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         // Introduce a pseudoclient with Idle presence while link is not ready.
@@ -751,7 +878,7 @@ mod tests {
     /// Presence change while link is down is stored and reflected in burst AWAY.
     #[test]
     fn presence_change_while_not_ready_reflected_in_burst() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         // Introduce online user while link is not ready.
@@ -803,7 +930,7 @@ mod tests {
     fn kill_with_reintroduce_produces_new_uid() {
         let mut config = test_config();
         config.pseudoclients.reintroduce_on_kill = true;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         // Set up: link up, remote burst done, introduce pseudoclient.
@@ -918,7 +1045,7 @@ mod tests {
     /// down.
     #[test]
     fn link_down_clears_external_nicks() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         // Set up: link up (burst sent), then IRC user "alice" introduced.
@@ -978,7 +1105,7 @@ mod tests {
     fn link_down_clears_needs_reintroduce_flags() {
         let mut config = test_config();
         config.pseudoclients.reintroduce_on_kill = true;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         // Introduce a pseudoclient.
@@ -1046,7 +1173,7 @@ mod tests {
 
     /// Helper: set up a bridge with link up, burst complete, and a pseudoclient.
     fn setup_bridge_with_pseudoclient() -> (BridgeState, String) {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
@@ -1106,7 +1233,7 @@ mod tests {
     fn kill_within_cooldown_does_not_reintroduce() {
         let mut config = test_config();
         config.pseudoclients.reintroduce_on_kill = true;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -1183,11 +1310,79 @@ mod tests {
         );
     }
 
+    #[test]
+    fn kill_at_cooldown_boundary_allows_reintroduce() {
+        let mut config = test_config();
+        config.pseudoclients.reintroduce_on_kill = true;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 8001,
+                    username: "Charlie".into(),
+                    display_name: "Charlie".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        let uid1 = state
+            .pm
+            .get_by_discord_id(8001)
+            .expect("introduced")
+            .uid
+            .clone();
+
+        // First kill — reintroduces.
+        let out = state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid: uid1,
+                reason: "kill".into(),
+            },
+            ts,
+        );
+        let uid2 = out
+            .irc_commands
+            .iter()
+            .find_map(|c| {
+                if let S2SCommand::IntroduceUser { uid, .. } = c {
+                    Some(uid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("first kill should reintroduce");
+
+        // Second kill at exactly 30 seconds — cooldown has expired.
+        let out = state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid: uid2,
+                reason: "kill at boundary".into(),
+            },
+            ts + 30,
+        );
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
+            "kill at exactly 30s should reintroduce (cooldown expired)"
+        );
+    }
+
     // --- reload_config ---
 
     #[test]
     fn reload_config_with_changed_bridges_produces_command() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let mut new_config = test_config();
         new_config.bridges.push(BridgeEntry {
             discord_channel_id: "222".into(),
@@ -1203,7 +1398,7 @@ mod tests {
 
     #[test]
     fn reload_config_with_no_changes_returns_none() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let same_config = test_config();
         let cmd = state.reload_config(same_config);
         assert!(
@@ -1216,7 +1411,7 @@ mod tests {
 
     #[test]
     fn discord_state_cmds_not_forwarded_after_link_down() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         // Link up, burst complete — phase is Ready.
@@ -1262,7 +1457,7 @@ mod tests {
     /// re-introduced to the new link on BurstComplete.
     #[test]
     fn reconnect_rebursts_existing_pseudoclients() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         // Introduce a pseudoclient while link is not ready.
@@ -1332,7 +1527,7 @@ mod tests {
     /// Our burst (including EOS) is sent on BurstComplete.
     #[test]
     fn burst_sent_on_link_up() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -1350,7 +1545,7 @@ mod tests {
     fn channel_idle_timeout_parts_inactive_user() {
         let mut config = test_config();
         config.pseudoclients.channel_idle_timeout_secs = 100;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         // Introduce user, link up.
@@ -1421,7 +1616,7 @@ mod tests {
     fn offline_timeout_quits_idle_offline_user() {
         let mut config = test_config();
         config.pseudoclients.offline_timeout_secs = 200;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         state.handle_discord_event(
@@ -1482,7 +1677,7 @@ mod tests {
     fn offline_timeout_does_not_quit_active_offline_user() {
         let mut config = test_config();
         config.pseudoclients.offline_timeout_secs = 200;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         state.handle_discord_event(
@@ -1539,7 +1734,7 @@ mod tests {
 
     #[test]
     fn went_offline_at_cleared_when_coming_online() {
-        let mut state = BridgeState::new(&test_config());
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
 
         state.handle_discord_event(
@@ -1605,7 +1800,7 @@ mod tests {
         let mut config = test_config();
         config.pseudoclients.channel_idle_timeout_secs = 0;
         config.pseudoclients.offline_timeout_secs = 0;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         state.handle_discord_event(
@@ -1661,7 +1856,7 @@ mod tests {
         let mut config = test_config();
         config.pseudoclients.offline_timeout_secs = 200;
         config.pseudoclients.dm_bridging = true;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         state.handle_discord_event(
@@ -1721,7 +1916,7 @@ mod tests {
         let mut config = test_config();
         config.pseudoclients.channel_idle_timeout_secs = 1;
         config.pseudoclients.offline_timeout_secs = 1;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         state.handle_discord_event(
@@ -1755,7 +1950,7 @@ mod tests {
     fn kill_during_burst_deferred_to_burst_complete() {
         let mut config = test_config();
         config.pseudoclients.reintroduce_on_kill = true;
-        let mut state = BridgeState::new(&config);
+        let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
 
         // Introduce pseudoclient while link is down, then link up.
@@ -1835,6 +2030,611 @@ mod tests {
         assert_ne!(
             new_nick, "victim",
             "reintroduced nick should be suffixed to avoid collision; got: {new_nick}"
+        );
+    }
+
+    // --- State persistence / seed map ---
+
+    #[test]
+    fn seed_state_restores_channels_on_member_snapshot() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 500_000,
+                channel_last_active: {
+                    let mut m = HashMap::new();
+                    m.insert("#test".to_string(), 500_000u64);
+                    m
+                },
+                went_offline_at: Some(600_000),
+            },
+        );
+
+        let mut state = BridgeState::new(&test_config(), seed);
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        let out = state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+
+        // Pseudoclient should have restored channel membership.
+        let ps = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("should be introduced");
+        assert_eq!(
+            ps.channels,
+            vec!["#test"],
+            "channel should be restored from seed"
+        );
+        assert_eq!(ps.last_active, 500_000, "last_active should be restored");
+        assert_eq!(
+            ps.went_offline_at, None,
+            "went_offline_at should NOT be restored for Online users"
+        );
+        assert_eq!(
+            ps.channel_last_active.get("#test"),
+            Some(&500_000),
+            "channel_last_active should be restored"
+        );
+
+        // Should have emitted a JoinChannel for the restored channel.
+        assert!(
+            out.irc_commands.iter().any(|c| matches!(
+                c,
+                S2SCommand::JoinChannel { channel, .. } if channel == "#test"
+            )),
+            "should emit JoinChannel for restored channel; got: {:?}",
+            out.irc_commands
+        );
+
+        // Seed application should mark state as dirty.
+        assert!(state.state_dirty, "seed application should set dirty flag");
+    }
+
+    #[test]
+    fn seed_state_filters_removed_bridge_channels() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string(), "#removed".to_string()],
+                last_active: 500_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+
+        // #removed is not in the bridge config, so it should be filtered
+        // out during into_seed_map. Simulate that by pre-filtering.
+        let valid_channels = vec!["#test"];
+        let filtered_seed = crate::persist::into_seed_map(
+            crate::persist::PersistedState {
+                version: 1,
+                pseudoclients: seed.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            },
+            &valid_channels,
+        );
+
+        let mut state = BridgeState::new(&test_config(), filtered_seed);
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+
+        let ps = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("should be introduced");
+        assert_eq!(
+            ps.channels,
+            vec!["#test"],
+            "#removed should be filtered out"
+        );
+    }
+
+    #[test]
+    fn seed_state_ignored_for_bot_user() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut seed = HashMap::new();
+        seed.insert(
+            99,
+            PersistedPseudoclient {
+                channels: vec![],
+                last_active: 1,
+                channel_last_active: HashMap::new(),
+                went_offline_at: Some(999),
+            },
+        );
+
+        let mut state = BridgeState::new(&test_config(), seed);
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 99,
+                    username: "botuser".into(),
+                    display_name: "Bot".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 99,
+            },
+            ts,
+        );
+
+        // Bot should use fresh state, not seed.
+        let ps = state
+            .pm
+            .get_by_discord_id(99)
+            .expect("bot should be introduced");
+        assert_ne!(
+            ps.went_offline_at,
+            Some(999),
+            "bot should not use seed went_offline_at"
+        );
+        assert_eq!(
+            ps.last_active, ts,
+            "bot should use current timestamp, not seed"
+        );
+    }
+
+    #[test]
+    fn seed_state_introduces_offline_member_with_persisted_channels() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 500_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: Some(600_000),
+            },
+        );
+
+        let mut state = BridgeState::new(&test_config(), seed);
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Offline member WITH seed — should be introduced with persisted
+        // channels and AWAY :Offline.
+        let out = state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Offline,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+
+        let ps = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("offline user with seed should be introduced");
+        assert_eq!(
+            ps.channels,
+            vec!["#test"],
+            "seed channels should be restored"
+        );
+        assert_eq!(
+            ps.went_offline_at,
+            Some(600_000),
+            "went_offline_at should be restored for Offline user"
+        );
+        assert!(
+            out.irc_commands.iter().any(|c| matches!(
+                c,
+                S2SCommand::JoinChannel { channel, .. } if channel == "#test"
+            )),
+            "should emit JoinChannel for restored channel; got: {:?}",
+            out.irc_commands
+        );
+        assert!(
+            out.irc_commands
+                .iter()
+                .any(|c| matches!(c, S2SCommand::SetAway { reason, .. } if reason == "Offline")),
+            "should emit SetAway for offline user; got: {:?}",
+            out.irc_commands
+        );
+    }
+
+    #[test]
+    fn offline_member_without_seed_not_introduced() {
+        // Offline users with NO persisted state should still be skipped.
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Offline,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+
+        assert!(
+            state.pm.get_by_discord_id(42).is_none(),
+            "offline user without seed should not be introduced"
+        );
+    }
+
+    /// User not in MemberSnapshot (large guild chunking) but has persisted
+    /// state.  On-demand introduction via message should consume the seed.
+    #[test]
+    fn seed_state_applied_on_demand_for_unchunked_user() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 500_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+
+        let mut state = BridgeState::new(&test_config(), seed);
+        let ts = 1_000_000;
+
+        // MemberSnapshot does NOT include user 42.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        assert!(state.pm.get_by_discord_id(42).is_none());
+        assert!(!state.seed_state.is_empty());
+
+        // User sends a message — on-demand introduction should consume seed.
+        let out = state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hello".into(),
+                attachments: vec![],
+            },
+            ts + 10,
+        );
+
+        let ps = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("should be introduced on demand");
+        assert!(
+            ps.channels.contains(&"#test".to_string()),
+            "seed channels should be restored; got: {:?}",
+            ps.channels
+        );
+        assert_eq!(
+            ps.last_active, 500_000,
+            "seed last_active should be restored"
+        );
+        assert!(
+            out.irc_commands.iter().any(|c| matches!(
+                c,
+                S2SCommand::JoinChannel { channel, .. } if channel == "#test"
+            )),
+            "should emit JoinChannel for restored channel; got: {:?}",
+            out.irc_commands
+        );
+    }
+
+    #[test]
+    fn seed_state_applied_via_presence_updated() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 500_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+
+        let mut state = BridgeState::new(&test_config(), seed);
+        let ts = 1_000_000;
+
+        // MemberSnapshot without user 42 (large guild, offline not included).
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // User comes online via PresenceUpdated — seed should apply.
+        let out = state.handle_discord_event(
+            &DiscordEvent::PresenceUpdated {
+                user_id: 42,
+                guild_id: 999,
+                presence: DiscordPresence::Online,
+                username: Some("alice".into()),
+                display_name: Some("Alice".into()),
+            },
+            ts + 10,
+        );
+
+        let ps = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("should be introduced");
+        assert_eq!(
+            ps.channels,
+            vec!["#test"],
+            "seed channels applied via PresenceUpdated"
+        );
+        assert!(
+            out.irc_commands.iter().any(|c| matches!(
+                c,
+                S2SCommand::JoinChannel { channel, .. } if channel == "#test"
+            )),
+            "should emit JoinChannel; got: {:?}",
+            out.irc_commands
+        );
+    }
+
+    #[test]
+    fn seed_only_path_sets_dirty_flag() {
+        use crate::persist::PersistedPseudoclient;
+
+        // Offline user with seed: apply_discord_event skips them (no cmds),
+        // but apply_seeds introduces them (cmds).  Only apply_seeds should
+        // set dirty.
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 500_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+
+        let mut state = BridgeState::new(&test_config(), seed);
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.state_dirty = false;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Offline,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+
+        assert!(
+            state.state_dirty,
+            "apply_seeds introducing an offline user with seed should set dirty"
+        );
+    }
+
+    // --- Dirty flag ---
+
+    #[test]
+    fn dirty_flag_set_on_discord_message_relay() {
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Clear dirty from the introduction above.
+        state.state_dirty = false;
+
+        // Send a message — should set dirty (record_activity updates PM).
+        state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hello".into(),
+                attachments: vec![],
+            },
+            ts + 10,
+        );
+        assert!(state.state_dirty, "message relay should set dirty flag");
+    }
+
+    #[test]
+    fn dirty_flag_not_set_when_no_state_changes() {
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.state_dirty = false;
+
+        // An IRC message from an unknown UID — no pseudoclient state change.
+        state.handle_irc_event(
+            &S2SEvent::MessageReceived {
+                from_uid: "002AAAAAA".into(),
+                target: "#unknown".into(),
+                text: "hello".into(),
+                timestamp: None,
+            },
+            ts + 10,
+        );
+        assert!(
+            !state.state_dirty,
+            "IRC message to unknown channel should not set dirty"
+        );
+    }
+
+    #[test]
+    fn dirty_flag_set_on_idle_timeout_part() {
+        let mut config = test_config();
+        config.pseudoclients.channel_idle_timeout_secs = 100;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Give alice a channel to be parted from.
+        state.pm.ensure_in_channel(42, "#test", ts);
+        state.state_dirty = false;
+
+        // Timeout fires.
+        state.check_idle_timeouts(ts + 200);
+        assert!(state.state_dirty, "idle timeout PART should set dirty flag");
+    }
+
+    #[test]
+    fn dirty_flag_set_on_apply_discord_event_producing_commands() {
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.state_dirty = false;
+
+        // MemberSnapshot introduces a user — produces IRC commands.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        assert!(
+            state.state_dirty,
+            "MemberSnapshot introducing users should set dirty"
         );
     }
 }

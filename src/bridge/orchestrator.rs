@@ -2127,4 +2127,135 @@ mod tests {
             "should emit JoinChannel from seed"
         );
     }
+
+    // --- Dirty flag ---
+
+    #[test]
+    fn dirty_flag_set_on_discord_message_relay() {
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Clear dirty from the introduction above.
+        state.state_dirty = false;
+
+        // Send a message — should set dirty (record_activity updates PM).
+        state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hello".into(),
+                attachments: vec![],
+            },
+            ts + 10,
+        );
+        assert!(state.state_dirty, "message relay should set dirty flag");
+    }
+
+    #[test]
+    fn dirty_flag_not_set_when_no_state_changes() {
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.state_dirty = false;
+
+        // An IRC message from an unknown UID — no pseudoclient state change.
+        state.handle_irc_event(
+            &S2SEvent::MessageReceived {
+                from_uid: "002AAAAAA".into(),
+                target: "#unknown".into(),
+                text: "hello".into(),
+                timestamp: None,
+            },
+            ts + 10,
+        );
+        assert!(
+            !state.state_dirty,
+            "IRC message to unknown channel should not set dirty"
+        );
+    }
+
+    #[test]
+    fn dirty_flag_set_on_idle_timeout_part() {
+        let mut config = test_config();
+        config.pseudoclients.channel_idle_timeout_secs = 100;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        // Give alice a channel to be parted from.
+        state.pm.ensure_in_channel(42, "#test", ts);
+        state.state_dirty = false;
+
+        // Timeout fires.
+        state.check_idle_timeouts(ts + 200);
+        assert!(state.state_dirty, "idle timeout PART should set dirty flag");
+    }
+
+    #[test]
+    fn dirty_flag_set_on_apply_discord_event_producing_commands() {
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+
+        state.state_dirty = false;
+
+        // MemberSnapshot introduces a user — produces IRC commands.
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        assert!(
+            state.state_dirty,
+            "MemberSnapshot introducing users should set dirty"
+        );
+    }
 }

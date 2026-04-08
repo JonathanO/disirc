@@ -5,6 +5,12 @@
 # (with a comment explaining why). This file is for specific mutation
 # patterns within otherwise-testable functions.
 
+# Use the mutants profile (no debug symbols) for faster builds.
+profile = "mutants"
+
+# Skip doctests (none in this project, avoids discovery overhead).
+additional_cargo_test_args = ["--all-targets"]
+
 exclude_re = [
     # protect_code_spans: replacing `t <= s` with `false` makes the code always
     # pick single-backtick mode when both ``` and ` start at the same position.

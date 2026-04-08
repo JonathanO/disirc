@@ -29,6 +29,10 @@ anyhow = "1"
 rand = "0.10.0"
 mutants = "0.0.4"
 
+[profile.mutants]
+inherits = "test"
+debug = "none"
+
 [lints.rust]
 unsafe_code = "forbid"
 

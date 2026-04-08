@@ -2,6 +2,8 @@
 
 A Discord-IRC bridge daemon that connects to UnrealIRCd as a peer server, presenting Discord users as real IRC pseudoclients.
 
+This was almost entirely implemented by Claude, just to see what all the fuss is about. I have attempted to get it to correct it's most ridiculous mistakes, but I make no promises that any of this works (or that the docs match reality.)
+
 ## How it works
 
 disirc links to an UnrealIRCd network using the server-to-server (S2S) protocol. Each online Discord user in a bridged channel gets their own IRC pseudoclient with a real nick, ident, and hostname. From the IRC side, Discord users look and behave like ordinary IRC users.

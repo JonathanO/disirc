@@ -379,6 +379,9 @@ impl BridgeState {
                     now_ts,
                     &resolver,
                 );
+                if !cmds.is_empty() {
+                    self.state_dirty = true;
+                }
                 output.irc_commands.extend(cmds);
             }
 
@@ -408,6 +411,7 @@ impl BridgeState {
                         text,
                     } => {
                         self.pm.record_global_activity(*author_id, now_ts);
+                        self.state_dirty = true;
                         output.irc_commands.push(S2SCommand::SendMessage {
                             from_uid,
                             target: target_uid,
@@ -434,7 +438,9 @@ impl BridgeState {
             now_ts,
             &mut self.seed_state,
         );
-        self.state_dirty = true;
+        if !cmds.is_empty() {
+            self.state_dirty = true;
+        }
         if self.link_phase == LinkPhase::Ready {
             output.irc_commands.extend(cmds);
         }
@@ -506,6 +512,10 @@ impl BridgeState {
                 });
             }
             self.pm.quit(discord_id, "Offline idle timeout");
+        }
+
+        if !output.irc_commands.is_empty() {
+            self.state_dirty = true;
         }
 
         output
@@ -1907,9 +1917,8 @@ mod tests {
         );
         assert_eq!(ps.last_active, 500_000, "last_active should be restored");
         assert_eq!(
-            ps.went_offline_at,
-            Some(600_000),
-            "went_offline_at should be restored"
+            ps.went_offline_at, None,
+            "went_offline_at should NOT be restored for Online users"
         );
         assert_eq!(
             ps.channel_last_active.get("#test"),

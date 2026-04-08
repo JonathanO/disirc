@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use crate::discord::{DiscordEvent, DiscordPresence};
 use crate::irc::{S2SCommand, S2SEvent};
+use crate::persist::PersistedPseudoclient;
 use crate::pseudoclients::PseudoclientManager;
 
 // ---------------------------------------------------------------------------
@@ -215,7 +218,7 @@ pub fn apply_discord_event(
     irc_state: &IrcState,
     event: &DiscordEvent,
     now_ts: u64,
-    seed_state: &mut std::collections::HashMap<u64, crate::persist::PersistedPseudoclient>,
+    seed_state: &mut HashMap<u64, PersistedPseudoclient>,
 ) -> Vec<S2SCommand> {
     match event {
         DiscordEvent::MemberSnapshot {
@@ -500,7 +503,7 @@ fn apply_seed(
     pm: &mut PseudoclientManager,
     irc_state: &IrcState,
     user_id: u64,
-    seed: crate::persist::PersistedPseudoclient,
+    seed: PersistedPseudoclient,
     now_ts: u64,
 ) -> Vec<S2SCommand> {
     let Some(state) = pm.get_by_discord_id_mut(user_id) else {
@@ -510,7 +513,13 @@ fn apply_seed(
     // Restore timestamps from persisted state.
     state.last_active = seed.last_active;
     state.channel_last_active = seed.channel_last_active;
-    state.went_offline_at = seed.went_offline_at;
+    // Only restore went_offline_at if the user is currently offline.
+    // If they're online now, the persisted value is stale and would
+    // poison update_presence's or(Some(now_ts)) on the next offline
+    // transition.
+    if state.presence == crate::discord::DiscordPresence::Offline {
+        state.went_offline_at = seed.went_offline_at;
+    }
 
     // Restore channel memberships and emit JoinChannel commands.
     let uid = state.uid.clone();
@@ -555,14 +564,7 @@ mod tests {
         event: &DiscordEvent,
         now_ts: u64,
     ) -> Vec<S2SCommand> {
-        apply_discord_event(
-            ds,
-            pm,
-            irc,
-            event,
-            now_ts,
-            &mut std::collections::HashMap::new(),
-        )
+        apply_discord_event(ds, pm, irc, event, now_ts, &mut HashMap::new())
     }
 
     fn introduced(uid: &str, nick: &str) -> S2SEvent {

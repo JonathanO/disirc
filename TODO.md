@@ -6,7 +6,7 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-- **State persistence** ([specs/10-state-persistence](specs/10-state-persistence/TODO.md)) — persist pseudoclient channel memberships and timeout tracking across restarts
+- **State persistence** ([specs/10-state-persistence](specs/10-state-persistence/TODO.md)) — persist pseudoclient channel memberships and timeout tracking across restarts (PR #39, pending merge)
 
 ## Spec status
 

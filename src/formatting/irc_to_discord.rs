@@ -145,30 +145,26 @@ pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> St
 
     while let Some((i, ch)) = chars.next() {
         if ch == '@'
-            && let Some(&(nick_start, next_ch)) = chars.peek()
-            && next_ch.is_ascii_alphanumeric()
+            && let Some(&(nick_start, _)) = chars.peek()
+            && text[nick_start..].starts_with(|c: char| c.is_ascii_alphanumeric())
         {
-            // Extract the nick (alphanumeric, underscore, hyphen, brackets, etc.)
-            let mut nick_end = nick_start;
-            for &(j, c) in &chars.clone().collect::<Vec<_>>() {
-                if c.is_ascii_alphanumeric()
-                    || matches!(
-                        c,
-                        '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
-                    )
-                {
-                    nick_end = j + c.len_utf8();
-                } else {
-                    break;
-                }
-            }
+            // Scan valid nick characters directly in the source text.
+            let nick_end = text[nick_start..]
+                .find(|c: char| {
+                    !c.is_ascii_alphanumeric()
+                        && !matches!(
+                            c,
+                            '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
+                        )
+                })
+                .map_or(text.len(), |pos| nick_start + pos);
             let nick = &text[nick_start..nick_end];
             if let Some(user_id) = resolver.resolve_nick(nick) {
                 write!(result, "<@{user_id}>").unwrap();
             } else {
                 result.push_str(&text[i..nick_end]);
             }
-            // Advance chars past the nick.
+            // Advance the iterator past the nick.
             while let Some(&(j, _)) = chars.peek() {
                 if j >= nick_end {
                     break;

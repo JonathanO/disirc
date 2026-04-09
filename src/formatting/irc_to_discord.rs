@@ -527,6 +527,76 @@ mod tests {
         assert_eq!(r, "こんにちは <@111> 世界");
     }
 
+    #[test]
+    fn irc_mention_multiple_in_one_message() {
+        let r = convert_irc_mentions("@alice and @alice again", &StubIrcResolver);
+        assert_eq!(r, "<@111> and <@111> again");
+    }
+
+    #[test]
+    fn irc_mention_adjacent_mentions() {
+        let r = convert_irc_mentions("@alice@alice", &StubIrcResolver);
+        // "alice@alice" is parsed as one nick starting at the first @;
+        // the @ in the middle is a valid nick char? No — @ is not in the
+        // valid set, so the first nick ends at the second @.
+        // First @: nick = "alice", resolved → <@111>
+        // Second @: next char is 'a' (alphanumeric) → nick = "alice", resolved → <@111>
+        assert_eq!(r, "<@111><@111>");
+    }
+
+    #[test]
+    fn irc_mention_at_start_known() {
+        let r = convert_irc_mentions("@alice says hi", &StubIrcResolver);
+        assert_eq!(r, "<@111> says hi");
+    }
+
+    #[test]
+    fn irc_mention_double_at() {
+        let r = convert_irc_mentions("@@alice", &StubIrcResolver);
+        // First @: peek is '@', not alphanumeric → bare @
+        // Second @: peek is 'a', alphanumeric → nick = "alice"
+        assert_eq!(r, "@<@111>");
+    }
+
+    #[test]
+    fn irc_mention_nick_starting_with_digit() {
+        let r = convert_irc_mentions("@123abc end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_empty_text() {
+        let r = convert_irc_mentions("", &MatchAllIrcResolver);
+        assert_eq!(r, "");
+    }
+
+    #[test]
+    fn irc_mention_just_at() {
+        let r = convert_irc_mentions("@", &MatchAllIrcResolver);
+        assert_eq!(r, "@");
+    }
+
+    #[test]
+    fn irc_mention_emoticon_before_mention() {
+        // @_@ emoticon followed by a mention — emoticon preserved, mention resolved
+        let r = convert_irc_mentions("@_@alice says hi", &StubIrcResolver);
+        assert_eq!(r, "@_<@111> says hi");
+    }
+
+    #[test]
+    fn irc_mention_at_followed_by_multibyte() {
+        // é is not ASCII alphanumeric, so @ is treated as bare
+        let r = convert_irc_mentions("@é test", &MatchAllIrcResolver);
+        assert_eq!(r, "@é test");
+    }
+
+    #[test]
+    fn irc_mention_nick_only_special_chars() {
+        // _ is not alphanumeric, so @_ should be bare @ followed by _
+        let r = convert_irc_mentions("@_test end", &MatchAllIrcResolver);
+        assert_eq!(r, "@_test end");
+    }
+
     // -- Ping-fix ------------------------------------------------------------
 
     #[test]
@@ -690,6 +760,38 @@ mod tests {
                         ch as u32
                     );
                 }
+            }
+        }
+
+        /// With a resolve-all resolver, every `@alphanumeric...` in the input
+        /// must be converted to `<@42>` in the output.  No bare `@nick`
+        /// patterns should survive.
+        #[test]
+        fn irc_mentions_all_resolved_when_resolver_matches(
+            parts in proptest::collection::vec(
+                proptest::prop_oneof![
+                    2 => "[a-zA-Z0-9]{1,10}".prop_map(|s| format!("@{s}")),
+                    3 => "[^@<>]{1,15}",
+                    1 => Just("@".to_string()),
+                ],
+                1..=8,
+            )
+        ) {
+            let text = parts.join("");
+            let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
+            // No bare @nick patterns should survive — every @alphanumeric
+            // sequence should have been resolved to <@42>.
+            let mut scan = result.as_str();
+            while let Some(at_pos) = scan.find('@') {
+                let after_at = &scan[at_pos + 1..];
+                if after_at.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+                    // Must be inside a <@42> token.
+                    prop_assert!(
+                        at_pos > 0 && scan.as_bytes()[at_pos - 1] == b'<',
+                        "unresolved @mention in output at pos {at_pos}: {result:?}\n  input: {text:?}"
+                    );
+                }
+                scan = if after_at.is_empty() { "" } else { after_at };
             }
         }
 

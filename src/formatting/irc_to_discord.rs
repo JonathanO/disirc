@@ -152,13 +152,7 @@ pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> St
         {
             // Scan valid nick characters directly in the source text.
             let nick_end = text[nick_start..]
-                .find(|c: char| {
-                    !c.is_ascii_alphanumeric()
-                        && !matches!(
-                            c,
-                            '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
-                        )
-                })
+                .find(|c: char| !crate::pseudoclients::is_valid_nick_char(c))
                 .map_or(text.len(), |pos| nick_start + pos);
             let nick = &text[nick_start..nick_end];
             if let Some(user_id) = resolver.resolve_nick(nick) {
@@ -217,13 +211,7 @@ pub fn convert_nick_colon_mention(text: &str, resolver: &dyn IrcMentionResolver)
     // The nick must be non-empty and contain only valid IRC nick characters.
     // `chars().all()` is vacuously true for empty strings, but an empty nick
     // won't match any resolver, so no separate `is_empty()` guard is needed.
-    if !nick.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(
-                c,
-                '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
-            )
-    }) {
+    if !nick.chars().all(crate::pseudoclients::is_valid_nick_char) {
         return text.to_string();
     }
 

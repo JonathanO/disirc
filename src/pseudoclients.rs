@@ -9,7 +9,8 @@ use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams};
 // ---------------------------------------------------------------------------
 
 /// Characters allowed in IRC nicks per `UnrealIRCd` defaults.
-fn is_valid_nick_char(c: char) -> bool {
+#[must_use]
+pub fn is_valid_nick_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,

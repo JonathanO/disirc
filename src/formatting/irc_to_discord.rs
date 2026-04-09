@@ -142,33 +142,25 @@ pub trait IrcMentionResolver {
 pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.char_indices().peekable();
+    let mut prev_char: Option<char> = None;
 
     while let Some((i, ch)) = chars.next() {
         if ch == '@'
-            && let Some(&(nick_start, next_ch)) = chars.peek()
-            && next_ch.is_ascii_alphanumeric()
+            && is_mention_boundary(prev_char)
+            && let Some(&(nick_start, _)) = chars.peek()
+            && text[nick_start..].starts_with(|c: char| c.is_ascii_alphanumeric())
         {
-            // Extract the nick (alphanumeric, underscore, hyphen, brackets, etc.)
-            let mut nick_end = nick_start;
-            for &(j, c) in &chars.clone().collect::<Vec<_>>() {
-                if c.is_ascii_alphanumeric()
-                    || matches!(
-                        c,
-                        '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
-                    )
-                {
-                    nick_end = j + c.len_utf8();
-                } else {
-                    break;
-                }
-            }
+            // Scan valid nick characters directly in the source text.
+            let nick_end = text[nick_start..]
+                .find(|c: char| !crate::pseudoclients::is_valid_nick_char(c))
+                .map_or(text.len(), |pos| nick_start + pos);
             let nick = &text[nick_start..nick_end];
             if let Some(user_id) = resolver.resolve_nick(nick) {
                 write!(result, "<@{user_id}>").unwrap();
             } else {
                 result.push_str(&text[i..nick_end]);
             }
-            // Advance chars past the nick.
+            // Advance the iterator past the nick.
             while let Some(&(j, _)) = chars.peek() {
                 if j >= nick_end {
                     break;
@@ -180,9 +172,23 @@ pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> St
         } else {
             result.push(ch);
         }
+        prev_char = Some(ch);
     }
 
     result
+}
+
+/// Check if the character before `@` is a valid mention boundary.
+///
+/// Mentions are only recognized at the start of text, after whitespace,
+/// or after opening punctuation — matching the convention used by GitHub,
+/// Twitter, and other systems.  Mid-word `@` (e.g. `email@host`,
+/// `@_@alice`, `@@nick`) does not start a mention.
+fn is_mention_boundary(prev: Option<char>) -> bool {
+    match prev {
+        None => true, // start of text
+        Some(c) => c.is_whitespace() || matches!(c, '(' | '[' | '"' | '\'' | '<' | '{'),
+    }
 }
 
 /// Convert a leading `nick: ` at the start of an IRC message into a Discord
@@ -205,13 +211,7 @@ pub fn convert_nick_colon_mention(text: &str, resolver: &dyn IrcMentionResolver)
     // The nick must be non-empty and contain only valid IRC nick characters.
     // `chars().all()` is vacuously true for empty strings, but an empty nick
     // won't match any resolver, so no separate `is_empty()` guard is needed.
-    if !nick.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(
-                c,
-                '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
-            )
-    }) {
+    if !nick.chars().all(crate::pseudoclients::is_valid_nick_char) {
         return text.to_string();
     }
 
@@ -531,6 +531,85 @@ mod tests {
         assert_eq!(r, "こんにちは <@111> 世界");
     }
 
+    #[test]
+    fn irc_mention_multiple_in_one_message() {
+        let r = convert_irc_mentions("@alice and @alice again", &StubIrcResolver);
+        assert_eq!(r, "<@111> and <@111> again");
+    }
+
+    #[test]
+    fn irc_mention_adjacent_at_not_resolved() {
+        // Second @ is mid-word (preceded by 'e'), not a mention boundary.
+        let r = convert_irc_mentions("@alice@alice", &StubIrcResolver);
+        assert_eq!(r, "<@111>@alice");
+    }
+
+    #[test]
+    fn irc_mention_at_start_known() {
+        let r = convert_irc_mentions("@alice says hi", &StubIrcResolver);
+        assert_eq!(r, "<@111> says hi");
+    }
+
+    #[test]
+    fn irc_mention_double_at_not_resolved() {
+        // Second @ is preceded by @, not a word boundary.
+        let r = convert_irc_mentions("@@alice", &StubIrcResolver);
+        assert_eq!(r, "@@alice");
+    }
+
+    #[test]
+    fn irc_mention_nick_starting_with_digit() {
+        let r = convert_irc_mentions("@123abc end", &MatchAllIrcResolver);
+        assert_eq!(r, "<@42> end");
+    }
+
+    #[test]
+    fn irc_mention_empty_text() {
+        let r = convert_irc_mentions("", &MatchAllIrcResolver);
+        assert_eq!(r, "");
+    }
+
+    #[test]
+    fn irc_mention_just_at() {
+        let r = convert_irc_mentions("@", &MatchAllIrcResolver);
+        assert_eq!(r, "@");
+    }
+
+    #[test]
+    fn irc_mention_emoticon_not_resolved() {
+        // @_@alice — the second @ is mid-word (preceded by _), not a boundary.
+        let r = convert_irc_mentions("@_@alice says hi", &StubIrcResolver);
+        assert_eq!(r, "@_@alice says hi");
+    }
+
+    #[test]
+    fn irc_mention_after_open_paren() {
+        // ( is a valid mention boundary.
+        let r = convert_irc_mentions("(@alice)", &StubIrcResolver);
+        assert_eq!(r, "(<@111>)");
+    }
+
+    #[test]
+    fn irc_mention_space_separated_multiple() {
+        // Space is a word boundary — both should resolve.
+        let r = convert_irc_mentions("@alice @alice", &StubIrcResolver);
+        assert_eq!(r, "<@111> <@111>");
+    }
+
+    #[test]
+    fn irc_mention_at_followed_by_multibyte() {
+        // é is not ASCII alphanumeric, so @ is treated as bare
+        let r = convert_irc_mentions("@é test", &MatchAllIrcResolver);
+        assert_eq!(r, "@é test");
+    }
+
+    #[test]
+    fn irc_mention_nick_only_special_chars() {
+        // _ is not alphanumeric, so @_ should be bare @ followed by _
+        let r = convert_irc_mentions("@_test end", &MatchAllIrcResolver);
+        assert_eq!(r, "@_test end");
+    }
+
     // -- Ping-fix ------------------------------------------------------------
 
     #[test]
@@ -695,6 +774,35 @@ mod tests {
                     );
                 }
             }
+        }
+
+        /// With a resolve-all resolver, `@nick` at word boundaries must be
+        /// converted to `<@42>`.  Mid-word `@` must pass through unchanged.
+        #[test]
+        fn irc_mentions_boundary_resolved_when_resolver_matches(
+            parts in proptest::collection::vec(
+                proptest::prop_oneof![
+                    // Space-separated @mention (word boundary)
+                    2 => "[a-zA-Z0-9]{1,10}".prop_map(|s| format!(" @{s}")),
+                    // Plain text without @ or angle brackets
+                    3 => "[^@<>]{1,15}",
+                    // Bare @ that won't start a mention
+                    1 => Just(" @ ".to_string()),
+                ],
+                1..=8,
+            )
+        ) {
+            let text = parts.join("").trim().to_string();
+            if text.is_empty() { return Ok(()); }
+            let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
+            // The output must be valid — no unclosed <@ tokens.
+            let open_count = result.matches("<@").count();
+            let close_after_mention = result.matches("<@42>").count();
+            prop_assert!(
+                open_count == close_after_mention,
+                "mismatched <@...> tokens in output: {:?}\n  input: {:?}",
+                result, text
+            );
         }
 
         #[test]

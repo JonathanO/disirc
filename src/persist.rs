@@ -79,7 +79,13 @@ pub fn load_state(path: &Path) -> Result<PersistedState, PersistError> {
 pub fn save_state(path: &Path, state: &PersistedState) -> Result<(), PersistError> {
     let json = serde_json::to_string_pretty(state)?;
 
-    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "state path has no filename",
+        )
+    })?;
+    let mut tmp_name = file_name.to_os_string();
     tmp_name.push(".tmp");
     let tmp_path = path.with_file_name(tmp_name);
 

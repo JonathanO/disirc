@@ -102,7 +102,8 @@ pub async fn run_connection(
         }
         // Drop any S2SCommands queued while the link was down — the
         // processing task will re-introduce its pseudoclients on the next LinkUp.
-        while cmd_rx.try_recv().is_ok() {}
+        let dropped = std::iter::from_fn(|| cmd_rx.try_recv().ok()).count();
+        tracing::debug!(dropped, "Discarded queued commands after link loss");
 
         let delay = backoff_delay(attempt);
         tracing::info!(

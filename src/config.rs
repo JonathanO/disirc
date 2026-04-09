@@ -22,8 +22,8 @@ pub enum ConfigError {
 
 /// Load and deserialize the config file at `path`.
 pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
-    let contents = std::fs::read_to_string(path.as_ref()).map_err(ConfigError::Io)?;
-    toml::from_str(&contents).map_err(ConfigError::Parse)
+    let contents = std::fs::read_to_string(path.as_ref())?;
+    Ok(toml::from_str(&contents)?)
 }
 
 /// Load, deserialize, and validate the config file at `path`.

@@ -9,7 +9,8 @@ use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams};
 // ---------------------------------------------------------------------------
 
 /// Characters allowed in IRC nicks per `UnrealIRCd` defaults.
-fn is_valid_nick_char(c: char) -> bool {
+#[must_use]
+pub fn is_valid_nick_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
@@ -338,7 +339,7 @@ impl PseudoclientManager {
             presence,
             needs_reintroduce: false,
             last_active: timestamp,
-            channel_last_active: std::collections::HashMap::new(),
+            channel_last_active: HashMap::new(),
             went_offline_at: (presence == DiscordPresence::Offline).then_some(timestamp),
         };
 
@@ -348,8 +349,6 @@ impl PseudoclientManager {
         self.uid_to_discord.insert(uid, discord_user_id);
         self.by_discord_id.insert(discord_user_id, state);
 
-        // Return a reference to the just-inserted state.
-        let _ = timestamp; // preserved for API compatibility; callers use it for S2SCommand timestamps
         self.by_discord_id.get(&discord_user_id)
     }
 
@@ -632,12 +631,12 @@ impl PseudoclientManager {
         // the new one.  This avoids a remove-then-maybe-restore pattern.
         self.known_nicks.insert(&new_nick);
 
+        // Update stored state.  The entry is guaranteed to exist because
+        // we checked it at the top and haven't removed it.
+        let state = self.by_discord_id.get_mut(&discord_user_id)?;
+        state.username = new_username.to_string();
+
         if new_nick == old_nick {
-            // Sanitised nick didn't change — just update the username.
-            self.by_discord_id
-                .get_mut(&discord_user_id)
-                .expect("just looked up")
-                .username = new_username.to_string();
             return None;
         }
 
@@ -645,13 +644,7 @@ impl PseudoclientManager {
         self.nick_to_discord.remove(&old_nick.to_ascii_lowercase());
         self.nick_to_discord
             .insert(new_nick.to_ascii_lowercase(), discord_user_id);
-
-        let state = self
-            .by_discord_id
-            .get_mut(&discord_user_id)
-            .expect("just looked up");
         state.nick.clone_from(&new_nick);
-        state.username = new_username.to_string();
 
         Some((old_nick, new_nick))
     }

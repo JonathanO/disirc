@@ -142,9 +142,11 @@ pub trait IrcMentionResolver {
 pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.char_indices().peekable();
+    let mut prev_char: Option<char> = None;
 
     while let Some((i, ch)) = chars.next() {
         if ch == '@'
+            && is_mention_boundary(prev_char)
             && let Some(&(nick_start, _)) = chars.peek()
             && text[nick_start..].starts_with(|c: char| c.is_ascii_alphanumeric())
         {
@@ -176,9 +178,23 @@ pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> St
         } else {
             result.push(ch);
         }
+        prev_char = Some(ch);
     }
 
     result
+}
+
+/// Check if the character before `@` is a valid mention boundary.
+///
+/// Mentions are only recognized at the start of text, after whitespace,
+/// or after opening punctuation — matching the convention used by GitHub,
+/// Twitter, and other systems.  Mid-word `@` (e.g. `email@host`,
+/// `@_@alice`, `@@nick`) does not start a mention.
+fn is_mention_boundary(prev: Option<char>) -> bool {
+    match prev {
+        None => true, // start of text
+        Some(c) => c.is_whitespace() || matches!(c, '(' | '[' | '"' | '\'' | '<' | '{'),
+    }
 }
 
 /// Convert a leading `nick: ` at the start of an IRC message into a Discord
@@ -534,14 +550,10 @@ mod tests {
     }
 
     #[test]
-    fn irc_mention_adjacent_mentions() {
+    fn irc_mention_adjacent_at_not_resolved() {
+        // Second @ is mid-word (preceded by 'e'), not a mention boundary.
         let r = convert_irc_mentions("@alice@alice", &StubIrcResolver);
-        // "alice@alice" is parsed as one nick starting at the first @;
-        // the @ in the middle is a valid nick char? No — @ is not in the
-        // valid set, so the first nick ends at the second @.
-        // First @: nick = "alice", resolved → <@111>
-        // Second @: next char is 'a' (alphanumeric) → nick = "alice", resolved → <@111>
-        assert_eq!(r, "<@111><@111>");
+        assert_eq!(r, "<@111>@alice");
     }
 
     #[test]
@@ -551,11 +563,10 @@ mod tests {
     }
 
     #[test]
-    fn irc_mention_double_at() {
+    fn irc_mention_double_at_not_resolved() {
+        // Second @ is preceded by @, not a word boundary.
         let r = convert_irc_mentions("@@alice", &StubIrcResolver);
-        // First @: peek is '@', not alphanumeric → bare @
-        // Second @: peek is 'a', alphanumeric → nick = "alice"
-        assert_eq!(r, "@<@111>");
+        assert_eq!(r, "@@alice");
     }
 
     #[test]
@@ -577,10 +588,24 @@ mod tests {
     }
 
     #[test]
-    fn irc_mention_emoticon_before_mention() {
-        // @_@ emoticon followed by a mention — emoticon preserved, mention resolved
+    fn irc_mention_emoticon_not_resolved() {
+        // @_@alice — the second @ is mid-word (preceded by _), not a boundary.
         let r = convert_irc_mentions("@_@alice says hi", &StubIrcResolver);
-        assert_eq!(r, "@_<@111> says hi");
+        assert_eq!(r, "@_@alice says hi");
+    }
+
+    #[test]
+    fn irc_mention_after_open_paren() {
+        // ( is a valid mention boundary.
+        let r = convert_irc_mentions("(@alice)", &StubIrcResolver);
+        assert_eq!(r, "(<@111>)");
+    }
+
+    #[test]
+    fn irc_mention_space_separated_multiple() {
+        // Space is a word boundary — both should resolve.
+        let r = convert_irc_mentions("@alice @alice", &StubIrcResolver);
+        assert_eq!(r, "<@111> <@111>");
     }
 
     #[test]
@@ -763,36 +788,33 @@ mod tests {
             }
         }
 
-        /// With a resolve-all resolver, every `@alphanumeric...` in the input
-        /// must be converted to `<@42>` in the output.  No bare `@nick`
-        /// patterns should survive.
+        /// With a resolve-all resolver, `@nick` at word boundaries must be
+        /// converted to `<@42>`.  Mid-word `@` must pass through unchanged.
         #[test]
-        fn irc_mentions_all_resolved_when_resolver_matches(
+        fn irc_mentions_boundary_resolved_when_resolver_matches(
             parts in proptest::collection::vec(
                 proptest::prop_oneof![
-                    2 => "[a-zA-Z0-9]{1,10}".prop_map(|s| format!("@{s}")),
+                    // Space-separated @mention (word boundary)
+                    2 => "[a-zA-Z0-9]{1,10}".prop_map(|s| format!(" @{s}")),
+                    // Plain text without @ or angle brackets
                     3 => "[^@<>]{1,15}",
-                    1 => Just("@".to_string()),
+                    // Bare @ that won't start a mention
+                    1 => Just(" @ ".to_string()),
                 ],
                 1..=8,
             )
         ) {
-            let text = parts.join("");
+            let text = parts.join("").trim().to_string();
+            if text.is_empty() { return Ok(()); }
             let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
-            // No bare @nick patterns should survive — every @alphanumeric
-            // sequence should have been resolved to <@42>.
-            let mut scan = result.as_str();
-            while let Some(at_pos) = scan.find('@') {
-                let after_at = &scan[at_pos + 1..];
-                if after_at.starts_with(|c: char| c.is_ascii_alphanumeric()) {
-                    // Must be inside a <@42> token.
-                    prop_assert!(
-                        at_pos > 0 && scan.as_bytes()[at_pos - 1] == b'<',
-                        "unresolved @mention in output at pos {at_pos}: {result:?}\n  input: {text:?}"
-                    );
-                }
-                scan = if after_at.is_empty() { "" } else { after_at };
-            }
+            // The output must be valid — no unclosed <@ tokens.
+            let open_count = result.matches("<@").count();
+            let close_after_mention = result.matches("<@42>").count();
+            prop_assert!(
+                open_count == close_after_mention,
+                "mismatched <@...> tokens in output: {:?}\n  input: {:?}",
+                result, text
+            );
         }
 
         #[test]

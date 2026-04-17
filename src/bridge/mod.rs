@@ -107,8 +107,7 @@ fn unix_now() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Main bridge processing loop.
@@ -132,7 +131,7 @@ pub async fn run_bridge(
     let seed_state = load_seed_state(config);
     let mut bridge = BridgeState::new(config, seed_state);
     let mut control_alive = true;
-    let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(60));
+    let mut idle_tick = tokio::time::interval(std::time::Duration::from_mins(1));
 
     loop {
         tokio::select! {

@@ -7,6 +7,11 @@ ignore = [
     # rustls-webpki 0.102.8 is pinned by serenity's transitive dep tokio-tungstenite 0.21 → rustls 0.22.
     # We cannot upgrade without a serenity release. Limited impact (requires compromised CA).
     { id = "RUSTSEC-2026-0049", reason = "transitive dep pinned by serenity; awaiting upstream update" },
+    # rustls-webpki 0.102.8 name constraint vulnerabilities — same serenity dep chain as above.
+    # Fix (>=0.103.12) requires a major version bump; 0.102.x is EOL.
+    # Both require certificate misissuance + compromised CA to exploit.
+    { id = "RUSTSEC-2026-0098", reason = "transitive dep pinned by serenity; 0.102.x is EOL, awaiting upstream update" },
+    { id = "RUSTSEC-2026-0099", reason = "transitive dep pinned by serenity; 0.102.x is EOL, awaiting upstream update" },
     # rustls-pemfile is a dev-only transitive dep (testcontainers → bollard → rustls-pemfile).
     # Advisory is "unmaintained" only — no CVE. Users are encouraged to migrate to rustls-pki-types;
     # we cannot do so until testcontainers or bollard upgrades their dependency.

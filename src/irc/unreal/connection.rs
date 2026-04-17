@@ -25,10 +25,10 @@ use super::translation::{translate_inbound, translate_outbound};
 const PING_INTERVAL: Duration = Duration::from_secs(90);
 
 /// How long to wait for a PONG before declaring the link dead.
-const PONG_TIMEOUT: Duration = Duration::from_secs(60);
+const PONG_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// A "never-fire" duration used to arm timers that shouldn't trigger yet.
-const FAR_FUTURE: Duration = Duration::from_secs(86_400);
+const FAR_FUTURE: Duration = Duration::from_hours(24);
 
 // ── Internal types ─────────────────────────────────────────────────────────
 

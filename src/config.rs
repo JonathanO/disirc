@@ -176,8 +176,12 @@ impl Config {
     /// Validate all fields according to the rules in `specs/01-configuration.md`.
     /// Returns `Err(ConfigError::Validation(...))` on the first violation found.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        require_non_empty("discord.token", &self.discord.token)?;
+        require_non_empty("irc.uplink", &self.irc.uplink)?;
+        require_non_empty("irc.link_password", &self.irc.link_password)?;
         validate_sid(&self.irc.sid)?;
         validate_link_name(&self.irc.link_name)?;
+        validate_ident(&self.pseudoclients.ident)?;
 
         if self.bridges.is_empty() {
             return Err(ConfigError::Validation(
@@ -195,6 +199,46 @@ impl Config {
 
         validate_no_duplicates(&self.bridges)
     }
+}
+
+/// Reject empty / whitespace-only strings for required credential fields.
+fn require_non_empty(field: &str, value: &str) -> Result<(), ConfigError> {
+    if value.trim().is_empty() {
+        return Err(ConfigError::Validation(format!("{field} cannot be empty")));
+    }
+    Ok(())
+}
+
+/// IRC ident must be 1–10 chars of `[A-Za-z0-9._-]`.  A leading `~` is
+/// reserved by `UnrealIRCd` for idents that failed identd lookup; we send
+/// a real ident so we must not start with `~`.
+fn validate_ident(ident: &str) -> Result<(), ConfigError> {
+    const MAX_LEN: usize = 10; // UnrealIRCd USERLEN
+
+    if ident.is_empty() {
+        return Err(ConfigError::Validation(
+            "pseudoclients.ident cannot be empty".into(),
+        ));
+    }
+    if ident.len() > MAX_LEN {
+        return Err(ConfigError::Validation(format!(
+            "pseudoclients.ident {ident:?} is too long (max {MAX_LEN} chars)"
+        )));
+    }
+    if ident.starts_with('~') {
+        return Err(ConfigError::Validation(format!(
+            "pseudoclients.ident {ident:?} must not start with '~' (reserved for unverified idents)"
+        )));
+    }
+    if !ident
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(ConfigError::Validation(format!(
+            "pseudoclients.ident {ident:?} contains invalid characters: only [A-Za-z0-9._-] allowed"
+        )));
+    }
+    Ok(())
 }
 
 /// SID must match `[0-9][A-Z0-9]{2}`.
@@ -659,6 +703,79 @@ mod tests {
             let mut cfg = valid_config();
             cfg.irc.sid = (*sid).to_string();
             assert!(cfg.validate().is_err(), "expected {sid} to be invalid");
+        }
+    }
+
+    // Credential non-emptiness
+
+    #[test]
+    fn empty_discord_token_rejected() {
+        let mut cfg = valid_config();
+        cfg.discord.token = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(ref m) if m.contains("discord.token")),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_discord_token_rejected() {
+        let mut cfg = valid_config();
+        cfg.discord.token = "   ".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn empty_irc_uplink_rejected() {
+        let mut cfg = valid_config();
+        cfg.irc.uplink = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(ref m) if m.contains("irc.uplink")),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_link_password_rejected() {
+        let mut cfg = valid_config();
+        cfg.irc.link_password = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(ref m) if m.contains("link_password")),
+            "got: {err}"
+        );
+    }
+
+    // pseudoclients.ident
+
+    #[test]
+    fn ident_valid_examples() {
+        for ident in &["discord", "bot", "d", "a1b2c3d4e5", "a.b-c_d"] {
+            let mut cfg = valid_config();
+            cfg.pseudoclients.ident = (*ident).to_string();
+            assert!(
+                cfg.validate().is_ok(),
+                "expected {ident:?} to be valid: {:?}",
+                cfg.validate()
+            );
+        }
+    }
+
+    #[test]
+    fn ident_invalid_examples() {
+        for ident in &[
+            "",            // empty
+            "a1b2c3d4e5f", // 11 chars, too long
+            "~anon",       // leading tilde
+            "has space",   // space
+            "has@at",      // @ sign
+            "newline\n",   // control
+        ] {
+            let mut cfg = valid_config();
+            cfg.pseudoclients.ident = (*ident).to_string();
+            assert!(cfg.validate().is_err(), "expected {ident:?} to be invalid");
         }
     }
 

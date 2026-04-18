@@ -918,7 +918,42 @@ mod tests {
     #[test]
     fn reload_returns_error_for_invalid_file() {
         let result = reload("nonexistent.toml", &valid_config());
-        assert!(result.is_err());
+        assert!(matches!(result, Err(ConfigError::Io(_))));
+    }
+
+    #[test]
+    fn reload_returns_error_for_malformed_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "this is [ not valid = toml").unwrap();
+
+        let result = reload(&path, &valid_config());
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
+    }
+
+    #[test]
+    fn reload_returns_error_for_invalid_semantics() {
+        // Valid TOML but fails semantic validation (bad SID format).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad-sid.toml");
+        let toml = r##"
+            [discord]
+            token = "Bot secret"
+
+            [irc]
+            uplink = "localhost"
+            link_name = "bridge.test"
+            link_password = "pw"
+            sid = "xxx"
+
+            [[bridge]]
+            discord_channel_id = "111"
+            irc_channel = "#test"
+        "##;
+        std::fs::write(&path, toml).unwrap();
+
+        let result = reload(&path, &valid_config());
+        assert!(matches!(result, Err(ConfigError::Validation(_))));
     }
 
     // -----------------------------------------------------------------------

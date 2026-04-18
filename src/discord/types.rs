@@ -182,52 +182,22 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    // --- DiscordPresence::away_message ---
-
-    // --- is_non_offline ---
-
     #[test]
-    fn offline_is_not_non_offline() {
+    fn is_non_offline_covers_all_variants() {
         assert!(!DiscordPresence::Offline.is_non_offline());
-    }
-
-    #[test]
-    fn online_is_non_offline() {
         assert!(DiscordPresence::Online.is_non_offline());
-    }
-
-    #[test]
-    fn idle_is_non_offline() {
         assert!(DiscordPresence::Idle.is_non_offline());
-    }
-
-    #[test]
-    fn dnd_is_non_offline() {
         assert!(DiscordPresence::DoNotDisturb.is_non_offline());
     }
 
-    // --- away_message ---
-
     #[test]
-    fn online_is_not_away() {
+    fn away_message_for_all_variants() {
         assert_eq!(DiscordPresence::Online.away_message(), None);
-    }
-
-    #[test]
-    fn idle_away_message() {
         assert_eq!(DiscordPresence::Idle.away_message(), Some("idle"));
-    }
-
-    #[test]
-    fn dnd_away_message() {
         assert_eq!(
             DiscordPresence::DoNotDisturb.away_message(),
             Some("do not disturb")
         );
-    }
-
-    #[test]
-    fn offline_away_message() {
         assert_eq!(DiscordPresence::Offline.away_message(), Some("offline"));
     }
 

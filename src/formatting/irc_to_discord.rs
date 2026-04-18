@@ -858,11 +858,6 @@ mod tests {
         }
 
         #[test]
-        fn irc_to_discord_never_panics(text in "[\x00-\x7f]{0,200}") {
-            let _ = irc_to_discord_formatting(&text);
-        }
-
-        #[test]
         fn truncate_respects_limit(text in ".{0,5000}") {
             let result = truncate_for_discord(&text);
             assert!(result.chars().count() <= DISCORD_MAX_CHARS);

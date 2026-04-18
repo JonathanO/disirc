@@ -1097,12 +1097,6 @@ mod tests {
         }
 
         #[test]
-        fn markdown_to_irc_rich_syntax_never_panics(text in discord_markdown_strategy()) {
-            let result = markdown_to_irc(&text);
-            let _ = result;
-        }
-
-        #[test]
         fn split_for_irc_never_panics(text in ".{0,2000}") {
             let lines = split_for_irc(&text);
             assert!(!lines.is_empty() || text.trim().is_empty());

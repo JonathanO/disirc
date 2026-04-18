@@ -2637,4 +2637,101 @@ mod tests {
             "MemberSnapshot introducing users should set dirty"
         );
     }
+
+    // --- DM bridging disabled ---
+
+    #[test]
+    fn irc_privmsg_to_bot_dropped_when_dm_bridging_disabled() {
+        let mut config = test_config();
+        config.pseudoclients.dm_bridging = false;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 42,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        // Register an external IRC user so the from_uid resolves.
+        state.handle_irc_event(
+            &S2SEvent::UserIntroduced {
+                uid: "002AAAAAA".into(),
+                nick: "external".into(),
+                ident: "~u".into(),
+                host: "host".into(),
+                server_sid: "002".into(),
+                realname: "External".into(),
+            },
+            ts,
+        );
+
+        let bot_uid = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("bot should be introduced")
+            .uid
+            .clone();
+
+        // IRC user PRIVMSGs the bot pseudoclient directly.
+        let out = state.handle_irc_event(
+            &S2SEvent::MessageReceived {
+                from_uid: "002AAAAAA".into(),
+                target: bot_uid,
+                text: "hi bot".into(),
+                timestamp: None,
+            },
+            ts + 10,
+        );
+
+        assert!(
+            out.discord_commands.is_empty(),
+            "DM to bot should be dropped when dm_bridging=false; got: {:?}",
+            out.discord_commands
+        );
+    }
+
+    #[test]
+    fn discord_dm_dropped_when_dm_bridging_disabled() {
+        let mut config = test_config();
+        config.pseudoclients.dm_bridging = false;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        let out = state.handle_discord_event(
+            &DiscordEvent::DmReceived {
+                author_id: 42,
+                author_name: "alice".into(),
+                content: "hello bridge".into(),
+                referenced_content: None,
+            },
+            ts,
+        );
+
+        assert!(
+            out.irc_commands.is_empty(),
+            "Discord DM should be dropped when dm_bridging=false; got: {:?}",
+            out.irc_commands
+        );
+        assert!(
+            out.discord_commands.is_empty(),
+            "no error reply when dm_bridging=false; got: {:?}",
+            out.discord_commands
+        );
+    }
 }

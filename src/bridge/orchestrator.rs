@@ -301,6 +301,21 @@ impl BridgeState {
             .retain(|_, ts| now_ts.saturating_sub(*ts) < KILL_COOLDOWN_SECS);
     }
 
+    /// Drop seed entries whose `last_active` is older than `offline_timeout`.
+    /// Mirrors the offline-pseudoclient QUIT rule: a user who was idle past
+    /// the threshold on the old bridge instance would have been removed, so
+    /// their seed has no use now.
+    ///
+    /// Does nothing when the offline timeout is disabled (0) — matches the
+    /// live-pseudoclient semantics.
+    fn prune_stale_seeds(&mut self, now_ts: u64, offline_timeout: u64) {
+        if offline_timeout == 0 {
+            return;
+        }
+        self.seed_state
+            .retain(|_, seed| now_ts.saturating_sub(seed.last_active) < offline_timeout);
+    }
+
     /// Remove a killed pseudoclient and reintroduce with a fresh UID and
     /// re-resolved nick.  Returns the IRC commands for the new introduction.
     fn reintroduce_killed(&mut self, discord_id: u64, now_ts: u64) -> Vec<S2SCommand> {
@@ -465,14 +480,19 @@ impl BridgeState {
 
     /// Check for idle pseudoclients and emit PART/QUIT commands.
     pub fn check_idle_timeouts(&mut self, now_ts: u64) -> HandlerOutput {
+        let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
+
         // Opportunistic GC: stale kill cooldowns are only pruned when a new
         // KILL arrives.  Piggyback on the idle tick so long-lived entries
         // don't leak for users who were killed once and never again.
         self.prune_kill_cooldowns(now_ts);
+        // Also drop seed entries whose users never showed up in any event.
+        // A seed is equivalent to a live pseudoclient that has been offline
+        // since `last_active`, so apply the same timeout.
+        self.prune_stale_seeds(now_ts, offline_timeout);
 
         let mut output = HandlerOutput::default();
         let channel_timeout = self.config.pseudoclients.channel_idle_timeout_secs;
-        let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
         let bot_id = self.bot_user_id;
 
         // Collect actions first to avoid borrow issues.
@@ -1450,6 +1470,74 @@ mod tests {
         assert!(
             !state.kill_cooldowns.contains_key(&8001),
             "expired cooldown must be pruned on idle tick"
+        );
+    }
+
+    #[test]
+    fn idle_tick_prunes_stale_seed_entries() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 200;
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1_000_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        seed.insert(
+            99,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 2_000_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+
+        let mut state = BridgeState::new(&config, seed);
+
+        // Tick at a time past user 42's last_active + offline_timeout but
+        // within user 99's window.
+        state.check_idle_timeouts(2_000_100);
+
+        assert!(
+            !state.seed_state.contains_key(&42),
+            "stale seed must be pruned"
+        );
+        assert!(
+            state.seed_state.contains_key(&99),
+            "fresh seed must survive"
+        );
+    }
+
+    #[test]
+    fn idle_tick_does_not_prune_seeds_when_offline_timeout_disabled() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 0; // disabled
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1, // extremely old
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        let mut state = BridgeState::new(&config, seed);
+
+        state.check_idle_timeouts(1_000_000_000);
+
+        assert!(
+            state.seed_state.contains_key(&42),
+            "seed pruning must mirror offline timeout disable"
         );
     }
 

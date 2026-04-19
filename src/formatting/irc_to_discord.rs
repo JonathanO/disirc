@@ -256,9 +256,16 @@ const DISCORD_MAX_CHARS: usize = 2000;
 /// Truncation suffix.
 const TRUNCATION_SUFFIX: &str = "\u{2026} [truncated]";
 
-/// Truncate a message to Discord's 2000 character limit at a word boundary.
+/// Truncate a message to Discord's 2000 character limit at a word boundary,
+/// never splitting an extended grapheme cluster.
+///
+/// Discord counts codepoints for the 2000-char limit, so a family emoji
+/// (7 codepoints, 1 grapheme) spends 7 of the budget — but our cut point
+/// must still land on a grapheme boundary to avoid rendering a half-emoji.
 #[must_use]
 pub fn truncate_for_discord(text: &str) -> Cow<'_, str> {
+    use unicode_segmentation::UnicodeSegmentation;
+
     if text.chars().count() <= DISCORD_MAX_CHARS {
         return Cow::Borrowed(text);
     }
@@ -266,15 +273,22 @@ pub fn truncate_for_discord(text: &str) -> Cow<'_, str> {
     let suffix_len = TRUNCATION_SUFFIX.chars().count();
     let target = DISCORD_MAX_CHARS - suffix_len;
 
-    // Find the byte offset of the `target`-th char.
-    // We know text has > DISCORD_MAX_CHARS chars and target < DISCORD_MAX_CHARS,
-    // so the loop always breaks.
-    let byte_pos = text
-        .char_indices()
-        .nth(target)
-        .map_or(text.len(), |(i, _)| i);
+    // Walk graphemes accumulating codepoint cost; stop at the last grapheme
+    // boundary that keeps the total codepoint count ≤ `target`.
+    let mut cp_count = 0usize;
+    let mut byte_pos = 0usize;
+    for (offset, g) in text.grapheme_indices(true) {
+        let g_cp = g.chars().count();
+        if cp_count + g_cp > target {
+            break;
+        }
+        cp_count += g_cp;
+        byte_pos = offset + g.len();
+    }
 
-    // Try to split at the last space before the limit
+    // Try to split at the last space before the grapheme cutoff (ASCII
+    // space is always its own grapheme, so byte_pos aligns with a
+    // grapheme boundary either way).
     let truncated = &text[..byte_pos];
     let split_at = truncated.rfind(' ').unwrap_or(byte_pos);
 
@@ -861,6 +875,38 @@ mod tests {
         fn truncate_respects_limit(text in ".{0,5000}") {
             let result = truncate_for_discord(&text);
             assert!(result.chars().count() <= DISCORD_MAX_CHARS);
+        }
+
+        /// Truncation must not split an extended grapheme cluster.  Use
+        /// a no-spaces adversarial strategy so truncation can't fall back
+        /// to a word boundary — the cut must actually land in the
+        /// grapheme-heavy region.
+        #[test]
+        fn truncate_preserves_grapheme_clusters(
+            text in crate::formatting::test_support::adversarial_unicode_no_spaces(600)
+        ) {
+            use unicode_segmentation::UnicodeSegmentation;
+            let result = truncate_for_discord(&text);
+            // Every grapheme cluster in the output must be a complete
+            // grapheme cluster in the original input.  In practice we
+            // check that the set of graphemes in the output is a prefix-
+            // subset of the input's graphemes (ignoring the trailing
+            // truncation suffix, which we strip if present).
+            let input_graphemes: Vec<&str> = text.graphemes(true).collect();
+            let output = result.as_ref();
+            // Strip the truncation suffix before comparison, if present.
+            let body = output
+                .strip_suffix("\u{2026} [truncated]")
+                .unwrap_or(output);
+            let output_graphemes: Vec<&str> = body.graphemes(true).collect();
+            for (i, g) in output_graphemes.iter().enumerate() {
+                prop_assert_eq!(
+                    *g, input_graphemes[i],
+                    "grapheme cluster at output position {} was split; \
+                     input: {:?}, output: {:?}",
+                    i, text, body
+                );
+            }
         }
 
         #[test]

@@ -11,6 +11,9 @@
 mod discord_to_irc;
 mod irc_to_discord;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 // ---------------------------------------------------------------------------
 // Shared IRC control characters
 // ---------------------------------------------------------------------------

@@ -313,24 +313,16 @@ fn validate_irc_channel(channel: &str) -> Result<(), ConfigError> {
 /// Webhook URL must be HTTPS with host `discord.com` or `discordapp.com`
 /// and path starting with `/api/webhooks/`.
 fn validate_webhook_url(url: &str) -> Result<(), ConfigError> {
-    let err = || {
-        ConfigError::Validation(format!(
-            "bridge webhook_url {url:?} is invalid: must be https://discord.com/api/webhooks/<id>/<token> \
-             or https://discordapp.com/api/webhooks/<id>/<token>"
-        ))
-    };
-
-    let rest = url.strip_prefix("https://").ok_or_else(err)?;
-    // Split host from path at the first '/'.
-    let (host, path) = rest.split_once('/').ok_or_else(err)?;
-    if host != "discord.com" && host != "discordapp.com" {
-        return Err(err());
+    // Delegate to the runtime parser so the validator and the send path
+    // stay in sync on accepted domains and URL shape.
+    if crate::discord::webhook_id_from_url(url).is_some() {
+        Ok(())
+    } else {
+        Err(ConfigError::Validation(format!(
+            "bridge webhook_url {url:?} is invalid: must be \
+             https://<discord-host>/api/webhooks/<id>/<token>"
+        )))
     }
-    // Path must start with "api/webhooks/" (the leading '/' was consumed by split_once).
-    if !path.starts_with("api/webhooks/") {
-        return Err(err());
-    }
-    Ok(())
 }
 
 /// No two bridge entries may share a `discord_channel_id` or `irc_channel`.
@@ -852,6 +844,8 @@ mod tests {
         for url in &[
             "https://discord.com/api/webhooks/111/aaa",
             "https://discordapp.com/api/webhooks/222/bbb",
+            "https://canary.discord.com/api/webhooks/333/ccc",
+            "https://ptb.discord.com/api/webhooks/444/ddd",
         ] {
             let mut cfg = valid_config();
             cfg.bridges[0].webhook_url = Some((*url).to_string());
@@ -871,6 +865,10 @@ mod tests {
             "https://discord.com",                     // no path at all
             "https://discord.com/other/path",          // wrong path
             "https://discordapp.com/channels/111/222", // valid host, wrong path
+            "https://discord.com/api/webhooks/",       // no id or token
+            "https://discord.com/api/webhooks/111",    // id but no token
+            "https://discord.com/api/webhooks/111/",   // id but empty token
+            "https://discord.com/api/webhooks/abc/tok", // non-numeric id
         ] {
             let mut cfg = valid_config();
             cfg.bridges[0].webhook_url = Some((*url).to_string());

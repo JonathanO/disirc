@@ -160,9 +160,10 @@ pub enum DiscordCommand {
 
 /// Extract the numeric webhook ID from a Discord webhook URL.
 ///
-/// Supports `discord.com`, `canary.discord.com`, and `ptb.discord.com`.
-/// Returns `None` if the URL is not a recognised webhook URL or the ID cannot
-/// be parsed as a `u64`.
+/// Supports `discord.com`, `canary.discord.com`, `ptb.discord.com`, and the
+/// legacy `discordapp.com` domain.  The URL must have the form
+/// `https://<host>/api/webhooks/<id>/<token>` where `<id>` is a u64 and
+/// `<token>` is non-empty.  Returns `None` otherwise.
 ///
 /// The extracted ID is equal to the `author.id` field on `MESSAGE_CREATE`
 /// events originating from that webhook, making it safe to store in the
@@ -172,8 +173,12 @@ pub fn webhook_id_from_url(url: &str) -> Option<u64> {
     let path = url
         .strip_prefix("https://discord.com/api/webhooks/")
         .or_else(|| url.strip_prefix("https://canary.discord.com/api/webhooks/"))
-        .or_else(|| url.strip_prefix("https://ptb.discord.com/api/webhooks/"))?;
-    let id_str = path.split('/').next()?;
+        .or_else(|| url.strip_prefix("https://ptb.discord.com/api/webhooks/"))
+        .or_else(|| url.strip_prefix("https://discordapp.com/api/webhooks/"))?;
+    let (id_str, token) = path.split_once('/')?;
+    if token.is_empty() {
+        return None;
+    }
     id_str.parse().ok()
 }
 
@@ -244,11 +249,36 @@ mod tests {
     }
 
     #[test]
-    fn webhook_id_url_without_token_segment() {
-        // URL with only the id and no trailing /token is still valid
+    fn webhook_id_url_without_token_segment_rejected() {
+        // A Discord webhook URL is only complete with <id>/<token>; a URL
+        // with just the id is unusable for sending.
         assert_eq!(
             webhook_id_from_url("https://discord.com/api/webhooks/123456789012345678"),
-            Some(123_456_789_012_345_678_u64)
+            None
+        );
+    }
+
+    #[test]
+    fn webhook_id_url_with_empty_token_rejected() {
+        assert_eq!(
+            webhook_id_from_url("https://discord.com/api/webhooks/123456789012345678/"),
+            None
+        );
+    }
+
+    #[test]
+    fn webhook_id_legacy_discordapp_url() {
+        assert_eq!(
+            webhook_id_from_url("https://discordapp.com/api/webhooks/555/token"),
+            Some(555_u64)
+        );
+    }
+
+    #[test]
+    fn webhook_id_http_scheme_rejected() {
+        assert_eq!(
+            webhook_id_from_url("http://discord.com/api/webhooks/123/token"),
+            None
         );
     }
 

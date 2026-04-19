@@ -49,8 +49,11 @@ pub(crate) fn suppress_mentions(text: &str) -> String {
 /// Send a message to a Discord channel on behalf of an IRC user.
 ///
 /// Uses the webhook if a `webhook_url` is provided; falls back to plain
-/// `channel.send()` otherwise. Failures are logged at `WARN` and dropped —
-/// no retry is attempted.
+/// `channel.send()` otherwise.  If webhook *resolution* fails (e.g. the
+/// webhook was deleted or its token rotated), falls back to plain send so
+/// the message still reaches Discord.  Execute failures after a successful
+/// resolve are dropped — we don't know whether the message was actually
+/// posted, so retrying risks duplicates.
 pub(crate) async fn send_discord_message(
     http: &Http,
     channel_id: u64,
@@ -60,30 +63,48 @@ pub(crate) async fn send_discord_message(
 ) {
     if let Some(url) = webhook_url {
         let username = sanitize_webhook_username(sender_nick);
-        let webhook = match Webhook::from_url(http, url).await {
-            Ok(wh) => wh,
-            Err(e) => {
-                warn!(error = %e, url, "Failed to resolve webhook; dropping message");
-                return;
+        match Webhook::from_url(http, url).await {
+            Ok(wh) => {
+                let execute = ExecuteWebhook::new()
+                    .username(username)
+                    .content(text)
+                    // parse: [] — no @everyone or @here pings (mandatory safety rule)
+                    .allowed_mentions(CreateAllowedMentions::new());
+                if let Err(e) = wh.execute(http, false, execute).await {
+                    warn!(error = %e, channel_id, "Webhook execute failed; dropping message");
+                }
             }
-        };
-        let execute = ExecuteWebhook::new()
-            .username(username)
-            .content(text)
-            // parse: [] — no @everyone or @here pings (mandatory safety rule)
-            .allowed_mentions(CreateAllowedMentions::new());
-        if let Err(e) = webhook.execute(http, false, execute).await {
-            warn!(error = %e, channel_id, "Webhook execute failed; dropping message");
+            Err(e) => {
+                // Log the webhook ID (not the URL — it contains the token).
+                let webhook_id = crate::discord::webhook_id_from_url(url);
+                warn!(
+                    error = %e,
+                    channel_id,
+                    webhook_id = ?webhook_id,
+                    "Webhook resolve failed; falling back to plain send"
+                );
+                let fallback_text = format!(
+                    "**[{}]** {text}",
+                    crate::formatting::ping_fix_nick(sender_nick)
+                );
+                send_plain(http, channel_id, &fallback_text).await;
+            }
         }
     } else {
         // Plain send: the text already contains the "**[nick]** content" prefix
         // (formatted by relay.rs with ping-fixed nick).  Only suppress @everyone
         // / @here mentions — do NOT re-wrap with the nick.
-        let safe_text = suppress_mentions(text);
-        let msg = CreateMessage::new().content(safe_text);
-        if let Err(e) = ChannelId::new(channel_id).send_message(http, msg).await {
-            warn!(error = %e, channel_id, "Channel send failed; dropping message");
-        }
+        send_plain(http, channel_id, text).await;
+    }
+}
+
+/// Plain (non-webhook) channel send.  Suppresses `@everyone` / `@here`
+/// and logs failures.
+async fn send_plain(http: &Http, channel_id: u64, text: &str) {
+    let safe_text = suppress_mentions(text);
+    let msg = CreateMessage::new().content(safe_text);
+    if let Err(e) = ChannelId::new(channel_id).send_message(http, msg).await {
+        warn!(error = %e, channel_id, "Channel send failed; dropping message");
     }
 }
 
@@ -639,30 +660,29 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn webhook_resolve_failure_does_not_panic() {
+        async fn webhook_resolve_failure_falls_back_to_plain_send() {
             let server = MockServer::start().await;
             let http = mock_http(&server);
 
-            // Return 404 for webhook resolve — send_discord_message should
-            // log a warning and return without panicking.
+            // Webhook resolve returns 404 (deleted webhook / rotated token).
             Mock::given(method("GET"))
                 .and(path_regex(r"webhooks/\d+/"))
                 .respond_with(ResponseTemplate::new(404))
                 .mount(&server)
                 .await;
 
-            // No POST mock — if a POST is attempted, wiremock returns 404,
-            // which is fine (we just verify no panic).
-            send_discord_message(
-                &http,
-                999,
-                Some(&webhook_url()),
-                "TestNick",
-                "this should be silently dropped",
-            )
-            .await;
+            // Plain channel send must receive the fallback POST.
+            let post_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/api/v\d+/channels/999/messages"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
 
-            // If we reach here without panicking, the test passes.
+            send_discord_message(&http, 999, Some(&webhook_url()), "TestNick", "hello world").await;
+
+            // Asserts exactly 1 plain channel POST on drop.
+            drop(post_mock);
         }
     }
 }

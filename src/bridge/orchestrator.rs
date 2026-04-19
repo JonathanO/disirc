@@ -479,6 +479,29 @@ impl BridgeState {
     }
 
     /// Check for idle pseudoclients and emit PART/QUIT commands.
+    ///
+    /// # Clock behaviour
+    ///
+    /// All idle-timeout comparisons use wall-clock Unix seconds
+    /// (`now_ts.saturating_sub(stored_ts)`).  Wall time is required because
+    /// `went_offline_at` / `last_active` are persisted across restarts and
+    /// seed restoration depends on comparing them to the new process's
+    /// current time.
+    ///
+    /// Consequences of non-monotonic system-clock adjustments:
+    /// - **Backward step** (e.g. NTP correction): `saturating_sub` clamps
+    ///   to 0, so timeouts are deferred until the clock catches back up.
+    ///   No pseudoclient state is lost.
+    /// - **Forward jump** (VM resume, first NTP sync after long boot):
+    ///   a batch of timeouts may fire in one tick.  Self-corrects on the
+    ///   next tick — users come back on their next message.
+    ///
+    /// This is intentional.  Tracking a companion monotonic `Instant`
+    /// alongside every wall-time field would let us distinguish "time
+    /// elapsed" from "clock moved", but `Instant` can't be persisted, so
+    /// seeds would still have to fall back to wall time after a restart.
+    /// The extra complexity isn't justified for a bridge whose timeouts
+    /// are days / weeks.
     pub fn check_idle_timeouts(&mut self, now_ts: u64) -> HandlerOutput {
         let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
 

@@ -39,6 +39,15 @@ enum LinkPhase {
 }
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// A pseudoclient killed within this many seconds of a previous kill is not
+/// reintroduced.  Prevents reintroduce loops when an operator is actively
+/// killing a problem user.
+const KILL_COOLDOWN_SECS: u64 = 30;
+
+// ---------------------------------------------------------------------------
 // Resolvers
 // ---------------------------------------------------------------------------
 
@@ -261,13 +270,11 @@ impl BridgeState {
             } else if self.remote_burst_done {
                 // Remote burst is done — known_nicks is populated, safe to
                 // reintroduce immediately with nick re-resolution.
-                let cooldown_secs = 30u64;
-                self.kill_cooldowns
-                    .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
+                self.prune_kill_cooldowns(now_ts);
                 if self.kill_cooldowns.contains_key(&discord_id) {
                     tracing::warn!(
                         discord_id,
-                        "not re-introducing killed pseudoclient — killed again within 30s cooldown"
+                        "not re-introducing killed pseudoclient — killed again within {KILL_COOLDOWN_SECS}s cooldown"
                     );
                 } else {
                     let cmds = self.reintroduce_killed(discord_id, now_ts);
@@ -286,6 +293,12 @@ impl BridgeState {
         }
 
         output
+    }
+
+    /// Drop kill-cooldown entries older than `KILL_COOLDOWN_SECS`.
+    fn prune_kill_cooldowns(&mut self, now_ts: u64) {
+        self.kill_cooldowns
+            .retain(|_, ts| now_ts.saturating_sub(*ts) < KILL_COOLDOWN_SECS);
     }
 
     /// Remove a killed pseudoclient and reintroduce with a fresh UID and
@@ -452,6 +465,11 @@ impl BridgeState {
 
     /// Check for idle pseudoclients and emit PART/QUIT commands.
     pub fn check_idle_timeouts(&mut self, now_ts: u64) -> HandlerOutput {
+        // Opportunistic GC: stale kill cooldowns are only pruned when a new
+        // KILL arrives.  Piggyback on the idle tick so long-lived entries
+        // don't leak for users who were killed once and never again.
+        self.prune_kill_cooldowns(now_ts);
+
         let mut output = HandlerOutput::default();
         let channel_timeout = self.config.pseudoclients.channel_idle_timeout_secs;
         let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
@@ -1375,6 +1393,63 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
             "kill at exactly 30s should reintroduce (cooldown expired)"
+        );
+    }
+
+    #[test]
+    fn idle_tick_prunes_expired_kill_cooldowns() {
+        let mut config = test_config();
+        config.pseudoclients.reintroduce_on_kill = true;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 8001,
+                    username: "Charlie".into(),
+                    display_name: "Charlie".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        let uid = state
+            .pm
+            .get_by_discord_id(8001)
+            .expect("introduced")
+            .uid
+            .clone();
+
+        // First kill — adds to cooldowns at ts.
+        state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid,
+                reason: "kill".into(),
+            },
+            ts,
+        );
+        assert!(state.kill_cooldowns.contains_key(&8001));
+
+        // Idle tick while cooldown is still active: entry must survive.
+        state.check_idle_timeouts(ts + KILL_COOLDOWN_SECS - 1);
+        assert!(
+            state.kill_cooldowns.contains_key(&8001),
+            "entry within cooldown must not be pruned"
+        );
+
+        // Idle tick past the cooldown: entry must be gone.
+        state.check_idle_timeouts(ts + KILL_COOLDOWN_SECS);
+        assert!(
+            !state.kill_cooldowns.contains_key(&8001),
+            "expired cooldown must be pruned on idle tick"
         );
     }
 

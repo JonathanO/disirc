@@ -329,11 +329,18 @@ impl EventHandler for DiscordHandler {
             // DM — resolve referenced message content if this is a reply.
             let referenced_content = if let Some(ref msg_ref) = msg.message_reference {
                 if let Some(ref_id) = msg_ref.message_id {
-                    msg.channel_id
-                        .message(&ctx.http, ref_id)
-                        .await
-                        .ok()
-                        .map(|m| m.content)
+                    match msg.channel_id.message(&ctx.http, ref_id).await {
+                        Ok(m) => Some(m.content),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                ref_id = ref_id.get(),
+                                channel_id = msg.channel_id.get(),
+                                "Failed to fetch referenced DM message; relaying without quote context"
+                            );
+                            None
+                        }
+                    }
                 } else {
                     None
                 }

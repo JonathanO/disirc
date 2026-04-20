@@ -123,26 +123,59 @@ mod tests {
         );
     }
 
-    /// On Unix, SIGHUP causes a Reload event.
+    /// Send a signal to ourselves and wait up to 1s for the next event.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn sighup_sends_reload_event() {
-        let mut rx = spawn_signal_handler();
-
-        // Send SIGHUP to ourselves after a short delay.
+    async fn send_signal_and_recv(
+        rx: &mut mpsc::Receiver<ControlEvent>,
+        signal_name: &'static str,
+    ) -> ControlEvent {
         let pid = std::process::id();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(20)).await;
             std::process::Command::new("kill")
-                .args(["-s", "HUP", &pid.to_string()])
+                .args(["-s", signal_name, &pid.to_string()])
                 .status()
-                .expect("failed to send SIGHUP");
+                .unwrap_or_else(|_| panic!("failed to send {signal_name}"));
         });
 
-        let result = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await;
-        assert!(
-            matches!(result, Ok(Some(ControlEvent::Reload))),
-            "expected Reload event after SIGHUP, got {result:?}"
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for signal")
+            .expect("signal channel closed")
+    }
+
+    /// All signal-delivery assertions run in one test.
+    ///
+    /// Every `spawn_signal_handler` call installs its own handler, and
+    /// every handler alive in the process receives every signal — so
+    /// running these as separate tests in parallel is racy.  Keep all
+    /// signal delivery checks here, sequentially.
+    ///
+    /// Order matters: SIGHUP (Reload) must come before SIGTERM/SIGINT,
+    /// because Shutdown breaks the signal loop and closes the channel.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_signals_map_to_control_events() {
+        // SIGHUP → Reload; loop keeps running.
+        let mut rx = spawn_signal_handler();
+        assert_eq!(
+            send_signal_and_recv(&mut rx, "HUP").await,
+            ControlEvent::Reload,
+            "SIGHUP should yield Reload"
+        );
+        assert_eq!(
+            send_signal_and_recv(&mut rx, "TERM").await,
+            ControlEvent::Shutdown,
+            "SIGTERM should yield Shutdown"
+        );
+
+        // Fresh handler: SIGINT yields Shutdown.  A new handler is needed
+        // because the previous one broke out of its loop on SIGTERM.
+        let mut rx = spawn_signal_handler();
+        assert_eq!(
+            send_signal_and_recv(&mut rx, "INT").await,
+            ControlEvent::Shutdown,
+            "SIGINT should yield Shutdown"
         );
     }
 }

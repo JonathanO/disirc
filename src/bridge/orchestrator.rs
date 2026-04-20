@@ -39,6 +39,15 @@ enum LinkPhase {
 }
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// A pseudoclient killed within this many seconds of a previous kill is not
+/// reintroduced.  Prevents reintroduce loops when an operator is actively
+/// killing a problem user.
+const KILL_COOLDOWN_SECS: u64 = 30;
+
+// ---------------------------------------------------------------------------
 // Resolvers
 // ---------------------------------------------------------------------------
 
@@ -261,13 +270,11 @@ impl BridgeState {
             } else if self.remote_burst_done {
                 // Remote burst is done — known_nicks is populated, safe to
                 // reintroduce immediately with nick re-resolution.
-                let cooldown_secs = 30u64;
-                self.kill_cooldowns
-                    .retain(|_, ts| now_ts.saturating_sub(*ts) < cooldown_secs);
+                self.prune_kill_cooldowns(now_ts);
                 if self.kill_cooldowns.contains_key(&discord_id) {
                     tracing::warn!(
                         discord_id,
-                        "not re-introducing killed pseudoclient — killed again within 30s cooldown"
+                        "not re-introducing killed pseudoclient — killed again within {KILL_COOLDOWN_SECS}s cooldown"
                     );
                 } else {
                     let cmds = self.reintroduce_killed(discord_id, now_ts);
@@ -286,6 +293,27 @@ impl BridgeState {
         }
 
         output
+    }
+
+    /// Drop kill-cooldown entries older than `KILL_COOLDOWN_SECS`.
+    fn prune_kill_cooldowns(&mut self, now_ts: u64) {
+        self.kill_cooldowns
+            .retain(|_, ts| now_ts.saturating_sub(*ts) < KILL_COOLDOWN_SECS);
+    }
+
+    /// Drop seed entries whose `last_active` is older than `offline_timeout`.
+    /// Mirrors the offline-pseudoclient QUIT rule: a user who was idle past
+    /// the threshold on the old bridge instance would have been removed, so
+    /// their seed has no use now.
+    ///
+    /// Does nothing when the offline timeout is disabled (0) — matches the
+    /// live-pseudoclient semantics.
+    fn prune_stale_seeds(&mut self, now_ts: u64, offline_timeout: u64) {
+        if offline_timeout == 0 {
+            return;
+        }
+        self.seed_state
+            .retain(|_, seed| now_ts.saturating_sub(seed.last_active) < offline_timeout);
     }
 
     /// Remove a killed pseudoclient and reintroduce with a fresh UID and
@@ -451,10 +479,43 @@ impl BridgeState {
     }
 
     /// Check for idle pseudoclients and emit PART/QUIT commands.
+    ///
+    /// # Clock behaviour
+    ///
+    /// All idle-timeout comparisons use wall-clock Unix seconds
+    /// (`now_ts.saturating_sub(stored_ts)`).  Wall time is required because
+    /// `went_offline_at` / `last_active` are persisted across restarts and
+    /// seed restoration depends on comparing them to the new process's
+    /// current time.
+    ///
+    /// Consequences of non-monotonic system-clock adjustments:
+    /// - **Backward step** (e.g. NTP correction): `saturating_sub` clamps
+    ///   to 0, so timeouts are deferred until the clock catches back up.
+    ///   No pseudoclient state is lost.
+    /// - **Forward jump** (VM resume, first NTP sync after long boot):
+    ///   a batch of timeouts may fire in one tick.  Self-corrects on the
+    ///   next tick — users come back on their next message.
+    ///
+    /// This is intentional.  Tracking a companion monotonic `Instant`
+    /// alongside every wall-time field would let us distinguish "time
+    /// elapsed" from "clock moved", but `Instant` can't be persisted, so
+    /// seeds would still have to fall back to wall time after a restart.
+    /// The extra complexity isn't justified for a bridge whose timeouts
+    /// are days / weeks.
     pub fn check_idle_timeouts(&mut self, now_ts: u64) -> HandlerOutput {
+        let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
+
+        // Opportunistic GC: stale kill cooldowns are only pruned when a new
+        // KILL arrives.  Piggyback on the idle tick so long-lived entries
+        // don't leak for users who were killed once and never again.
+        self.prune_kill_cooldowns(now_ts);
+        // Also drop seed entries whose users never showed up in any event.
+        // A seed is equivalent to a live pseudoclient that has been offline
+        // since `last_active`, so apply the same timeout.
+        self.prune_stale_seeds(now_ts, offline_timeout);
+
         let mut output = HandlerOutput::default();
         let channel_timeout = self.config.pseudoclients.channel_idle_timeout_secs;
-        let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
         let bot_id = self.bot_user_id;
 
         // Collect actions first to avoid borrow issues.
@@ -1375,6 +1436,174 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, S2SCommand::IntroduceUser { .. })),
             "kill at exactly 30s should reintroduce (cooldown expired)"
+        );
+    }
+
+    #[test]
+    fn idle_tick_prunes_expired_kill_cooldowns() {
+        let mut config = test_config();
+        config.pseudoclients.reintroduce_on_kill = true;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 8001,
+                    username: "Charlie".into(),
+                    display_name: "Charlie".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        let uid = state
+            .pm
+            .get_by_discord_id(8001)
+            .expect("introduced")
+            .uid
+            .clone();
+
+        // First kill — adds to cooldowns at ts.
+        state.handle_irc_event(
+            &S2SEvent::UserKilled {
+                uid,
+                reason: "kill".into(),
+            },
+            ts,
+        );
+        assert!(state.kill_cooldowns.contains_key(&8001));
+
+        // Idle tick while cooldown is still active: entry must survive.
+        state.check_idle_timeouts(ts + KILL_COOLDOWN_SECS - 1);
+        assert!(
+            state.kill_cooldowns.contains_key(&8001),
+            "entry within cooldown must not be pruned"
+        );
+
+        // Idle tick past the cooldown: entry must be gone.
+        state.check_idle_timeouts(ts + KILL_COOLDOWN_SECS);
+        assert!(
+            !state.kill_cooldowns.contains_key(&8001),
+            "expired cooldown must be pruned on idle tick"
+        );
+    }
+
+    #[test]
+    fn idle_tick_prunes_stale_seed_entries() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 200;
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1_000_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        seed.insert(
+            99,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 2_000_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+
+        let mut state = BridgeState::new(&config, seed);
+
+        // Tick at a time past user 42's last_active + offline_timeout but
+        // within user 99's window.
+        state.check_idle_timeouts(2_000_100);
+
+        assert!(
+            !state.seed_state.contains_key(&42),
+            "stale seed must be pruned"
+        );
+        assert!(
+            state.seed_state.contains_key(&99),
+            "fresh seed must survive"
+        );
+    }
+
+    #[test]
+    fn seed_prune_boundary_exactly_at_timeout() {
+        use crate::persist::PersistedPseudoclient;
+
+        // Seed whose last_active is exactly `offline_timeout` in the past
+        // must be pruned (the retain predicate is `delta < timeout`).
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 200;
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1_000_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        seed.insert(
+            43,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1_000_001, // 1 second newer
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        let mut state = BridgeState::new(&config, seed);
+
+        // delta(42) = 200 exactly → prune.
+        // delta(43) = 199 → keep.
+        state.check_idle_timeouts(1_000_200);
+
+        assert!(
+            !state.seed_state.contains_key(&42),
+            "seed at exactly offline_timeout boundary must be pruned"
+        );
+        assert!(
+            state.seed_state.contains_key(&43),
+            "seed one second fresher than boundary must be kept"
+        );
+    }
+
+    #[test]
+    fn idle_tick_does_not_prune_seeds_when_offline_timeout_disabled() {
+        use crate::persist::PersistedPseudoclient;
+
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 0; // disabled
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1, // extremely old
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        let mut state = BridgeState::new(&config, seed);
+
+        state.check_idle_timeouts(1_000_000_000);
+
+        assert!(
+            state.seed_state.contains_key(&42),
+            "seed pruning must mirror offline timeout disable"
         );
     }
 
@@ -2635,6 +2864,103 @@ mod tests {
         assert!(
             state.state_dirty,
             "MemberSnapshot introducing users should set dirty"
+        );
+    }
+
+    // --- DM bridging disabled ---
+
+    #[test]
+    fn irc_privmsg_to_bot_dropped_when_dm_bridging_disabled() {
+        let mut config = test_config();
+        config.pseudoclients.dm_bridging = false;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 42,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        // Register an external IRC user so the from_uid resolves.
+        state.handle_irc_event(
+            &S2SEvent::UserIntroduced {
+                uid: "002AAAAAA".into(),
+                nick: "external".into(),
+                ident: "~u".into(),
+                host: "host".into(),
+                server_sid: "002".into(),
+                realname: "External".into(),
+            },
+            ts,
+        );
+
+        let bot_uid = state
+            .pm
+            .get_by_discord_id(42)
+            .expect("bot should be introduced")
+            .uid
+            .clone();
+
+        // IRC user PRIVMSGs the bot pseudoclient directly.
+        let out = state.handle_irc_event(
+            &S2SEvent::MessageReceived {
+                from_uid: "002AAAAAA".into(),
+                target: bot_uid,
+                text: "hi bot".into(),
+                timestamp: None,
+            },
+            ts + 10,
+        );
+
+        assert!(
+            out.discord_commands.is_empty(),
+            "DM to bot should be dropped when dm_bridging=false; got: {:?}",
+            out.discord_commands
+        );
+    }
+
+    #[test]
+    fn discord_dm_dropped_when_dm_bridging_disabled() {
+        let mut config = test_config();
+        config.pseudoclients.dm_bridging = false;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+
+        let out = state.handle_discord_event(
+            &DiscordEvent::DmReceived {
+                author_id: 42,
+                author_name: "alice".into(),
+                content: "hello bridge".into(),
+                referenced_content: None,
+            },
+            ts,
+        );
+
+        assert!(
+            out.irc_commands.is_empty(),
+            "Discord DM should be dropped when dm_bridging=false; got: {:?}",
+            out.irc_commands
+        );
+        assert!(
+            out.discord_commands.is_empty(),
+            "no error reply when dm_bridging=false; got: {:?}",
+            out.discord_commands
         );
     }
 }

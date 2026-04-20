@@ -176,8 +176,12 @@ impl Config {
     /// Validate all fields according to the rules in `specs/01-configuration.md`.
     /// Returns `Err(ConfigError::Validation(...))` on the first violation found.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        require_non_empty("discord.token", &self.discord.token)?;
+        require_non_empty("irc.uplink", &self.irc.uplink)?;
+        require_non_empty("irc.link_password", &self.irc.link_password)?;
         validate_sid(&self.irc.sid)?;
         validate_link_name(&self.irc.link_name)?;
+        validate_ident(&self.pseudoclients.ident)?;
 
         if self.bridges.is_empty() {
             return Err(ConfigError::Validation(
@@ -195,6 +199,46 @@ impl Config {
 
         validate_no_duplicates(&self.bridges)
     }
+}
+
+/// Reject empty / whitespace-only strings for required credential fields.
+fn require_non_empty(field: &str, value: &str) -> Result<(), ConfigError> {
+    if value.trim().is_empty() {
+        return Err(ConfigError::Validation(format!("{field} cannot be empty")));
+    }
+    Ok(())
+}
+
+/// IRC ident must be 1–10 chars of `[A-Za-z0-9._-]`.  A leading `~` is
+/// reserved by `UnrealIRCd` for idents that failed identd lookup; we send
+/// a real ident so we must not start with `~`.
+fn validate_ident(ident: &str) -> Result<(), ConfigError> {
+    const MAX_LEN: usize = 10; // UnrealIRCd USERLEN
+
+    if ident.is_empty() {
+        return Err(ConfigError::Validation(
+            "pseudoclients.ident cannot be empty".into(),
+        ));
+    }
+    if ident.len() > MAX_LEN {
+        return Err(ConfigError::Validation(format!(
+            "pseudoclients.ident {ident:?} is too long (max {MAX_LEN} chars)"
+        )));
+    }
+    if ident.starts_with('~') {
+        return Err(ConfigError::Validation(format!(
+            "pseudoclients.ident {ident:?} must not start with '~' (reserved for unverified idents)"
+        )));
+    }
+    if !ident
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(ConfigError::Validation(format!(
+            "pseudoclients.ident {ident:?} contains invalid characters: only [A-Za-z0-9._-] allowed"
+        )));
+    }
+    Ok(())
 }
 
 /// SID must match `[0-9][A-Z0-9]{2}`.
@@ -269,24 +313,16 @@ fn validate_irc_channel(channel: &str) -> Result<(), ConfigError> {
 /// Webhook URL must be HTTPS with host `discord.com` or `discordapp.com`
 /// and path starting with `/api/webhooks/`.
 fn validate_webhook_url(url: &str) -> Result<(), ConfigError> {
-    let err = || {
-        ConfigError::Validation(format!(
-            "bridge webhook_url {url:?} is invalid: must be https://discord.com/api/webhooks/<id>/<token> \
-             or https://discordapp.com/api/webhooks/<id>/<token>"
-        ))
-    };
-
-    let rest = url.strip_prefix("https://").ok_or_else(err)?;
-    // Split host from path at the first '/'.
-    let (host, path) = rest.split_once('/').ok_or_else(err)?;
-    if host != "discord.com" && host != "discordapp.com" {
-        return Err(err());
+    // Delegate to the runtime parser so the validator and the send path
+    // stay in sync on accepted domains and URL shape.
+    if crate::discord::webhook_id_from_url(url).is_some() {
+        Ok(())
+    } else {
+        Err(ConfigError::Validation(format!(
+            "bridge webhook_url {url:?} is invalid: must be \
+             https://<discord-host>/api/webhooks/<id>/<token>"
+        )))
     }
-    // Path must start with "api/webhooks/" (the leading '/' was consumed by split_once).
-    if !path.starts_with("api/webhooks/") {
-        return Err(err());
-    }
-    Ok(())
 }
 
 /// No two bridge entries may share a `discord_channel_id` or `irc_channel`.
@@ -662,6 +698,79 @@ mod tests {
         }
     }
 
+    // Credential non-emptiness
+
+    #[test]
+    fn empty_discord_token_rejected() {
+        let mut cfg = valid_config();
+        cfg.discord.token = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(ref m) if m.contains("discord.token")),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_discord_token_rejected() {
+        let mut cfg = valid_config();
+        cfg.discord.token = "   ".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn empty_irc_uplink_rejected() {
+        let mut cfg = valid_config();
+        cfg.irc.uplink = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(ref m) if m.contains("irc.uplink")),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_link_password_rejected() {
+        let mut cfg = valid_config();
+        cfg.irc.link_password = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(ref m) if m.contains("link_password")),
+            "got: {err}"
+        );
+    }
+
+    // pseudoclients.ident
+
+    #[test]
+    fn ident_valid_examples() {
+        for ident in &["discord", "bot", "d", "a1b2c3d4e5", "a.b-c_d"] {
+            let mut cfg = valid_config();
+            cfg.pseudoclients.ident = (*ident).to_string();
+            assert!(
+                cfg.validate().is_ok(),
+                "expected {ident:?} to be valid: {:?}",
+                cfg.validate()
+            );
+        }
+    }
+
+    #[test]
+    fn ident_invalid_examples() {
+        for ident in &[
+            "",            // empty
+            "a1b2c3d4e5f", // 11 chars, too long
+            "~anon",       // leading tilde
+            "has space",   // space
+            "has@at",      // @ sign
+            "newline\n",   // control
+        ] {
+            let mut cfg = valid_config();
+            cfg.pseudoclients.ident = (*ident).to_string();
+            assert!(cfg.validate().is_err(), "expected {ident:?} to be invalid");
+        }
+    }
+
     // link_name
 
     #[test]
@@ -735,6 +844,8 @@ mod tests {
         for url in &[
             "https://discord.com/api/webhooks/111/aaa",
             "https://discordapp.com/api/webhooks/222/bbb",
+            "https://canary.discord.com/api/webhooks/333/ccc",
+            "https://ptb.discord.com/api/webhooks/444/ddd",
         ] {
             let mut cfg = valid_config();
             cfg.bridges[0].webhook_url = Some((*url).to_string());
@@ -754,6 +865,10 @@ mod tests {
             "https://discord.com",                     // no path at all
             "https://discord.com/other/path",          // wrong path
             "https://discordapp.com/channels/111/222", // valid host, wrong path
+            "https://discord.com/api/webhooks/",       // no id or token
+            "https://discord.com/api/webhooks/111",    // id but no token
+            "https://discord.com/api/webhooks/111/",   // id but empty token
+            "https://discord.com/api/webhooks/abc/tok", // non-numeric id
         ] {
             let mut cfg = valid_config();
             cfg.bridges[0].webhook_url = Some((*url).to_string());
@@ -918,7 +1033,42 @@ mod tests {
     #[test]
     fn reload_returns_error_for_invalid_file() {
         let result = reload("nonexistent.toml", &valid_config());
-        assert!(result.is_err());
+        assert!(matches!(result, Err(ConfigError::Io(_))));
+    }
+
+    #[test]
+    fn reload_returns_error_for_malformed_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "this is [ not valid = toml").unwrap();
+
+        let result = reload(&path, &valid_config());
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
+    }
+
+    #[test]
+    fn reload_returns_error_for_invalid_semantics() {
+        // Valid TOML but fails semantic validation (bad SID format).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad-sid.toml");
+        let toml = r##"
+            [discord]
+            token = "Bot secret"
+
+            [irc]
+            uplink = "localhost"
+            link_name = "bridge.test"
+            link_password = "pw"
+            sid = "xxx"
+
+            [[bridge]]
+            discord_channel_id = "111"
+            irc_channel = "#test"
+        "##;
+        std::fs::write(&path, toml).unwrap();
+
+        let result = reload(&path, &valid_config());
+        assert!(matches!(result, Err(ConfigError::Validation(_))));
     }
 
     // -----------------------------------------------------------------------

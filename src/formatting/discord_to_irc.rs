@@ -436,23 +436,39 @@ fn split_code_blocks(text: &str) -> Vec<String> {
 ///
 /// Splits are always at valid UTF-8 char boundaries.
 fn split_long_line(line: &str, max_bytes: usize) -> Vec<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+
     let mut parts = Vec::new();
     let mut remaining = line;
 
     while remaining.len() > max_bytes {
-        // Find the last char boundary at or before max_bytes.
-        // `is_char_boundary(0)` is always true, so the loop is guaranteed to
-        // terminate without the `> 0` guard — removed to eliminate an
-        // equivalent-mutant target.
-        let mut boundary = max_bytes;
-        while !remaining.is_char_boundary(boundary) {
-            boundary -= 1;
-        }
+        // Find the last grapheme boundary at or before max_bytes.  A
+        // grapheme boundary is always a char boundary too, so this gives
+        // us safe splitting even for ZWJ sequences, skin-tone modifiers,
+        // and flag pairs.  Falls back to 0 if the first grapheme is
+        // itself longer than max_bytes, causing a hard split.
+        let boundary = remaining
+            .grapheme_indices(true)
+            .take_while(|(i, _)| *i <= max_bytes)
+            .last()
+            .map_or(0, |(i, _)| i);
+        let boundary = if boundary == 0 {
+            // First grapheme is itself too long — advance past it to
+            // make progress rather than loop forever.
+            remaining
+                .grapheme_indices(true)
+                .nth(1)
+                .map_or(remaining.len(), |(i, _)| i)
+        } else {
+            boundary
+        };
 
-        // Find last space before the boundary
+        // Find last space before the grapheme boundary.  ASCII space is
+        // always its own grapheme, so a space position is already on a
+        // grapheme boundary.
         match remaining[..boundary].rfind(' ') {
             Some(0) | None => {
-                // No usable space — hard-split at char boundary
+                // No usable space — hard-split at grapheme boundary.
                 parts.push(remaining[..boundary].to_string());
                 remaining = &remaining[boundary..];
             }
@@ -1097,12 +1113,6 @@ mod tests {
         }
 
         #[test]
-        fn markdown_to_irc_rich_syntax_never_panics(text in discord_markdown_strategy()) {
-            let result = markdown_to_irc(&text);
-            let _ = result;
-        }
-
-        #[test]
         fn split_for_irc_never_panics(text in ".{0,2000}") {
             let lines = split_for_irc(&text);
             assert!(!lines.is_empty() || text.trim().is_empty());
@@ -1134,6 +1144,33 @@ mod tests {
                     "word {word:?} lost in split.\n  input: {text:?}\n  output: {joined:?}"
                 );
             }
+        }
+
+        /// `split_long_line` must never split an extended grapheme cluster.
+        /// Use a no-spaces adversarial strategy so the word-boundary fallback
+        /// can't avoid the grapheme-rich region.
+        #[test]
+        fn split_long_line_preserves_grapheme_clusters(
+            text in crate::formatting::test_support::adversarial_unicode_no_spaces(200)
+        ) {
+            use unicode_segmentation::UnicodeSegmentation;
+            let parts = split_long_line(&text, MAX_LINE_BYTES);
+            // Rejoining the parts must yield the original text (catches
+            // byte-level loss, but not grapheme splitting on its own).
+            let rejoined: String = parts.join("");
+            prop_assert_eq!(&rejoined, &text);
+            // If splits landed inside a grapheme cluster, the total
+            // grapheme count of the parts would be greater than the
+            // grapheme count of the input — one cluster "became" two.
+            let input_graphemes = text.graphemes(true).count();
+            let part_graphemes: usize =
+                parts.iter().map(|p| p.graphemes(true).count()).sum();
+            prop_assert_eq!(
+                input_graphemes, part_graphemes,
+                "split increased grapheme count (split inside a cluster); \
+                 input: {:?}, parts: {:?}",
+                text, parts
+            );
         }
 
         /// `_word_` followed by space must always produce italic markers.

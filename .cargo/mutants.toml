@@ -18,4 +18,13 @@ exclude_re = [
     # path extracts a smaller span, and the remaining backticks are re-parsed on
     # the next iteration, still protecting all code content.
     "replace match guard t <= s with false in protect_code_spans",
+    # split_long_line: the outer `while remaining.len() > max_bytes` loop.
+    # Replacing `>` with `<` produces an infinite loop for any input shorter
+    # than max_bytes (we keep splitting `remaining` while the condition stays
+    # true).  The mutation *is* caught — the test harness kills it after 20s —
+    # but cargo-mutants classifies the kill as TIMEOUT (exit 2), not CAUGHT
+    # (exit 0).  No assertion-based test can catch it faster because the
+    # mutated function never returns.  Restructuring the loop moves the
+    # mutation target but doesn't eliminate it.  See mutants.rs exit codes.
+    "replace > with < in split_long_line",
 ]

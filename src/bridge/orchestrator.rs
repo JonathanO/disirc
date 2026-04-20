@@ -388,6 +388,7 @@ impl BridgeState {
                 author_display_name,
                 content,
                 attachments,
+                timestamp,
             } = event
             {
                 let resolver = BridgeDiscordResolver {
@@ -403,7 +404,7 @@ impl BridgeState {
                     author_display_name,
                     content,
                     attachments,
-                    None,
+                    Some(*timestamp),
                     now_ts,
                     &resolver,
                 );
@@ -418,6 +419,7 @@ impl BridgeState {
                 author_id,
                 content,
                 referenced_content,
+                timestamp,
                 ..
             } = event
                 && self.config.pseudoclients.dm_bridging
@@ -444,7 +446,7 @@ impl BridgeState {
                             from_uid,
                             target: target_uid,
                             text,
-                            timestamp: None,
+                            timestamp: Some(*timestamp),
                         });
                     }
                     DmRouteResult::Error(msg) => {
@@ -883,6 +885,8 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello world".into(),
                 attachments: vec![],
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             },
             ts,
         );
@@ -1805,6 +1809,8 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello".into(),
                 attachments: vec![],
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             },
             ts,
         );
@@ -1947,6 +1953,8 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "still here".into(),
                 attachments: vec![],
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             },
             ts + 150,
         );
@@ -2057,6 +2065,8 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hi".into(),
                 attachments: vec![],
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             },
             ts,
         );
@@ -2599,6 +2609,8 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello".into(),
                 attachments: vec![],
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             },
             ts + 10,
         );
@@ -2773,6 +2785,8 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello".into(),
                 attachments: vec![],
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             },
             ts + 10,
         );
@@ -2948,6 +2962,8 @@ mod tests {
                 author_name: "alice".into(),
                 content: "hello bridge".into(),
                 referenced_content: None,
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
             },
             ts,
         );
@@ -2961,6 +2977,125 @@ mod tests {
             out.discord_commands.is_empty(),
             "no error reply when dm_bridging=false; got: {:?}",
             out.discord_commands
+        );
+    }
+
+    // --- Timestamp propagation ---
+
+    #[test]
+    fn discord_message_timestamp_propagates_to_irc_send() {
+        let mut state = BridgeState::new(&test_config(), HashMap::new());
+        let ts = 1_000_000;
+        let msg_ts = chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_123, 0).unwrap();
+
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![MemberInfo {
+                    user_id: 42,
+                    username: "alice".into(),
+                    display_name: "Alice".into(),
+                    presence: DiscordPresence::Online,
+                }],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        let out = state.handle_discord_event(
+            &DiscordEvent::MessageReceived {
+                channel_id: 111,
+                author_id: 42,
+                author_name: "alice".into(),
+                author_display_name: "Alice".into(),
+                content: "hello".into(),
+                attachments: vec![],
+                timestamp: msg_ts,
+            },
+            ts + 10,
+        );
+
+        let send = out
+            .irc_commands
+            .iter()
+            .find_map(|c| match c {
+                S2SCommand::SendMessage { timestamp, .. } => Some(*timestamp),
+                _ => None,
+            })
+            .expect("expected a SendMessage");
+        assert_eq!(
+            send,
+            Some(msg_ts),
+            "Discord msg.timestamp must be forwarded to S2SCommand::SendMessage"
+        );
+    }
+
+    #[test]
+    fn discord_dm_timestamp_propagates_to_irc_send() {
+        let mut config = test_config();
+        config.pseudoclients.dm_bridging = true;
+        let mut state = BridgeState::new(&config, HashMap::new());
+        let ts = 1_000_000;
+        let msg_ts = chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_456, 0).unwrap();
+
+        // Introduce alice + bob so the DM has a valid target (alice DMs bob).
+        state.handle_discord_event(
+            &DiscordEvent::MemberSnapshot {
+                guild_id: 999,
+                members: vec![
+                    MemberInfo {
+                        user_id: 42,
+                        username: "alice".into(),
+                        display_name: "Alice".into(),
+                        presence: DiscordPresence::Online,
+                    },
+                    MemberInfo {
+                        user_id: 43,
+                        username: "bob".into(),
+                        display_name: "Bob".into(),
+                        presence: DiscordPresence::Online,
+                    },
+                ],
+                channel_ids: vec![111],
+                channel_names: std::collections::HashMap::new(),
+                role_names: std::collections::HashMap::new(),
+                bot_user_id: 0,
+            },
+            ts,
+        );
+        state.handle_irc_event(&S2SEvent::LinkUp, ts);
+        state.handle_irc_event(&S2SEvent::BurstComplete, ts);
+
+        // DM routing resolves the target by parsing the `**[nick]**` prefix
+        // of the referenced (quoted) message — see spec 09.
+        let out = state.handle_discord_event(
+            &DiscordEvent::DmReceived {
+                author_id: 42,
+                author_name: "alice".into(),
+                content: "hi there".into(),
+                referenced_content: Some("**[bob]** earlier message".into()),
+                timestamp: msg_ts,
+            },
+            ts + 5,
+        );
+
+        let send = out
+            .irc_commands
+            .iter()
+            .find_map(|c| match c {
+                S2SCommand::SendMessage { timestamp, .. } => Some(*timestamp),
+                _ => None,
+            })
+            .expect("expected a SendMessage from DM relay");
+        assert_eq!(
+            send,
+            Some(msg_ts),
+            "DM timestamp must be forwarded to S2SCommand::SendMessage"
         );
     }
 }

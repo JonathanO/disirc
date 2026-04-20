@@ -311,6 +311,7 @@ async fn e2e_discord_to_irc_message_relay() {
             author_display_name: "Alice".into(),
             content: "hello from discord".into(),
             attachments: vec![],
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();
@@ -440,6 +441,7 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
             author_display_name: "EarlyUser".into(),
             content: "hello from early user".into(),
             attachments: vec![],
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();
@@ -496,6 +498,7 @@ async fn e2e_pseudoclient_appears_on_irc() {
             author_display_name: "TestUser".into(),
             content: "hello from testuser".into(),
             attachments: vec![],
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();
@@ -563,6 +566,7 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
             author_display_name: "Alice".into(),
             content: "hey <@5002> check <#200> and <@&300>".into(),
             attachments: vec![],
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();
@@ -696,6 +700,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
             author_display_name: "KillTarget".into(),
             content: "pre-kill probe".into(),
             attachments: vec![],
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();
@@ -730,6 +735,7 @@ async fn e2e_killed_pseudoclient_reintroduced() {
             author_display_name: "KillTarget".into(),
             content: "post-kill probe".into(),
             attachments: vec![],
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();
@@ -857,6 +863,7 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
             author_name: "alice".into(),
             content: "testbot: hey from discord dm".into(),
             referenced_content: None,
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();
@@ -915,6 +922,7 @@ async fn e2e_discord_dm_unresolvable_sends_help() {
             author_name: "alice".into(),
             content: "just a random message".into(),
             referenced_content: None,
+            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
         })
         .await
         .unwrap();

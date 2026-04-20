@@ -186,6 +186,7 @@ impl DiscordHandler {
         author_name: String,
         content: String,
         referenced_content: Option<String>,
+        timestamp: chrono::DateTime<chrono::Utc>,
     ) {
         let filter = self.self_filter.read().await;
         if filter.contains(&author_id) {
@@ -199,12 +200,14 @@ impl DiscordHandler {
                 author_name,
                 content,
                 referenced_content,
+                timestamp,
             })
             .await;
     }
 
     /// Relay a `MESSAGE_CREATE` event to the processing task if it passes
     /// channel routing and self-message filtering.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_message_event(
         &self,
         channel_id: u64,
@@ -213,6 +216,7 @@ impl DiscordHandler {
         author_display_name: String,
         content: String,
         attachments: Vec<String>,
+        timestamp: chrono::DateTime<chrono::Utc>,
     ) {
         let channels = self.bridged_channel_ids.read().await;
         let filter = self.self_filter.read().await;
@@ -234,6 +238,7 @@ impl DiscordHandler {
                 author_display_name,
                 content,
                 attachments,
+                timestamp,
             })
             .await;
     }
@@ -352,6 +357,7 @@ impl EventHandler for DiscordHandler {
                 msg.author.name.clone(),
                 msg.content.clone(),
                 referenced_content,
+                *msg.timestamp,
             )
             .await;
         } else {
@@ -369,6 +375,7 @@ impl EventHandler for DiscordHandler {
                 display_name,
                 msg.content.clone(),
                 msg.attachments.iter().map(|a| a.url.clone()).collect(),
+                *msg.timestamp,
             )
             .await;
         }
@@ -454,6 +461,12 @@ mod tests {
         vals.iter().copied().collect()
     }
 
+    /// Fixed test timestamp; value is arbitrary — tests that care about
+    /// propagation assert on exact equality with this constant.
+    fn stock_ts() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap()
+    }
+
     // ---------------------------------------------------------------------------
     // handle_ready
     // ---------------------------------------------------------------------------
@@ -491,6 +504,7 @@ mod tests {
             "Alice".into(),
             "hello".into(),
             vec![],
+            stock_ts(),
         )
         .await;
         let event = rx.try_recv().expect("expected MessageReceived event");
@@ -508,8 +522,16 @@ mod tests {
     async fn self_message_is_dropped() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[10], &[99]); // author 99 is in self-filter
-        h.handle_message_event(10, 99, "bot".into(), "Bot".into(), "echo".into(), vec![])
-            .await;
+        h.handle_message_event(
+            10,
+            99,
+            "bot".into(),
+            "Bot".into(),
+            "echo".into(),
+            vec![],
+            stock_ts(),
+        )
+        .await;
         assert!(
             rx.try_recv().is_err(),
             "self-message must not emit an event"
@@ -520,8 +542,16 @@ mod tests {
     async fn non_bridged_channel_is_dropped() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[10], &[]); // only channel 10 bridged
-        h.handle_message_event(99, 1, "user".into(), "User".into(), "hi".into(), vec![])
-            .await;
+        h.handle_message_event(
+            99,
+            1,
+            "user".into(),
+            "User".into(),
+            "hi".into(),
+            vec![],
+            stock_ts(),
+        )
+        .await;
         assert!(
             rx.try_recv().is_err(),
             "non-bridged channel must not emit an event"
@@ -535,7 +565,7 @@ mod tests {
     async fn dm_event_emits_dm_received() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[], &[]);
-        h.handle_dm_event(42, "alice".into(), "hello".into(), None)
+        h.handle_dm_event(42, "alice".into(), "hello".into(), None, stock_ts())
             .await;
         let event = rx.try_recv().expect("expected DmReceived event");
         assert!(matches!(
@@ -548,7 +578,7 @@ mod tests {
     async fn dm_from_self_is_dropped() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[], &[42]); // 42 is in self-filter
-        h.handle_dm_event(42, "bot".into(), "echo".into(), None)
+        h.handle_dm_event(42, "bot".into(), "echo".into(), None, stock_ts())
             .await;
         assert!(rx.try_recv().is_err(), "DM from self should be dropped");
     }
@@ -562,6 +592,7 @@ mod tests {
             "alice".into(),
             "reply text".into(),
             Some("**[bob]** original".into()),
+            stock_ts(),
         )
         .await;
         let event = rx.try_recv().expect("expected DmReceived event");

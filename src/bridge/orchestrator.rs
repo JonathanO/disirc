@@ -1539,6 +1539,49 @@ mod tests {
     }
 
     #[test]
+    fn seed_prune_boundary_exactly_at_timeout() {
+        use crate::persist::PersistedPseudoclient;
+
+        // Seed whose last_active is exactly `offline_timeout` in the past
+        // must be pruned (the retain predicate is `delta < timeout`).
+        let mut config = test_config();
+        config.pseudoclients.offline_timeout_secs = 200;
+        let mut seed = HashMap::new();
+        seed.insert(
+            42,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1_000_000,
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        seed.insert(
+            43,
+            PersistedPseudoclient {
+                channels: vec!["#test".to_string()],
+                last_active: 1_000_001, // 1 second newer
+                channel_last_active: HashMap::new(),
+                went_offline_at: None,
+            },
+        );
+        let mut state = BridgeState::new(&config, seed);
+
+        // delta(42) = 200 exactly → prune.
+        // delta(43) = 199 → keep.
+        state.check_idle_timeouts(1_000_200);
+
+        assert!(
+            !state.seed_state.contains_key(&42),
+            "seed at exactly offline_timeout boundary must be pruned"
+        );
+        assert!(
+            state.seed_state.contains_key(&43),
+            "seed one second fresher than boundary must be kept"
+        );
+    }
+
+    #[test]
     fn idle_tick_does_not_prune_seeds_when_offline_timeout_disabled() {
         use crate::persist::PersistedPseudoclient;
 

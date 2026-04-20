@@ -877,6 +877,24 @@ mod tests {
             assert!(result.chars().count() <= DISCORD_MAX_CHARS);
         }
 
+        /// An input of N ASCII chars with no spaces and no emoji must always
+        /// be truncated to exactly `DISCORD_MAX_CHARS` chars (body +
+        /// truncation suffix) when N > DISCORD_MAX_CHARS.  Catches
+        /// off-by-one mutations of the grapheme loop's break condition.
+        #[test]
+        fn truncate_ascii_no_spaces_fills_the_limit(
+            n in (DISCORD_MAX_CHARS + 1)..5000usize
+        ) {
+            let text = "a".repeat(n);
+            let result = truncate_for_discord(&text);
+            prop_assert!(
+                result.chars().count() == DISCORD_MAX_CHARS,
+                "input of {} ASCII chars with no spaces must truncate to \
+                 exactly {} chars, got {}",
+                n, DISCORD_MAX_CHARS, result.chars().count()
+            );
+        }
+
         /// Truncation must not split an extended grapheme cluster.  Use
         /// a no-spaces adversarial strategy so truncation can't fall back
         /// to a word boundary — the cut must actually land in the

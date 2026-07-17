@@ -644,8 +644,7 @@ mod tests {
 
     #[test]
     fn bold_italic_combined() {
-        let r = markdown_to_irc("***text***");
-        assert!(r.contains("text"));
+        assert_eq!(markdown_to_irc("***text***"), "\x02\x1dtext\x02\x1d");
     }
 
     #[test]
@@ -680,32 +679,39 @@ mod tests {
 
     #[test]
     fn nested_bold_inside_italic() {
-        let r = markdown_to_irc("_**bold inside italic**_");
-        assert!(r.contains("bold inside italic"));
-        assert!(r.contains('\x02'));
-        assert!(r.contains('\x1d'));
+        assert_eq!(
+            markdown_to_irc("_**bold inside italic**_"),
+            "\x1d\x02bold inside italic\x02\x1d"
+        );
     }
 
+    /// Overlapping markers convert best-effort: the bold pair closes first,
+    /// then the leftover single stars pair across the bold close.
     #[test]
-    fn overlapping_markers_dont_panic() {
-        let r = markdown_to_irc("**bold *and italic** end*");
-        assert!(r.contains("bold"));
-        assert!(r.contains("end"));
+    fn overlapping_markers_convert_best_effort() {
+        assert_eq!(
+            markdown_to_irc("**bold *and italic** end*"),
+            "\x02bold \x1dand italic\x02 end\x1d"
+        );
     }
 
     #[test]
     fn deeply_nested_markers() {
-        let r = markdown_to_irc("**__~~text~~__**");
-        assert!(r.contains("text"));
-        assert!(r.contains('\x02'));
-        assert!(r.contains('\x1f'));
+        assert_eq!(
+            markdown_to_irc("**__~~text~~__**"),
+            "\x02\x1f~~text~~\x1f\x02"
+        );
     }
 
+    /// With no closing markers, the two adjacent stars of `**` pair as an
+    /// empty single-star match (passed through), the next single-star pair
+    /// converts, and everything else passes through literally.
     #[test]
     fn multiple_unclosed_markers() {
-        let r = markdown_to_irc("**bold *italic __underline ~~strike");
-        assert!(r.contains("bold"));
-        assert!(r.contains("italic"));
+        assert_eq!(
+            markdown_to_irc("**bold *italic __underline ~~strike"),
+            "*\x1dbold \x1ditalic __underline ~~strike"
+        );
     }
 
     #[test]
@@ -854,8 +860,7 @@ mod tests {
 
     #[test]
     fn unclosed_code_block_in_split() {
-        let lines = split_for_irc("```rust\nfn main() {");
-        assert!(!lines.is_empty());
+        assert_eq!(split_for_irc("```rust\nfn main() {"), vec!["fn main() {"]);
     }
 
     #[test]
@@ -866,8 +871,9 @@ mod tests {
 
     #[test]
     fn nested_angle_brackets() {
-        let r = resolve_mentions("<<@111>>", &StubResolver);
-        assert!(r.contains("Alice") || r.contains("<"));
+        // The outer "<" finds "<@111" as its span (unresolvable), passes it
+        // through, then the inner "<@111>" resolves normally.
+        assert_eq!(resolve_mentions("<<@111>>", &StubResolver), "<@Alice>");
     }
 
     #[test]

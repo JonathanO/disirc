@@ -64,7 +64,10 @@ pub fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
 
     match &msg.command {
         IrcCommand::Uid(p) => {
-            let server_sid = if prefix.len() >= 3 { prefix[..3].to_owned() } else { prefix.to_owned() };
+            // The prefix is normally the introducing server's 3-char SID, but
+            // it is remote input: byte offset 3 may fall inside a multibyte
+            // character, so a plain `prefix[..3]` slice could panic.
+            let server_sid = prefix.get(..3).unwrap_or(prefix).to_owned();
             Some(S2SEvent::UserIntroduced {
                 uid: p.uid.clone(),
                 nick: p.nick.clone(),
@@ -1190,5 +1193,66 @@ mod tests {
     #[test]
     fn sjoin_member_empty_after_prefix_skipped() {
         assert!(parse_sjoin_member("@").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Robustness: translate_inbound must never panic on remote input
+    // -----------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    /// Prefixes an uplink could send: well-formed SIDs/UIDs, arbitrary
+    /// non-control Unicode (multibyte chars can straddle any byte offset),
+    /// and a fixed worst case whose third byte falls inside a multibyte
+    /// character.
+    fn arb_prefix() -> impl Strategy<Value = String> {
+        prop_oneof![
+            "[A-Za-z0-9]{1,9}",
+            "\\PC{1,6}",
+            Just("a\u{20AC}b".to_string()),
+        ]
+    }
+
+    proptest! {
+        /// Any prefix combined with any prefix-consuming command must pass
+        /// through parse → translate_inbound without panicking.
+        #[test]
+        fn translate_inbound_never_panics_on_any_prefix(
+            prefix in arb_prefix(),
+            tail in prop::sample::select(vec![
+                "UID Alice 1 1700000000 alice discord.invalid 001AAAAAA 0 +i * * * :Alice Smith",
+                "NICK Bob 1700000001",
+                "QUIT :bye",
+                "PART #general :out",
+                "KILL 002AAAAAA :reason",
+                "KICK #general 002AAAAAA :spam",
+                "PRIVMSG #general :hello",
+                "NOTICE #general :notice",
+                "AWAY :brb",
+                "SVSNICK 001AAAAAA newnick",
+                "EOS",
+                "SQUIT DEF :netsplit",
+                "SID irc.example.net 1 DEF :desc",
+                "SJOIN 1700000000 #general + :@001AAAAAA",
+            ]),
+        ) {
+            let line = format!(":{prefix} {tail}");
+            if let Ok(msg) = IrcMessage::parse(&line) {
+                let _ = translate_inbound(&msg);
+            }
+        }
+    }
+
+    #[test]
+    fn inbound_uid_multibyte_prefix_uses_whole_prefix_as_sid() {
+        // "a€b" is 5 bytes with byte 3 inside the euro sign, so a byte
+        // slice `prefix[..3]` is not valid; the server_sid falls back to
+        // the whole prefix.
+        let line = ":a\u{20AC}b UID Alice 1 1700000000 alice discord.invalid 001AAAAAA 0 +i * * * :Alice Smith";
+        let msg = IrcMessage::parse(line).unwrap();
+        let S2SEvent::UserIntroduced { server_sid, .. } = translate_inbound(&msg).unwrap() else {
+            panic!("expected UserIntroduced");
+        };
+        assert_eq!(server_sid, "a\u{20AC}b");
     }
 }

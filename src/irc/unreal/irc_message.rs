@@ -1807,6 +1807,33 @@ mod tests {
             let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
             prop_assert_eq!(parsed, original);
         }
+
+        /// The parser consumes remote input: any string must parse or
+        /// error, never panic.
+        #[test]
+        fn parse_never_panics_on_arbitrary_input(line in "\\PC{0,300}") {
+            let _ = IrcMessage::parse(&line);
+        }
+
+        /// Adversarial lines composed from protocol fragments — tag/prefix
+        /// sigils, escapes, multibyte text, stray CR/LF, and raw control
+        /// bytes — must never panic the parser.
+        #[test]
+        fn parse_never_panics_on_composed_fragments(
+            parts in prop::collection::vec(
+                prop::sample::select(vec![
+                    "@", "@time=", "@a=b;c", ";", "=", ":", " ", "  ",
+                    ":prefix", ":a\u{20AC}b", "\u{FFFD}", "\\s", "\\\\", "\\:",
+                    "UID", "SJOIN", "PRIVMSG", "PING", "EOS", "SERVER",
+                    "#chan", "1700000000", "+i", "*", "trailing text",
+                    "\r", "\n", "\r\n", "\t", "\x01", "\x00",
+                ]),
+                0..12,
+            )
+        ) {
+            let line = parts.concat();
+            let _ = IrcMessage::parse(&line);
+        }
     }
 
     // ---- Boundary: 4096-byte line limit ------------------------------------

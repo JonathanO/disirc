@@ -474,48 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn irc_mention_nick_with_underscore() {
-        let r = convert_irc_mentions("@foo_bar end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
-    }
-
-    #[test]
-    fn irc_mention_nick_with_hyphen() {
-        let r = convert_irc_mentions("@foo-bar end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
-    }
-
-    #[test]
-    fn irc_mention_nick_with_brackets() {
-        let r = convert_irc_mentions("@foo[bar] end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
-    }
-
-    #[test]
-    fn irc_mention_nick_with_backslash() {
-        let r = convert_irc_mentions("@foo\\bar end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
-    }
-
-    #[test]
-    fn irc_mention_nick_with_backtick() {
-        let r = convert_irc_mentions("@foo`bar end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
-    }
-
-    #[test]
-    fn irc_mention_nick_with_caret() {
-        let r = convert_irc_mentions("@foo^bar end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
-    }
-
-    #[test]
-    fn irc_mention_nick_with_braces() {
-        let r = convert_irc_mentions("@foo{bar} end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
-    }
-
-    #[test]
     fn irc_mention_at_end() {
         let r = convert_irc_mentions("test @", &MatchAllIrcResolver);
         assert_eq!(r, "test @");
@@ -569,12 +527,6 @@ mod tests {
         // Second @ is preceded by @, not a word boundary.
         let r = convert_irc_mentions("@@alice", &StubIrcResolver);
         assert_eq!(r, "@@alice");
-    }
-
-    #[test]
-    fn irc_mention_nick_starting_with_digit() {
-        let r = convert_irc_mentions("@123abc end", &MatchAllIrcResolver);
-        assert_eq!(r, "<@42> end");
     }
 
     #[test]
@@ -932,6 +884,20 @@ mod tests {
             let fixed = ping_fix_nick(&nick);
             let without_zwsp: String = fixed.replace('\u{200B}', "");
             assert_eq!(without_zwsp, nick);
+        }
+
+        /// `@` followed by ANY nick built from valid IRC nick characters
+        /// (leading char alphanumeric, as the boundary check requires)
+        /// resolves as a mention consuming the entire nick — every special
+        /// character `_ - [ ] \ ^ { } | `` included.
+        #[test]
+        fn irc_mention_any_valid_nick_resolves(
+            first in "[a-zA-Z0-9]",
+            rest in "[a-zA-Z0-9_\\-\\[\\]\\\\^{}|`]{0,15}",
+        ) {
+            let input = format!("@{first}{rest} end");
+            let result = convert_irc_mentions(&input, &MatchAllIrcResolver);
+            prop_assert_eq!(result, "<@42> end");
         }
     }
 

@@ -486,6 +486,23 @@ mod tests {
         assert_eq!(suppress_mentions("end@"), "end@");
     }
 
+    /// Text stitched from mention trigger words (in mixed case), bare `@`s,
+    /// and plain fragments — the shapes most likely to defeat suppression.
+    fn mentionish_text() -> impl Strategy<Value = String> {
+        prop::collection::vec(
+            prop_oneof![
+                3 => Just("@everyone".to_string()),
+                2 => Just("@here".to_string()),
+                1 => Just("@EvErYoNe".to_string()),
+                1 => Just("@HeRe".to_string()),
+                2 => Just("@".to_string()),
+                3 => "[a-zA-Z0-9 .!]{0,10}",
+            ],
+            0..8,
+        )
+        .prop_map(|parts| parts.concat())
+    }
+
     proptest! {
         /// Text with no @everyone or @here must pass through unchanged.
         #[test]
@@ -493,6 +510,24 @@ mod tests {
             s in "[^@]*" // no '@' at all
         ) {
             prop_assert_eq!(suppress_mentions(&s), s);
+        }
+
+        /// No case variant of `@everyone` / `@here` survives suppression —
+        /// this is the mandatory IRC→Discord safety rule, so it must hold
+        /// for every composition of trigger words and surrounding text.
+        #[test]
+        fn suppress_leaves_no_pingable_mention(text in mentionish_text()) {
+            let out = suppress_mentions(&text).to_lowercase();
+            prop_assert!(!out.contains("@everyone"), "output still pings: {out:?}");
+            prop_assert!(!out.contains("@here"), "output still pings: {out:?}");
+        }
+
+        /// Suppression is idempotent: a second pass never inserts another
+        /// zero-width space.
+        #[test]
+        fn suppress_is_idempotent(text in mentionish_text()) {
+            let once = suppress_mentions(&text);
+            prop_assert_eq!(suppress_mentions(&once), once.clone());
         }
     }
 

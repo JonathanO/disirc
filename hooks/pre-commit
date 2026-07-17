@@ -4,7 +4,7 @@
 #
 # Checks (in order, fast-failing):
 #   1. cargo fmt --check
-#   2. cargo clippy -- -D warnings
+#   2. cargo clippy --all-targets -- -D warnings
 #   3. cargo test
 #
 # cargo deny is intentionally excluded — it requires network access and is
@@ -21,9 +21,9 @@ cargo fmt --check || {
 }
 
 echo "pre-commit: running clippy..."
-cargo clippy -- -D warnings || {
+cargo clippy --all-targets -- -D warnings || {
     echo ""
-    echo "FAILED: cargo clippy -- -D warnings"
+    echo "FAILED: cargo clippy --all-targets -- -D warnings"
     exit 1
 }
 

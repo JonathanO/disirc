@@ -1416,20 +1416,16 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
+        /// For ANY input — arbitrary Unicode included — the sanitized nick
+        /// upholds every IRC nick invariant: non-empty, at most 30 bytes,
+        /// no leading digit, and only valid nick characters.
         #[test]
-        fn sanitize_never_panics(s in "\\PC{0,100}") {
-            let _ = sanitize_nick(&s);
-        }
-
-        #[test]
-        fn sanitize_result_is_valid_irc_nick(s in "[a-zA-Z0-9_@#\\$\\.\\-\\[\\]\\\\\\^\\{\\}\\|`]{1,50}") {
+        fn sanitize_result_is_valid_irc_nick(s in ".{0,100}") {
             let nick = sanitize_nick(&s);
-            assert!(!nick.is_empty());
-            assert!(nick.len() <= 30);
-            // Must not start with a digit
-            assert!(!nick.starts_with(|c: char| c.is_ascii_digit()));
-            // All chars must be valid
-            assert!(nick.chars().all(|c| is_valid_nick_char(c) || c == 'd'));
+            prop_assert!(!nick.is_empty());
+            prop_assert!(nick.len() <= 30);
+            prop_assert!(!nick.starts_with(|c: char| c.is_ascii_digit()));
+            prop_assert!(nick.chars().all(is_valid_nick_char));
         }
 
         #[test]
@@ -1448,14 +1444,46 @@ mod tests {
             assert_eq!(seen.len(), unique_ids.len());
         }
 
+        /// The core collision invariant: the resolved nick is either absent
+        /// from the existing set, or it is the guaranteed-unique UID
+        /// fallback (which is not checked against the set by design).  The
+        /// result always stays within nick length limits.  `take_chain`
+        /// pre-occupies the entire fallback chain so the resolver is forced
+        /// through every stage.
         #[test]
-        fn resolve_nick_never_panics(
-            base in "[a-zA-Z_]{1,30}",
-            discord_id in 0u64..u64::MAX,
+        fn resolve_nick_avoids_collisions_or_uses_uid_fallback(
+            base in "[a-zA-Z][a-zA-Z0-9_]{0,29}",
+            discord_id in proptest::num::u64::ANY,
+            taken in prop::collection::vec("[a-zA-Z][a-zA-Z0-9_]{0,29}", 0..8),
+            take_chain in proptest::bool::ANY,
         ) {
-            let nicks = NickSet::new();
+            let mut nicks = NickSet::new();
+            for t in &taken {
+                nicks.insert(t);
+            }
+            if take_chain {
+                // Occupy base, base_, base__, base___, and the hex
+                // candidate, mirroring the resolver's fallback chain.
+                nicks.insert(&base);
+                let mut underscored = base.clone();
+                for _ in 0..3 {
+                    underscored.push('_');
+                    nicks.insert(&underscored);
+                }
+                let hex_suffix = format!("{:08x}", discord_id & 0xFFFF_FFFF);
+                let mut hex_candidate = base.clone();
+                hex_candidate.truncate(22);
+                hex_candidate.push_str(&hex_suffix);
+                nicks.insert(&hex_candidate);
+            }
             let uid = format!("0D0{:06}", discord_id % 1_000_000);
-            let _ = resolve_nick(&base, discord_id, &uid, &nicks);
+            let resolved = resolve_nick(&base, discord_id, &uid, &nicks);
+            prop_assert!(!resolved.is_empty());
+            prop_assert!(resolved.len() <= 30, "too long: {resolved:?}");
+            prop_assert!(
+                !nicks.contains(&resolved) || resolved == uid_nick(&uid),
+                "resolved nick {resolved:?} collides and is not the UID fallback"
+            );
         }
 
         #[test]

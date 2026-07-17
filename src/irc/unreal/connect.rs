@@ -1,6 +1,3 @@
-// Called by the connection loop (implemented in the next task).
-#![allow(dead_code)]
-
 //! TCP and TLS connection factory for the IRC server link.
 //!
 //! Returns `LineReader`/`LineWriter` halves that abstract over both plain-TCP

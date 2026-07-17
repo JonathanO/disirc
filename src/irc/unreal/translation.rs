@@ -1,6 +1,3 @@
-// Translation functions are called by the connection loop (next task).
-#![allow(dead_code)]
-
 use chrono::{DateTime, Utc};
 
 use super::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};

@@ -135,10 +135,10 @@ pub fn extract_nick_from_prefix(text: &str) -> Option<&str> {
 
 /// Route a Discord DM to an IRC PRIVMSG.
 ///
-/// Determines the target IRC user from reply context or nick-colon addressing.
-/// Returns `Some(S2SCommand::SendMessage)` if a target is found, or
-/// `Some(DiscordCommand::SendBotDm)` help/error messages, or `None` if
-/// the DM should be silently ignored.
+/// Determines the target IRC user from reply context or nick-colon
+/// addressing.  Returns [`DmRouteResult::Relay`] when a target is found,
+/// or [`DmRouteResult::Error`] with a help/error message to send back to
+/// the Discord user as a bot DM.
 pub fn route_dm_to_irc(
     pm: &PseudoclientManager,
     irc_state: &IrcState,
@@ -174,13 +174,9 @@ pub fn route_dm_to_irc(
     if let Some(colon_pos) = content.find(": ") {
         let potential_nick = &content[..colon_pos];
         if !potential_nick.is_empty()
-            && potential_nick.chars().all(|c| {
-                c.is_ascii_alphanumeric()
-                    || matches!(
-                        c,
-                        '_' | '-' | '[' | ']' | '\\' | '`' | '^' | '{' | '}' | '|'
-                    )
-            })
+            && potential_nick
+                .chars()
+                .all(crate::pseudoclients::is_valid_nick_char)
             && let Some(target_uid) = find_irc_uid_by_nick(irc_state, pm, potential_nick)
         {
             let text_after = &content[colon_pos + 2..];

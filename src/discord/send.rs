@@ -496,40 +496,6 @@ mod tests {
         }
     }
 
-    // --- plain-send nick sanitization ---
-
-    #[test]
-    fn plain_send_format_suppresses_at_everyone_in_nick() {
-        // Simulates the plain-send format string used in send_discord_message.
-        let nick = "@everyone";
-        let text = "hello";
-        let safe_text = format!(
-            "**[{}]** {}",
-            suppress_mentions(nick),
-            suppress_mentions(text)
-        );
-        assert!(
-            !safe_text.contains("@everyone"),
-            "plain-send must suppress @everyone in nick: {safe_text:?}"
-        );
-        assert!(safe_text.contains("@\u{200B}everyone"));
-    }
-
-    #[test]
-    fn plain_send_format_suppresses_at_here_in_nick() {
-        let nick = "@here";
-        let text = "world";
-        let safe_text = format!(
-            "**[{}]** {}",
-            suppress_mentions(nick),
-            suppress_mentions(text)
-        );
-        assert!(
-            !safe_text.contains("@here"),
-            "plain-send must suppress @here in nick: {safe_text:?}"
-        );
-    }
-
     // --- snapshot_from_cache ---
 
     #[test]

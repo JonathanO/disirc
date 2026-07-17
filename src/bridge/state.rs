@@ -511,8 +511,13 @@ mod tests {
 
     fn make_discord_state_with_channels(guild_id: u64, channels: &[&str]) -> DiscordState {
         let mut ds = DiscordState::default();
-        ds.guild_irc_channels
-            .insert(guild_id, channels.iter().map(|s| s.to_string()).collect());
+        ds.guild_irc_channels.insert(
+            guild_id,
+            channels
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+        );
         ds
     }
 
@@ -766,7 +771,7 @@ mod tests {
             channels.is_none()
                 || channels
                     .as_ref()
-                    .map_or(true, |c| !c.contains(&"#lobby".to_string())),
+                    .is_none_or(|c| !c.contains(&"#lobby".to_string())),
             "pseudoclient should no longer be in #lobby"
         );
     }
@@ -800,7 +805,7 @@ mod tests {
             channels.is_none()
                 || channels
                     .as_ref()
-                    .map_or(true, |c| !c.contains(&"#kicked".to_string())),
+                    .is_none_or(|c| !c.contains(&"#kicked".to_string())),
             "pseudoclient should no longer be in #kicked"
         );
     }
@@ -1356,7 +1361,10 @@ mod tests {
             1000,
         );
 
-        assert_eq!(ds.display_names.get(&10).map(|s| s.as_str()), Some("alice"));
+        assert_eq!(
+            ds.display_names.get(&10).map(std::string::String::as_str),
+            Some("alice")
+        );
     }
 
     #[test]
@@ -1379,7 +1387,7 @@ mod tests {
 
         assert!(cmds.is_empty(), "MemberAdded should not introduce");
         assert_eq!(
-            ds.display_names.get(&42).map(|s| s.as_str()),
+            ds.display_names.get(&42).map(std::string::String::as_str),
             Some("charlie")
         );
         assert!(pm.get_by_discord_id(42).is_none());

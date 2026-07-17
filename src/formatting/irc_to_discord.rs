@@ -825,7 +825,7 @@ mod tests {
             assert!(!result.chars().any(|c|
                 matches!(c, '\x02' | '\x1d' | '\x1f' | '\x1e' | '\x16' | '\x03' | '\x0f')
             ));
-            assert!(!result.chars().any(|c| c.is_control()));
+            assert!(!result.chars().any(char::is_control));
         }
 
         /// `irc_to_discord_formatting` on full Unicode input: control chars
@@ -858,7 +858,7 @@ mod tests {
             let text = parts.join("");
             let result = irc_to_discord_formatting(&text);
             prop_assert!(
-                !result.chars().any(|c| c.is_control()),
+                !result.chars().any(char::is_control),
                 "control characters must be stripped.\n  input:  {text:?}\n  output: {result:?}"
             );
             for ch in text.chars() {

@@ -460,7 +460,7 @@ mod tests {
         }
     }
 
-    /// Create an in-memory pair of (IrcReader, IrcWriter) for the "client"
+    /// Create an in-memory pair of (`IrcReader`, `IrcWriter`) for the "client"
     /// (our side) plus raw halves for the "uplink" (test harness) side.
     fn make_pair(
         buf: usize,
@@ -519,7 +519,7 @@ mod tests {
 
     // ── run_once ──────────────────────────────────────────────────────────
 
-    /// run_once returns Err when the TCP connection is refused.
+    /// `run_once` returns Err when the TCP connection is refused.
     #[tokio::test]
     async fn run_once_returns_error_on_refused_connection() {
         // Bind to get a free port, then drop the listener so nothing is listening.
@@ -589,14 +589,14 @@ mod tests {
         assert!(result.mtags_active);
     }
 
-    /// Uplink sends PROTOCTL without MTAGS → mtags_active is false.
+    /// Uplink sends PROTOCTL without MTAGS → `mtags_active` is false.
     #[tokio::test]
     async fn handshake_no_mtags_if_not_advertised() {
-        let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
+        let (mut client_r, mut client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
         tokio::spawn(async move {
             // Read and discard the 5 outbound lines.
-            let mut reader = LineReader::new(_uplink_r);
+            let mut reader = LineReader::new(uplink_r);
             for _ in 0..5 {
                 reader.next_line().await.unwrap();
             }
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(pong_line, ":002 PONG 002 :testtoken");
     }
 
-    /// do_handshake returns Err when the uplink sends ERROR.
+    /// `do_handshake` returns Err when the uplink sends ERROR.
     #[tokio::test]
     async fn handshake_error_message_returns_err() {
         let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
@@ -711,7 +711,7 @@ mod tests {
         }
     }
 
-    /// Inbound PRIVMSG is translated and emitted as S2SEvent::MessageReceived.
+    /// Inbound PRIVMSG is translated and emitted as `S2SEvent::MessageReceived`.
     #[tokio::test]
     async fn session_inbound_privmsg_emits_event() {
         let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
@@ -760,7 +760,7 @@ mod tests {
         }
     }
 
-    /// An outbound S2SCommand is translated to an IRC wire line.
+    /// An outbound `S2SCommand` is translated to an IRC wire line.
     #[tokio::test]
     async fn session_outbound_command_written_to_wire() {
         let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
@@ -912,8 +912,8 @@ mod tests {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
         let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
         let _keep = cmd_tx;
-        // Keep uplink_w alive (don't close connection; uplink just doesn't send PONG).
-        let _uplink_w = _uplink_w;
+        // _uplink_r/_uplink_w stay bound (underscore-prefixed, not `_`), so the
+        // connection is held open; the uplink just never sends a PONG.
 
         let result = run_session(
             client_r,
@@ -962,7 +962,7 @@ mod tests {
         );
     }
 
-    /// Uplink sends ERROR during the session — run_session returns Err.
+    /// Uplink sends ERROR during the session — `run_session` returns Err.
     #[tokio::test]
     async fn session_uplink_sends_error_returns_err() {
         let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
@@ -997,7 +997,7 @@ mod tests {
         );
     }
 
-    /// Inbound UID command emits S2SEvent::UserIntroduced with correct fields.
+    /// Inbound UID command emits `S2SEvent::UserIntroduced` with correct fields.
     #[tokio::test]
     async fn session_inbound_uid_emits_user_introduced() {
         let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);

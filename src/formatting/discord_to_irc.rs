@@ -867,7 +867,7 @@ mod tests {
     #[test]
     fn nested_angle_brackets() {
         let r = resolve_mentions("<<@111>>", &StubResolver);
-        assert!(r.contains("Alice") || r.contains("<"));
+        assert!(r.contains("Alice") || r.contains('<'));
     }
 
     #[test]
@@ -985,7 +985,7 @@ mod tests {
     #[test]
     fn split_long_line_with_spaces_splits_correctly() {
         let word = "a".repeat(50);
-        let line = vec![word.as_str(); 9].join(" ");
+        let line = [word.as_str(); 9].join(" ");
         let parts = split_long_line(&line, MAX_LINE_BYTES);
         assert!(parts.len() >= 2);
         assert!(parts[0].len() <= MAX_LINE_BYTES);

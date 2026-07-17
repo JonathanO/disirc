@@ -6,7 +6,14 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-None.
+Cleanup review follow-ups (2026-07-17) — six stand-alone PRs; recommended merge order 1 → 2 → 3 → 4 → 5, 6 anytime:
+
+- [x] PR 1 — `fix(irc)`: `translate_inbound` panic on multibyte UID prefix (this PR)
+- [ ] PR 2 — `test`: prune redundant and vacuous tests
+- [ ] PR 3 — `test`: widen property-based coverage
+- [ ] PR 4 — `refactor`: dead code removal + simplifications
+- [ ] PR 5 — `chore`: clippy `--all-targets` cleanup + tighten the gate in CLAUDE.md
+- [ ] PR 6 — `chore(docs)`: LAYOUT.md refresh (stale rate-limiter rows)
 
 ## Spec status
 
@@ -52,6 +59,7 @@ None.
 
 ## Bugs fixed during integration
 
+- Panic on multibyte UID prefix — `translate_inbound` byte-sliced `prefix[..3]`; a prefix whose third byte fell inside a multibyte UTF-8 character (or a U+FFFD from lossy decoding) panicked and killed the IRC connection task. Fixed with `prefix.get(..3)` fallback + never-panics property test
 - Missing `GUILDS` gateway intent — Discord never sent `GUILD_CREATE`, so pseudoclients were never created via the normal burst path
 - Double nick prefix on plain IRC→Discord path — `relay.rs` and `send.rs` both prepended `**[nick]**`
 - Pre-link duplicate UID race — Discord events arriving before IRC handshake completed produced commands that raced with the burst (fixed properly via deferred introduction in PR #23)

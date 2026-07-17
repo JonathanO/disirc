@@ -1,7 +1,3 @@
-// These items are called by the connection loop (implemented in the next task).
-// Until that task is complete they appear unused to the compiler.
-#![allow(dead_code)]
-
 /// Line-oriented framing for the IRC wire protocol.
 ///
 /// IRC messages are `\r\n`-terminated. The MTAGS capability extends the
@@ -113,18 +109,6 @@ mod tests {
     use super::*;
     use crate::irc::unreal::irc_message::{IrcCommand, IrcMessage};
     use tokio::io::duplex;
-
-    // Helper: wrap both halves of a duplex channel in LineReader / LineWriter.
-    fn make_pair(
-        buf: usize,
-    ) -> (
-        LineReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
-        LineWriter<tokio::io::WriteHalf<tokio::io::DuplexStream>>,
-    ) {
-        let (a, _b) = duplex(buf);
-        let (r, w) = tokio::io::split(a);
-        (LineReader::new(r), LineWriter::new(w))
-    }
 
     // Helper: create a reader wrapping a raw byte slice (simulates incoming data).
     fn reader_from_bytes(data: &[u8]) -> LineReader<std::io::Cursor<Vec<u8>>> {

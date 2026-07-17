@@ -156,8 +156,7 @@ impl UidGenerator {
             *c = ALPHABET[(n % 36) as usize];
             n /= 36;
         }
-        // SAFETY: all bytes are ASCII alphanumeric from ALPHABET
-        String::from_utf8(chars.to_vec()).expect("encode_counter produced invalid UTF-8")
+        chars.into_iter().map(char::from).collect()
     }
 
     /// Look up the UID for a Discord user, if already assigned.

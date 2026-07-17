@@ -1,6 +1,6 @@
 use crate::discord::{DiscordEvent, DiscordPresence};
 use crate::irc::{S2SCommand, S2SEvent};
-use crate::pseudoclients::PseudoclientManager;
+use crate::pseudoclients::{PseudoclientManager, PseudoclientState};
 
 // ---------------------------------------------------------------------------
 // IRC lifecycle state
@@ -369,22 +369,16 @@ pub fn apply_discord_event(
                     });
                 }
 
-                // Append AWAY status command.
-                cmds.extend(match presence {
-                    DiscordPresence::Online => vec![S2SCommand::ClearAway { uid }],
-                    DiscordPresence::Idle => vec![S2SCommand::SetAway {
-                        uid,
-                        reason: "Idle".to_string(),
-                    }],
-                    DiscordPresence::DoNotDisturb => vec![S2SCommand::SetAway {
-                        uid,
-                        reason: "Do Not Disturb".to_string(),
-                    }],
-                    DiscordPresence::Offline => vec![S2SCommand::SetAway {
-                        uid,
-                        reason: "Offline".to_string(),
-                    }],
-                });
+                // Append the AWAY command derived from the just-updated
+                // stored presence — away_command is the single source of
+                // truth for presence→AWAY text.  Online (`None`) clears.
+                match pm
+                    .get_by_discord_id(*user_id)
+                    .and_then(PseudoclientState::away_command)
+                {
+                    Some(away) => cmds.push(away),
+                    None => cmds.push(S2SCommand::ClearAway { uid }),
+                }
                 return cmds;
             }
             // Not yet introduced — only introduce for non-offline presence.

@@ -1,7 +1,8 @@
-#[cfg(test)]
+//! Shared no-op resolvers for bridge tests.  The module itself is declared
+//! `#[cfg(test)]` in `bridge/mod.rs`.
+
 pub(crate) struct NullResolver;
 
-#[cfg(test)]
 impl crate::formatting::DiscordResolver for NullResolver {
     fn resolve_user(&self, _: &str) -> Option<String> {
         None
@@ -14,10 +15,8 @@ impl crate::formatting::DiscordResolver for NullResolver {
     }
 }
 
-#[cfg(test)]
 pub(crate) struct NullIrcResolver;
 
-#[cfg(test)]
 impl crate::formatting::IrcMentionResolver for NullIrcResolver {
     fn resolve_nick(&self, _: &str) -> Option<String> {
         None

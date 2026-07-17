@@ -49,36 +49,22 @@ pub fn resolve_mentions(text: &str, resolver: &dyn DiscordResolver) -> String {
 
 fn resolve_one(inner: &str, resolver: &dyn DiscordResolver) -> Option<String> {
     // Custom/animated emoji: :name:id or a:name:id
-    if let Some(rest) = inner.strip_prefix(':') {
-        // :name:id
-        if let Some(colon_pos) = rest.find(':') {
-            let name = &rest[..colon_pos];
-            return Some(format!(":{name}:"));
-        }
-    }
-    if let Some(rest) = inner.strip_prefix("a:") {
-        // a:name:id
-        if let Some(colon_pos) = rest.find(':') {
-            let name = &rest[..colon_pos];
-            return Some(format!(":{name}:"));
-        }
+    if let Some(rest) = inner.strip_prefix("a:").or_else(|| inner.strip_prefix(':'))
+        && let Some(colon_pos) = rest.find(':')
+    {
+        return Some(format!(":{}:", &rest[..colon_pos]));
     }
 
-    // User mention: @id or @!id
-    if let Some(id) = inner.strip_prefix("@!") {
-        let display = resolver
-            .resolve_user(id)
-            .unwrap_or_else(|| format!("@{id}"));
-        return Some(format!("@{display}"));
-    }
+    // Role mention: @&id
     if let Some(id) = inner.strip_prefix("@&") {
-        // Role mention
         let display = resolver
             .resolve_role(id)
             .unwrap_or_else(|| "deleted-role".to_string());
         return Some(format!("@{display}"));
     }
-    if let Some(id) = inner.strip_prefix('@') {
+
+    // User mention: @!id (legacy) or @id
+    if let Some(id) = inner.strip_prefix("@!").or_else(|| inner.strip_prefix('@')) {
         let display = resolver
             .resolve_user(id)
             .unwrap_or_else(|| format!("@{id}"));
@@ -127,23 +113,13 @@ pub fn markdown_to_irc(text: &str) -> String {
     result = protected;
 
     // Step 3: Underline __text__ → \x1ftext\x1f (before single _)
-    result = replace_paired_marker(
-        &result,
-        "__",
-        &IRC_UNDERLINE.to_string(),
-        &IRC_UNDERLINE.to_string(),
-    );
+    result = replace_paired_marker(&result, "__", IRC_UNDERLINE);
 
     // Step 4: Bold **text** → \x02text\x02
-    result = replace_paired_marker(&result, "**", &IRC_BOLD.to_string(), &IRC_BOLD.to_string());
+    result = replace_paired_marker(&result, "**", IRC_BOLD);
 
     // Step 5a: Italic *text* → \x1dtext\x1d
-    result = replace_paired_marker(
-        &result,
-        "*",
-        &IRC_ITALIC.to_string(),
-        &IRC_ITALIC.to_string(),
-    );
+    result = replace_paired_marker(&result, "*", IRC_ITALIC);
 
     // Step 5b: Italic _text_ → \x1dtext\x1d (word boundary only)
     result = replace_word_boundary_underscores(&result);
@@ -215,21 +191,14 @@ fn protect_code_spans(text: &str) -> (String, Vec<String>) {
     let mut remaining = text;
 
     loop {
-        // Look for ``` (code block) or ` (inline code)
-        let triple = remaining.find("```");
-        let single = remaining.find('`');
-
-        let next_code = match (triple, single) {
-            (Some(t), Some(s)) if t <= s => Some((t, true)),
-            (_, Some(s)) => Some((s, false)),
-            (Some(t), None) => Some((t, true)),
-            (None, None) => None,
-        };
-
-        let Some((pos, is_block)) = next_code else {
+        // The first backtick starts the next code span; it opens a block iff
+        // it begins a triple backtick.  (A "```" match can never occur before
+        // the first '`', so a separate find("```") would be redundant.)
+        let Some(pos) = remaining.find('`') else {
             result.push_str(remaining);
             break;
         };
+        let is_block = remaining[pos..].starts_with("```");
 
         let delimiter = if is_block { "```" } else { "`" };
         let after_open = pos + delimiter.len();
@@ -316,8 +285,8 @@ fn find_word_boundary_close(chars: &[char], start: usize) -> Option<usize> {
     None
 }
 
-/// Replace paired markers like `**text**` with `open + text + close`.
-fn replace_paired_marker(text: &str, marker: &str, open: &str, close: &str) -> String {
+/// Replace paired markers like `**text**` with `code + text + code`.
+fn replace_paired_marker(text: &str, marker: &str, code: char) -> String {
     let mut result = String::with_capacity(text.len());
     let mut remaining = text;
 
@@ -344,9 +313,9 @@ fn replace_paired_marker(text: &str, marker: &str, open: &str, close: &str) -> S
         }
 
         result.push_str(&remaining[..start]);
-        result.push_str(open);
+        result.push(code);
         result.push_str(inner);
-        result.push_str(close);
+        result.push(code);
         remaining = &remaining[after_open + end + marker.len()..];
     }
 
@@ -967,7 +936,7 @@ mod tests {
 
     #[test]
     fn replace_paired_marker_empty_inner() {
-        let r = replace_paired_marker("****", "**", "[", "]");
+        let r = replace_paired_marker("****", "**", '[');
         assert_eq!(r, "****");
     }
 

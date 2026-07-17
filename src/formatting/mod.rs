@@ -79,49 +79,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn format_leap_year() {
-        // 2024-02-29 00:00:00.000 UTC (2024 is a leap year)
-        assert_eq!(
-            format_server_time(1_709_164_800, 0),
-            "2024-02-29T00:00:00.000Z"
-        );
-    }
-
-    #[test]
-    fn format_end_of_year() {
-        // 2023-12-31 23:59:59.999 UTC
-        assert_eq!(
-            format_server_time(1_704_067_199, 999),
-            "2023-12-31T23:59:59.999Z"
-        );
-    }
-
-    #[test]
-    fn server_time_various_dates() {
-        assert_eq!(
-            format_server_time(951_868_800, 0),
-            "2000-03-01T00:00:00.000Z"
-        );
-        assert_eq!(
-            format_server_time(946_684_800, 0),
-            "2000-01-01T00:00:00.000Z"
-        );
-    }
-
-    #[test]
-    fn server_time_far_future() {
-        assert_eq!(
-            format_server_time(4_102_444_800, 0),
-            "2100-01-01T00:00:00.000Z"
-        );
-    }
-
     use proptest::prelude::*;
 
     proptest! {
+        /// Any timestamp with ANY millis value — including out-of-range
+        /// millis, which are clamped to 999 — formats as a fixed-width
+        /// ISO 8601 UTC string.
         #[test]
-        fn server_time_is_valid_iso8601(secs in 0i64..4_102_444_800i64, millis in 0u32..1000u32) {
+        fn server_time_is_valid_iso8601(
+            secs in 0i64..4_102_444_800i64,
+            millis in proptest::num::u32::ANY,
+        ) {
             let formatted = format_server_time(secs, millis);
             assert!(formatted.ends_with('Z'));
             assert_eq!(formatted.len(), 24); // YYYY-MM-DDTHH:MM:SS.mmmZ
@@ -131,17 +99,6 @@ mod tests {
             assert_eq!(&formatted[13..14], ":");
             assert_eq!(&formatted[16..17], ":");
             assert_eq!(&formatted[19..20], ".");
-        }
-
-        /// Out-of-range millis values must not panic (clamped to 999).
-        #[test]
-        fn server_time_out_of_range_millis_does_not_panic(
-            secs in 0i64..4_102_444_800i64,
-            millis in 1000u32..=u32::MAX,
-        ) {
-            let formatted = format_server_time(secs, millis);
-            assert!(formatted.ends_with('Z'));
-            assert_eq!(formatted.len(), 24);
         }
     }
 

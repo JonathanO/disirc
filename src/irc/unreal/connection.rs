@@ -1,6 +1,3 @@
-// This module will be called from main.rs in a future task.
-#![allow(dead_code)]
-
 //! Full IRC server-link connection loop for `UnrealIRCd` S2S.
 //!
 //! The public entry point is [`run_connection`]. It never returns — on link
@@ -50,8 +47,6 @@ impl SessionTimings {
 
 /// Capabilities negotiated during the `UnrealIRCd` handshake.
 struct HandshakeResult {
-    /// The uplink's SID, extracted from its `PROTOCTL SID=` line.
-    uplink_sid: String,
     /// Whether the uplink advertised `MTAGS` — gates `@time=` tag emission.
     mtags_active: bool,
 }
@@ -249,7 +244,6 @@ async fn do_handshake(
         .await
         .context("Sending handshake credentials")?;
 
-    let mut uplink_sid = String::new();
     let mut mtags_active = false;
     let mut pass_seen = false;
 
@@ -277,13 +271,8 @@ async fn do_handshake(
                 pass_seen = true;
             }
             IrcCommand::Protoctl { tokens } => {
-                for token in tokens {
-                    if let Some(sid) = token.strip_prefix("SID=") {
-                        sid.clone_into(&mut uplink_sid);
-                    }
-                    if token == "MTAGS" {
-                        mtags_active = true;
-                    }
+                if tokens.iter().any(|t| t == "MTAGS") {
+                    mtags_active = true;
                 }
             }
             // Either form of server introduction ends the handshake.
@@ -310,10 +299,7 @@ async fn do_handshake(
         }
     }
 
-    Ok(HandshakeResult {
-        uplink_sid,
-        mtags_active,
-    })
+    Ok(HandshakeResult { mtags_active })
 }
 
 /// Run the main session loop for a live link.
@@ -585,7 +571,6 @@ mod tests {
             "line 5: SERVER"
         );
 
-        assert_eq!(result.uplink_sid, "001");
         assert!(result.mtags_active);
     }
 
@@ -615,7 +600,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.uplink_sid, "001");
         assert!(!result.mtags_active);
     }
 
@@ -706,7 +690,6 @@ mod tests {
 
     fn default_hs() -> HandshakeResult {
         HandshakeResult {
-            uplink_sid: "001".into(),
             mtags_active: false,
         }
     }

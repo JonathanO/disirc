@@ -779,7 +779,7 @@ mod tests {
         }
     }
 
-    /// After BurstComplete, Discord events should produce IRC commands
+    /// After `BurstComplete`, Discord events should produce IRC commands
     /// immediately (link phase is Ready).
     #[test]
     fn discord_events_processed_after_burst_complete() {
@@ -897,7 +897,7 @@ mod tests {
         );
     }
 
-    /// BurstComplete emits AWAY for pseudoclients with non-Online presence.
+    /// `BurstComplete` emits AWAY for pseudoclients with non-Online presence.
     #[test]
     fn burst_includes_away_for_idle_pseudoclients() {
         let mut state = BridgeState::new(&test_config(), HashMap::new());
@@ -989,8 +989,8 @@ mod tests {
         );
     }
 
-    /// KILL of a pseudoclient with reintroduce_on_kill=true should produce
-    /// IntroduceUser commands with a fresh UID.
+    /// KILL of a pseudoclient with `reintroduce_on_kill=true` should produce
+    /// `IntroduceUser` commands with a fresh UID.
     #[test]
     fn kill_with_reintroduce_produces_new_uid() {
         let mut config = test_config();
@@ -1104,8 +1104,8 @@ mod tests {
 
     // --- LinkDown recovery ---
 
-    /// External nicks (known_nicks) from a previous connection must be cleared
-    /// on LinkDown.  If they survive, pseudoclient nick collision avoidance
+    /// External nicks (`known_nicks`) from a previous connection must be cleared
+    /// on `LinkDown`.  If they survive, pseudoclient nick collision avoidance
     /// would incorrectly suffix nicks for users who quit while the link was
     /// down.
     #[test]
@@ -1687,7 +1687,7 @@ mod tests {
     }
 
     /// After IRC link drops and reconnects, existing pseudoclients must be
-    /// re-introduced to the new link on BurstComplete.
+    /// re-introduced to the new link on `BurstComplete`.
     #[test]
     fn reconnect_rebursts_existing_pseudoclients() {
         let mut state = BridgeState::new(&test_config(), HashMap::new());
@@ -1757,7 +1757,7 @@ mod tests {
         );
     }
 
-    /// Our burst (including EOS) is sent on BurstComplete.
+    /// Our burst (including EOS) is sent on `BurstComplete`.
     #[test]
     fn burst_sent_on_link_up() {
         let mut state = BridgeState::new(&test_config(), HashMap::new());
@@ -2184,7 +2184,7 @@ mod tests {
         );
     }
 
-    /// KILL during burst window (before BurstComplete) defers reintroduction.
+    /// KILL during burst window (before `BurstComplete`) defers reintroduction.
     #[test]
     fn kill_during_burst_deferred_to_burst_complete() {
         let mut config = test_config();
@@ -2563,7 +2563,7 @@ mod tests {
         );
     }
 
-    /// User not in MemberSnapshot (large guild chunking) but has persisted
+    /// User not in `MemberSnapshot` (large guild chunking) but has persisted
     /// state.  On-demand introduction via message should consume the seed.
     #[test]
     fn seed_state_applied_on_demand_for_unchunked_user() {

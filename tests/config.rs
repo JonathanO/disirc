@@ -51,7 +51,9 @@ fn load_invalid_toml_returns_parse_error() {
 #[test]
 fn config_path_flag_without_value_defaults() {
     // --config with no following argument falls back to default
-    let args = ["disirc", "--config"].iter().map(|s| s.to_string());
+    let args = ["disirc", "--config"]
+        .iter()
+        .map(std::string::ToString::to_string);
     let path = config_path_from_iter(args);
     assert_eq!(path, PathBuf::from("config.toml"));
 }

@@ -1,8 +1,8 @@
 //! Layer 4 e2e tests: real `UnrealIRCd` + real Discord Gateway.
 //!
-//! Uses a **single** bridge instance (one UnrealIRCd container, one Discord
+//! Uses a **single** bridge instance (one `UnrealIRCd` container, one Discord
 //! Gateway connection) shared across all assertion blocks.  This avoids
-//! rapid gateway reconnections that cause Discord to throttle GUILD_CREATE.
+//! rapid gateway reconnections that cause Discord to throttle `GUILD_CREATE`.
 //!
 //! Run explicitly with:
 //!
@@ -236,7 +236,7 @@ async fn wait_for_bridge_in_links(
 
 /// Full Layer 4 e2e test suite.
 ///
-/// Starts one UnrealIRCd container and one bridge (IRC + Discord + bridge
+/// Starts one `UnrealIRCd` container and one bridge (IRC + Discord + bridge
 /// processor) and runs all assertion blocks against the shared infrastructure.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker + Discord credentials"]

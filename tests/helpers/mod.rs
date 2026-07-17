@@ -10,7 +10,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 /// Pre-built image published to ghcr.io by the `docker-test-image.yml` workflow.
-/// Contains the compiled UnrealIRCd binary and a self-signed TLS cert.
+/// Contains the compiled `UnrealIRCd` binary and a self-signed TLS cert.
 /// The test config is injected at runtime via `with_copy_to`.
 const TEST_IMAGE: &str = "ghcr.io/jonathano/disirc-unrealircd-test";
 const TEST_IMAGE_TAG: &str = "latest";

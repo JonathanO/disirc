@@ -43,31 +43,10 @@ fn load_invalid_toml_returns_parse_error() {
 
 // ---------------------------------------------------------------------------
 // config_path_from_iter()
+//
+// The default / explicit-flag / unknown-flag cases are covered by unit tests
+// in src/config.rs; only the case unique to this file lives here.
 // ---------------------------------------------------------------------------
-
-#[test]
-fn config_path_defaults_to_config_toml() {
-    let path = config_path_from_iter(["disirc"].iter().map(|s| s.to_string()));
-    assert_eq!(path, PathBuf::from("config.toml"));
-}
-
-#[test]
-fn config_path_explicit_flag() {
-    let args = ["disirc", "--config", "/etc/disirc/prod.toml"]
-        .iter()
-        .map(|s| s.to_string());
-    let path = config_path_from_iter(args);
-    assert_eq!(path, PathBuf::from("/etc/disirc/prod.toml"));
-}
-
-#[test]
-fn config_path_ignores_unknown_flags() {
-    let args = ["disirc", "--verbose", "--config", "custom.toml"]
-        .iter()
-        .map(|s| s.to_string());
-    let path = config_path_from_iter(args);
-    assert_eq!(path, PathBuf::from("custom.toml"));
-}
 
 #[test]
 fn config_path_flag_without_value_defaults() {

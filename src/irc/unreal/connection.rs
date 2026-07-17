@@ -489,23 +489,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn backoff_attempt_10_is_below_300s() {
-        for _ in 0..20 {
-            assert!(backoff_delay(10) < Duration::from_secs(300));
-        }
-    }
-
     proptest! {
         #[test]
         fn backoff_always_below_300s(attempt: u32) {
             let d = backoff_delay(attempt);
             prop_assert!(d < Duration::from_secs(300));
-        }
-
-        #[test]
-        fn backoff_always_nonnegative(attempt: u32) {
-            let _d = backoff_delay(attempt); // just ensure it doesn't panic
         }
     }
 

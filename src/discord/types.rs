@@ -20,18 +20,6 @@ impl DiscordPresence {
     pub fn is_non_offline(self) -> bool {
         self != Self::Offline
     }
-
-    /// Returns the IRC `AWAY` message text for this presence, or `None` if the
-    /// user is considered online (`DiscordPresence::Online`).
-    #[must_use]
-    pub fn away_message(self) -> Option<&'static str> {
-        match self {
-            Self::Online => None,
-            Self::Idle => Some("idle"),
-            Self::DoNotDisturb => Some("do not disturb"),
-            Self::Offline => Some("offline"),
-        }
-    }
 }
 
 /// A snapshot of a single guild member, used to populate the IRC burst.
@@ -199,17 +187,6 @@ mod tests {
         assert!(DiscordPresence::Online.is_non_offline());
         assert!(DiscordPresence::Idle.is_non_offline());
         assert!(DiscordPresence::DoNotDisturb.is_non_offline());
-    }
-
-    #[test]
-    fn away_message_for_all_variants() {
-        assert_eq!(DiscordPresence::Online.away_message(), None);
-        assert_eq!(DiscordPresence::Idle.away_message(), Some("idle"));
-        assert_eq!(
-            DiscordPresence::DoNotDisturb.away_message(),
-            Some("do not disturb")
-        );
-        assert_eq!(DiscordPresence::Offline.away_message(), Some("offline"));
     }
 
     // --- webhook_id_from_url ---

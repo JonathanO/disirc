@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn missing_bridge_section_fails() {
-        let toml = r##"
+        let toml = r#"
             [discord]
             token = "Bot abc123"
 
@@ -645,7 +645,7 @@ mod tests {
             link_name = "discord.example.net"
             link_password = "secret"
             sid = "0D0"
-        "##;
+        "#;
         assert!(toml::from_str::<Config>(toml).is_err());
     }
 

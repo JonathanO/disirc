@@ -181,8 +181,7 @@ mod tests {
     #[tokio::test]
     async fn drops_overlong_line_and_returns_next() {
         // Build a line of MAX_LINE_BYTES + 1 payload bytes, then a valid line.
-        let long: Vec<u8> = std::iter::repeat(b'X')
-            .take(MAX_LINE_BYTES + 1)
+        let long: Vec<u8> = std::iter::repeat_n(b'X', MAX_LINE_BYTES + 1)
             .chain(b"\r\n".iter().copied())
             .collect();
         let mut data = long;
@@ -197,7 +196,7 @@ mod tests {
     #[tokio::test]
     async fn accepts_line_exactly_at_limit() {
         // Payload of exactly MAX_LINE_BYTES bytes should be accepted.
-        let mut data: Vec<u8> = std::iter::repeat(b'X').take(MAX_LINE_BYTES).collect();
+        let mut data: Vec<u8> = std::iter::repeat_n(b'X', MAX_LINE_BYTES).collect();
         data.extend_from_slice(b"\r\n");
 
         let mut r = reader_from_bytes(&data);

@@ -47,7 +47,7 @@ fn load_invalid_toml_returns_parse_error() {
 
 #[test]
 fn config_path_defaults_to_config_toml() {
-    let path = config_path_from_iter(["disirc"].iter().map(|s| s.to_string()));
+    let path = config_path_from_iter(["disirc"].iter().map(std::string::ToString::to_string));
     assert_eq!(path, PathBuf::from("config.toml"));
 }
 
@@ -55,7 +55,7 @@ fn config_path_defaults_to_config_toml() {
 fn config_path_explicit_flag() {
     let args = ["disirc", "--config", "/etc/disirc/prod.toml"]
         .iter()
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let path = config_path_from_iter(args);
     assert_eq!(path, PathBuf::from("/etc/disirc/prod.toml"));
 }
@@ -64,7 +64,7 @@ fn config_path_explicit_flag() {
 fn config_path_ignores_unknown_flags() {
     let args = ["disirc", "--verbose", "--config", "custom.toml"]
         .iter()
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let path = config_path_from_iter(args);
     assert_eq!(path, PathBuf::from("custom.toml"));
 }
@@ -72,7 +72,9 @@ fn config_path_ignores_unknown_flags() {
 #[test]
 fn config_path_flag_without_value_defaults() {
     // --config with no following argument falls back to default
-    let args = ["disirc", "--config"].iter().map(|s| s.to_string());
+    let args = ["disirc", "--config"]
+        .iter()
+        .map(std::string::ToString::to_string);
     let path = config_path_from_iter(args);
     assert_eq!(path, PathBuf::from("config.toml"));
 }

@@ -123,10 +123,10 @@ Do **not** write tests for:
 A task is not done until all of the following pass with no errors or warnings:
 
 ```
-cargo test                          # all non-ignored tests green
-cargo clippy -- -D warnings         # zero warnings, including pedantic and cargo groups
+cargo test                              # all non-ignored tests green
+cargo clippy --all-targets -- -D warnings   # zero warnings in lib, bins, AND all test code
 cargo fmt --check
-cargo deny check                    # no CVEs, licence violations, or banned crates
+cargo deny check                        # no CVEs, licence violations, or banned crates
 ```
 
 Clippy pedantic and cargo lint groups should be enabled. If `Cargo.toml` does not yet contain a `[lints.clippy]` section, add one:

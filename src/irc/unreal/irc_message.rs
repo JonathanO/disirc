@@ -1231,7 +1231,7 @@ mod tests {
         }
     }
 
-    /// UnrealIRCd omits the modes parameter when no channel modes are set.
+    /// `UnrealIRCd` omits the modes parameter when no channel modes are set.
     /// The parser must accept 3 parameters (timestamp, channel, trailing members).
     #[test]
     fn parse_sjoin_without_modes() {
@@ -1248,7 +1248,7 @@ mod tests {
     }
 
     /// Same as above but with tags, matching the exact format seen from
-    /// UnrealIRCd in e2e tests.
+    /// `UnrealIRCd` in e2e tests.
     #[test]
     fn parse_sjoin_without_modes_with_tags() {
         let line = "@msgid=abc123;time=2026-03-31T16:04:39.364Z :001 SJOIN 1774973079 #e2e-test :@0013XNP01";

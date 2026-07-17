@@ -74,10 +74,10 @@ impl TestIrcClient {
                 }
                 // JOIN-specific error numerics (RFC 2812 + UnrealIRCd extensions).
                 // 400-level numerics like 422 (no MOTD) are unrelated to JOIN.
-                if let Ok(n) = numeric.parse::<u16>() {
-                    if matches!(n, 403 | 405 | 437 | 448 | 471..=480 | 520) {
-                        panic!("JOIN {channel} failed with error {n}: {line}");
-                    }
+                if let Ok(n) = numeric.parse::<u16>()
+                    && matches!(n, 403 | 405 | 437 | 448 | 471..=480 | 520)
+                {
+                    panic!("JOIN {channel} failed with error {n}: {line}");
                 }
             }
         }

@@ -1,4 +1,4 @@
-//! Layer 3 e2e tests: real UnrealIRCd in Docker, Discord side mocked via mpsc.
+//! Layer 3 e2e tests: real `UnrealIRCd` in Docker, Discord side mocked via mpsc.
 //!
 //! All tests are `#[ignore]` — they require Docker and are not run in the
 //! normal `cargo test` suite. Run them explicitly with:
@@ -81,9 +81,10 @@ impl BridgeTasks {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                panic!("timed out waiting for DiscordCommand::SendDm containing {needle:?}");
-            }
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for DiscordCommand::SendDm containing {needle:?}"
+            );
             match tokio::time::timeout(remaining, self.discord_cmd_rx.recv()).await {
                 Ok(Some(DiscordCommand::SendDm {
                     recipient_user_id,
@@ -91,7 +92,7 @@ impl BridgeTasks {
                 })) if text.contains(needle) => {
                     return (recipient_user_id, text);
                 }
-                Ok(Some(_)) => continue,
+                Ok(Some(_)) => {} // other command type — keep waiting
                 _ => panic!("discord_cmd_rx closed before receiving SendDm containing {needle:?}"),
             }
         }
@@ -105,9 +106,10 @@ impl BridgeTasks {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                panic!("timed out waiting for DiscordCommand::SendBotDm containing {needle:?}");
-            }
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for DiscordCommand::SendBotDm containing {needle:?}"
+            );
             match tokio::time::timeout(remaining, self.discord_cmd_rx.recv()).await {
                 Ok(Some(DiscordCommand::SendBotDm {
                     recipient_user_id,
@@ -115,7 +117,7 @@ impl BridgeTasks {
                 })) if text.contains(needle) => {
                     return (recipient_user_id, text);
                 }
-                Ok(Some(_)) => continue,
+                Ok(Some(_)) => {} // other command type — keep waiting
                 _ => {
                     panic!("discord_cmd_rx closed before receiving SendBotDm containing {needle:?}")
                 }
@@ -132,14 +134,15 @@ impl BridgeTasks {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                panic!("timed out waiting for DiscordCommand::SendMessage containing {needle:?}");
-            }
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for DiscordCommand::SendMessage containing {needle:?}"
+            );
             match tokio::time::timeout(remaining, self.discord_cmd_rx.recv()).await {
                 Ok(Some(DiscordCommand::SendMessage { text, .. })) if text.contains(needle) => {
                     return text;
                 }
-                Ok(Some(_)) => continue,
+                Ok(Some(_)) => {} // other command type — keep waiting
                 _ => panic!(
                     "discord_cmd_rx closed before receiving SendMessage containing {needle:?}"
                 ),
@@ -233,9 +236,10 @@ async fn wait_for_bridge_in_links(
         if found {
             return;
         }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("Timed out after {timeout_secs}s: {bridge_name:?} not found in LINKS");
-        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Timed out after {timeout_secs}s: {bridge_name:?} not found in LINKS"
+        );
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
@@ -244,10 +248,10 @@ async fn wait_for_bridge_in_links(
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Verify the bridge establishes an S2S link with UnrealIRCd.
+/// Verify the bridge establishes an S2S link with `UnrealIRCd`.
 /// The bridge's server name (`bridge.test.net`) should appear in LINKS.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_bridge_connects_to_unrealircd() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -266,7 +270,7 @@ async fn e2e_bridge_connects_to_unrealircd() {
 /// Inject a Discord message and verify the IRC client sees the corresponding
 /// PRIVMSG in the bridged channel.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_discord_to_irc_message_relay() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -327,7 +331,7 @@ async fn e2e_discord_to_irc_message_relay() {
 /// Send a PRIVMSG from a test IRC client and verify the bridge emits a
 /// `DiscordCommand::SendMessage` for the bridged Discord channel.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_irc_to_discord_message_relay() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -391,11 +395,11 @@ async fn e2e_irc_to_discord_message_relay() {
 /// established and verify the pseudoclient still appears on IRC via the burst.
 ///
 /// Previously, pre-link commands were queued ahead of the burst, causing
-/// UnrealIRCd to receive duplicate UID introductions and SQUIT the bridge.
+/// `UnrealIRCd` to receive duplicate UID introductions and SQUIT the bridge.
 /// After the fix the bridge suppresses live-introduce commands when the link
 /// is down; `produce_burst_commands` on `LinkUp` is the sole introduction path.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -455,7 +459,7 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
 
 /// Inject a `MemberSnapshot` and verify the pseudoclient's nick appears on IRC.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_pseudoclient_appears_on_irc() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -514,7 +518,7 @@ async fn e2e_pseudoclient_appears_on_irc() {
 /// Discord→IRC: a message containing `<@user_id>` should arrive on IRC with
 /// the user's display name instead of the raw ID.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_discord_mention_resolved_to_nick_on_irc() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -591,7 +595,7 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
 /// IRC→Discord: a message containing `@Nick` should be converted to a Discord
 /// `<@user_id>` mention if the nick matches a pseudoclient.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_irc_mention_resolved_to_discord_id() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -653,11 +657,11 @@ async fn e2e_irc_mention_resolved_to_discord_id() {
 // KILL handling tests
 // ---------------------------------------------------------------------------
 
-/// When a pseudoclient is KILLed and reintroduce_on_kill is true, it should
+/// When a pseudoclient is `KILLed` and `reintroduce_on_kill` is true, it should
 /// reappear on IRC.  Nick collision avoidance is covered by unit tests;
 /// this L3 test verifies the end-to-end KILL→reintroduce flow.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_killed_pseudoclient_reintroduced() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -751,8 +755,8 @@ async fn e2e_killed_pseudoclient_reintroduced() {
 // DM bridging tests
 // ---------------------------------------------------------------------------
 
-/// Config with dm_bridging enabled.
-/// DM config — same as default (dm_bridging defaults to true).
+/// Config with `dm_bridging` enabled.
+/// DM config — same as default (`dm_bridging` defaults to true).
 fn e2e_dm_config(host: &str, s2s_port: u16) -> Config {
     e2e_config(host, s2s_port)
 }
@@ -760,7 +764,7 @@ fn e2e_dm_config(host: &str, s2s_port: u16) -> Config {
 /// IRC→Discord DM: an IRC user /msg's a pseudoclient, and the bridge emits
 /// a `SendDm` command to the Discord user.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_irc_privmsg_to_pseudoclient_relays_as_dm() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -820,7 +824,7 @@ async fn e2e_irc_privmsg_to_pseudoclient_relays_as_dm() {
 /// addressing, and the bridge emits a PRIVMSG from the pseudoclient to the
 /// IRC user.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;
@@ -879,7 +883,7 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
 /// Discord→IRC DM: when a Discord user DMs the bridge bot without addressing,
 /// the bridge sends back a help message.
 #[tokio::test]
-#[ignore]
+#[ignore = "requires Docker (testcontainers UnrealIRCd)"]
 async fn e2e_discord_dm_unresolvable_sends_help() {
     init_tracing();
     let irc = helpers::start_unrealircd().await;

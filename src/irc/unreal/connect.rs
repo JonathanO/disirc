@@ -144,7 +144,7 @@ mod tests {
     // with no branch logic to test. The only meaningful unit test here checks
     // that a refused connection surfaces as an error.
 
-    /// AcceptAnyCert must declare at least one signature scheme so that TLS
+    /// `AcceptAnyCert` must declare at least one signature scheme so that TLS
     /// negotiation can succeed (an empty list prevents any cipher suite agreement).
     #[test]
     fn accept_any_cert_supports_at_least_one_scheme() {

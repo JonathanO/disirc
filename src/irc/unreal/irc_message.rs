@@ -926,32 +926,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_uid_too_few_params_is_error() {
-        let result = IrcMessage::parse("UID Alice 1 :only three params");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "UID".to_string(),
-                required: 12,
-                got: 3
-            })
-        );
-    }
-
-    #[test]
-    fn parse_uid_zero_params_is_error() {
-        let result = IrcMessage::parse("UID");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "UID".to_string(),
-                required: 12,
-                got: 0
-            })
-        );
-    }
-
-    #[test]
     fn parse_uid_extra_params_succeeds() {
         // 13 params: a hypothetical future field inserted between ip and realname.
         // Greedy parsing takes the first 11 positional fields and uses the trailing
@@ -994,19 +968,6 @@ mod tests {
         };
         assert_eq!(target, "#general");
         assert_eq!(text, "hello"); // trailing is still the message text
-    }
-
-    #[test]
-    fn parse_sjoin_too_few_params_is_error() {
-        let result = IrcMessage::parse("SJOIN 12345 #test");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "SJOIN".to_string(),
-                required: 3,
-                got: 2
-            })
-        );
     }
 
     // ---- Parsing: CRLF stripping -------------------------------------------
@@ -1335,11 +1296,6 @@ mod tests {
                 reason: "Killed (reason)".to_string(),
             }
         );
-    }
-
-    #[test]
-    fn parse_kill_too_few_params_is_error() {
-        assert!(IrcMessage::parse("KILL").is_err());
     }
 
     #[test]
@@ -1839,108 +1795,37 @@ mod tests {
 
     // ---- MissingParams errors when known commands have too few params ------
 
+    /// Every known command with fewer than its required parameters must
+    /// produce a `MissingParams` error carrying the exact command name,
+    /// requirement, and actual count.
     #[test]
-    fn parse_server_too_few_params_is_error() {
-        let result = IrcMessage::parse("SERVER irc.example.net");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "SERVER".to_string(),
-                required: 3,
-                got: 1
-            })
-        );
-    }
-
-    #[test]
-    fn parse_sid_too_few_params_is_error() {
-        let result = IrcMessage::parse("SID irc.example.net 1 001");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "SID".to_string(),
-                required: 4,
-                got: 3
-            })
-        );
-    }
-
-    #[test]
-    fn parse_part_no_params_is_error() {
-        let result = IrcMessage::parse("PART");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "PART".to_string(),
-                required: 1,
-                got: 0
-            })
-        );
-    }
-
-    #[test]
-    fn parse_kick_too_few_params_is_error() {
-        let result = IrcMessage::parse("KICK #general");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "KICK".to_string(),
-                required: 2,
-                got: 1
-            })
-        );
-    }
-
-    #[test]
-    fn parse_nick_too_few_params_is_error() {
-        let result = IrcMessage::parse("NICK Alice2");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "NICK".to_string(),
-                required: 2,
-                got: 1
-            })
-        );
-    }
-
-    #[test]
-    fn parse_svsnick_too_few_params_is_error() {
-        let result = IrcMessage::parse("SVSNICK ABC000001");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "SVSNICK".to_string(),
-                required: 2,
-                got: 1
-            })
-        );
-    }
-
-    #[test]
-    fn parse_privmsg_too_few_params_is_error() {
-        let result = IrcMessage::parse("PRIVMSG #general");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "PRIVMSG".to_string(),
-                required: 2,
-                got: 1
-            })
-        );
-    }
-
-    #[test]
-    fn parse_notice_too_few_params_is_error() {
-        let result = IrcMessage::parse("NOTICE Alice");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "NOTICE".to_string(),
-                required: 2,
-                got: 1
-            })
-        );
+    fn known_commands_with_too_few_params_error() {
+        let cases: &[(&str, &str, usize, usize)] = &[
+            ("UID Alice 1 :only three params", "UID", 12, 3),
+            ("UID", "UID", 12, 0),
+            ("SJOIN 12345 #test", "SJOIN", 3, 2),
+            ("SERVER irc.example.net", "SERVER", 3, 1),
+            ("SID irc.example.net 1 001", "SID", 4, 3),
+            ("PART", "PART", 1, 0),
+            ("KICK #general", "KICK", 2, 1),
+            ("KILL", "KILL", 2, 0),
+            ("NICK Alice2", "NICK", 2, 1),
+            ("SVSNICK ABC000001", "SVSNICK", 2, 1),
+            ("PRIVMSG #general", "PRIVMSG", 2, 1),
+            ("NOTICE Alice", "NOTICE", 2, 1),
+            ("PONG discord.invalid", "PONG", 2, 1),
+        ];
+        for &(line, command, required, got) in cases {
+            assert_eq!(
+                IrcMessage::parse(line),
+                Err(ParseError::MissingParams {
+                    command: command.to_string(),
+                    required,
+                    got
+                }),
+                "line: {line:?}"
+            );
+        }
     }
 
     // ---- warn_extra_params behaviour ---------------------------------------
@@ -1969,19 +1854,6 @@ mod tests {
         assert!(
             !logs_contain("ignoring"),
             "unexpected WARN for exact param count"
-        );
-    }
-
-    #[test]
-    fn parse_pong_too_few_params_is_error() {
-        let result = IrcMessage::parse("PONG discord.invalid");
-        assert_eq!(
-            result,
-            Err(ParseError::MissingParams {
-                command: "PONG".to_string(),
-                required: 2,
-                got: 1
-            })
         );
     }
 }

@@ -190,16 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn intents_include_all_required_flags() {
-        assert!(INTENTS.contains(GatewayIntents::GUILDS));
-        assert!(INTENTS.contains(GatewayIntents::GUILD_MEMBERS));
-        assert!(INTENTS.contains(GatewayIntents::GUILD_MESSAGES));
-        assert!(INTENTS.contains(GatewayIntents::GUILD_PRESENCES));
-        assert!(INTENTS.contains(GatewayIntents::MESSAGE_CONTENT));
-        assert!(INTENTS.contains(GatewayIntents::DIRECT_MESSAGES));
-    }
-
-    #[test]
     fn intents_exact_value() {
         let expected = GatewayIntents::GUILDS
             | GatewayIntents::GUILD_MEMBERS
@@ -208,14 +198,5 @@ mod tests {
             | GatewayIntents::MESSAGE_CONTENT
             | GatewayIntents::DIRECT_MESSAGES;
         assert_eq!(INTENTS, expected);
-    }
-
-    /// Requires a live Discord token — skipped in CI.
-    #[tokio::test]
-    #[ignore = "requires Discord credentials"]
-    async fn run_discord_connects_and_records_bot_id() {
-        // Integration smoke test: ensure the client builds and the ready()
-        // handler fires, adding the bot user ID to the self_filter set.
-        // Run manually with a real token to verify end-to-end.
     }
 }

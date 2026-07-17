@@ -759,15 +759,11 @@ mod tests {
                 reason: None,
             },
         );
-        let channels = &pm.get_by_discord_id(77).map(|s| s.channels.clone());
-        // After parting the only channel the pseudoclient should be removed entirely
-        // (PseudoclientManager::part_channel returns Quit when no channels remain)
+        // Parting the only channel removes the pseudoclient entirely
+        // (PseudoclientManager::part_channel returns Quit when no channels remain).
         assert!(
-            channels.is_none()
-                || channels
-                    .as_ref()
-                    .map_or(true, |c| !c.contains(&"#lobby".to_string())),
-            "pseudoclient should no longer be in #lobby"
+            pm.get_by_discord_id(77).is_none(),
+            "pseudoclient should have been quit after parting its only channel"
         );
     }
 
@@ -795,13 +791,10 @@ mod tests {
                 reason: "test".to_string(),
             },
         );
-        let channels = &pm.get_by_discord_id(88).map(|s| s.channels.clone());
+        // Kicking from the only channel removes the pseudoclient entirely.
         assert!(
-            channels.is_none()
-                || channels
-                    .as_ref()
-                    .map_or(true, |c| !c.contains(&"#kicked".to_string())),
-            "pseudoclient should no longer be in #kicked"
+            pm.get_by_discord_id(88).is_none(),
+            "pseudoclient should have been quit after being kicked from its only channel"
         );
     }
 

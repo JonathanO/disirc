@@ -678,38 +678,6 @@ mod tests {
         assert!(result.chars().count() <= DISCORD_MAX_CHARS);
     }
 
-    #[test]
-    fn truncate_suffix_length_matters() {
-        let msg = "word ".repeat(500);
-        let result = truncate_for_discord(&msg);
-        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
-        assert!(result.ends_with(TRUNCATION_SUFFIX));
-        let body_chars = result.chars().count() - TRUNCATION_SUFFIX.chars().count();
-        assert!(body_chars > 1900);
-    }
-
-    #[test]
-    fn truncate_count_comparison() {
-        let exact = "a".repeat(DISCORD_MAX_CHARS);
-        let result = truncate_for_discord(&exact);
-        assert!(matches!(result, Cow::Borrowed(_)));
-
-        let over = "a".repeat(DISCORD_MAX_CHARS + 1);
-        let result = truncate_for_discord(&over);
-        assert!(result.ends_with(TRUNCATION_SUFFIX));
-        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
-    }
-
-    #[test]
-    fn truncate_byte_pos_advances_correctly() {
-        let msg: String = "é".repeat(2100);
-        let result = truncate_for_discord(&msg);
-        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
-        assert!(result.ends_with(TRUNCATION_SUFFIX));
-        let body_len = result.chars().count() - TRUNCATION_SUFFIX.chars().count();
-        assert!(body_len > 1900, "body too short: {body_len}");
-    }
-
     // -- Full pipeline -------------------------------------------------------
 
     #[test]

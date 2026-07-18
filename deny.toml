@@ -12,14 +12,11 @@ ignore = [
     # Both require certificate misissuance + compromised CA to exploit.
     { id = "RUSTSEC-2026-0098", reason = "transitive dep pinned by serenity; 0.102.x is EOL, awaiting upstream update" },
     { id = "RUSTSEC-2026-0099", reason = "transitive dep pinned by serenity; 0.102.x is EOL, awaiting upstream update" },
-    # rustls-pemfile is a dev-only transitive dep (testcontainers → bollard → rustls-pemfile).
-    # Advisory is "unmaintained" only — no CVE. Users are encouraged to migrate to rustls-pki-types;
-    # we cannot do so until testcontainers or bollard upgrades their dependency.
-    { id = "RUSTSEC-2025-0134", reason = "dev-only transitive dep via testcontainers; unmaintained but no CVE" },
-    # tokio-tar PAX header smuggling — dev-only transitive dep (testcontainers → bollard → tokio-tar).
-    # Only reachable when pulling Docker images in e2e tests; tarballs originate from our local Docker
-    # daemon, not untrusted input. No fix available upstream (tokio-tar v0.3.1 is the latest).
-    { id = "RUSTSEC-2025-0111", reason = "dev-only transitive dep via testcontainers; only processes Docker-daemon tarballs in e2e tests" },
+    # rustls-webpki 0.102.8 CRL-parsing panic — same serenity dep chain as above; no patched
+    # 0.102.x exists (fix line starts at 0.103.13, which our own deps are on). The panic is only
+    # reachable via CertRevocationList::from_der on application-supplied CRLs; neither disirc,
+    # serenity, tungstenite, nor our reqwest configuration supplies CRLs, so the code is unreachable.
+    { id = "RUSTSEC-2026-0104", reason = "transitive dep pinned by serenity; CRL parsing unreachable (no CRLs configured anywhere)" },
 ]
 
 [licenses]

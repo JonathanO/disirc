@@ -161,6 +161,60 @@ pub(crate) fn apply_reload(
     }
 }
 
+/// Raw member fields extracted from serenity `Member` values, in a shape
+/// that isolates the pure filtering/mapping logic from serenity types.
+pub(crate) struct RawMember {
+    pub user_id: u64,
+    pub username: String,
+    pub nick: Option<String>,
+    pub global_name: Option<String>,
+}
+
+/// Build the non-offline `Vec<MemberInfo>` from raw member data and a
+/// presence map.  Members absent from the presence map are treated as
+/// offline (and thus excluded).
+///
+/// Pure — no serenity types, no I/O; drives the interesting logic of
+/// [`snapshot_from_cache`].
+pub(crate) fn non_offline_member_infos(
+    members: &[RawMember],
+    presences: &HashMap<u64, DiscordPresence>,
+) -> Vec<MemberInfo> {
+    members
+        .iter()
+        .filter_map(|m| {
+            let presence = presences
+                .get(&m.user_id)
+                .copied()
+                .unwrap_or(DiscordPresence::Offline);
+            if !presence.is_non_offline() {
+                return None;
+            }
+            Some(MemberInfo {
+                user_id: m.user_id,
+                username: m.username.clone(),
+                display_name: resolve_display_name(
+                    m.nick.as_deref(),
+                    m.global_name.as_deref(),
+                    &m.username,
+                )
+                .to_owned(),
+                presence,
+            })
+        })
+        .collect()
+}
+
+/// Filter an iterator of channel IDs against the set of bridged channels.
+///
+/// Pure — separated so the filtering predicate can be mutation-tested.
+pub(crate) fn filter_bridged_channels(
+    channel_ids: impl Iterator<Item = u64>,
+    bridged: &HashSet<u64>,
+) -> Vec<u64> {
+    channel_ids.filter(|cid| bridged.contains(cid)).collect()
+}
+
 /// Build a [`DiscordEvent::MemberSnapshot`] for `channel_id` from the serenity
 /// cache.
 ///
@@ -170,7 +224,11 @@ pub(crate) fn apply_reload(
 ///
 /// Returns `None` if the channel or its guild is not present in the cache
 /// (should not happen in normal operation after startup).
-// mutants::skip — requires populated Serenity cache from live Discord connection
+// mutants::skip — thin cache-access shim; interesting logic lives in
+// non_offline_member_infos and filter_bridged_channels, which are unit-tested.
+// Populating a serenity Cache from disirc's test harness would require
+// deserializing a fully-formed GUILD_CREATE payload and offers no additional
+// coverage beyond the extracted helpers.
 #[mutants::skip]
 pub(crate) fn snapshot_from_cache(
     cache: &Cache,
@@ -194,39 +252,22 @@ pub(crate) fn snapshot_from_cache(
         .map(|(uid, p)| (uid.get(), map_online_status(p.status)))
         .collect();
 
-    // Only include non-offline members, consistent with build_member_snapshot_event.
-    let members: Vec<MemberInfo> = guild
+    let raw_members: Vec<RawMember> = guild
         .members
         .values()
-        .filter_map(|m| {
-            let presence = presences
-                .get(&m.user.id.get())
-                .copied()
-                .unwrap_or(DiscordPresence::Offline);
-            if !presence.is_non_offline() {
-                return None;
-            }
-            Some(MemberInfo {
-                user_id: m.user.id.get(),
-                username: m.user.name.clone(),
-                display_name: resolve_display_name(
-                    m.nick.as_deref(),
-                    m.user.global_name.as_deref(),
-                    &m.user.name,
-                )
-                .to_owned(),
-                presence,
-            })
+        .map(|m| RawMember {
+            user_id: m.user.id.get(),
+            username: m.user.name.clone(),
+            nick: m.nick.clone(),
+            global_name: m.user.global_name.clone(),
         })
         .collect();
 
-    // Bridged Discord channel IDs that belong to this guild.
-    let channel_ids: Vec<u64> = guild
-        .channels
-        .keys()
-        .filter(|cid| all_bridged_channel_ids.contains(&cid.get()))
-        .map(|cid| cid.get())
-        .collect();
+    let members = non_offline_member_infos(&raw_members, &presences);
+    let channel_ids = filter_bridged_channels(
+        guild.channels.keys().map(|cid| cid.get()),
+        all_bridged_channel_ids,
+    );
 
     debug!(
         guild_id = guild_id.get(),
@@ -534,6 +575,141 @@ mod tests {
         let cache = Cache::new();
         let empty = std::collections::HashSet::new();
         assert!(snapshot_from_cache(&cache, 99_999, &empty).is_none());
+    }
+
+    // --- non_offline_member_infos ---
+
+    fn raw(user_id: u64, username: &str, nick: Option<&str>, global: Option<&str>) -> RawMember {
+        RawMember {
+            user_id,
+            username: username.to_owned(),
+            nick: nick.map(str::to_owned),
+            global_name: global.map(str::to_owned),
+        }
+    }
+
+    fn presence_map(entries: &[(u64, DiscordPresence)]) -> HashMap<u64, DiscordPresence> {
+        entries.iter().copied().collect()
+    }
+
+    #[test]
+    fn member_absent_from_presence_map_is_excluded() {
+        let members = vec![raw(1, "alice", None, None)];
+        // Empty presence map — member defaults to Offline and is filtered out.
+        let out = non_offline_member_infos(&members, &HashMap::new());
+        assert!(out.is_empty(), "unknown presence must default to offline");
+    }
+
+    #[test]
+    fn explicitly_offline_member_is_excluded() {
+        let members = vec![raw(1, "alice", None, None)];
+        let out =
+            non_offline_member_infos(&members, &presence_map(&[(1, DiscordPresence::Offline)]));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn all_non_offline_presences_are_included() {
+        let members = vec![
+            raw(1, "alice", None, None),
+            raw(2, "bob", None, None),
+            raw(3, "carol", None, None),
+        ];
+        let out = non_offline_member_infos(
+            &members,
+            &presence_map(&[
+                (1, DiscordPresence::Online),
+                (2, DiscordPresence::Idle),
+                (3, DiscordPresence::DoNotDisturb),
+            ]),
+        );
+        assert_eq!(out.len(), 3);
+        // Presence must be carried through, not defaulted.
+        let by_id: HashMap<u64, DiscordPresence> =
+            out.iter().map(|m| (m.user_id, m.presence)).collect();
+        assert_eq!(by_id[&1], DiscordPresence::Online);
+        assert_eq!(by_id[&2], DiscordPresence::Idle);
+        assert_eq!(by_id[&3], DiscordPresence::DoNotDisturb);
+    }
+
+    #[test]
+    fn mixed_presences_keep_only_non_offline() {
+        let members = vec![
+            raw(1, "online", None, None),
+            raw(2, "offline", None, None),
+            raw(3, "idle", None, None),
+        ];
+        let out = non_offline_member_infos(
+            &members,
+            &presence_map(&[
+                (1, DiscordPresence::Online),
+                (2, DiscordPresence::Offline),
+                (3, DiscordPresence::Idle),
+            ]),
+        );
+        let ids: Vec<u64> = out.iter().map(|m| m.user_id).collect();
+        assert_eq!(ids, vec![1, 3], "offline member must be dropped");
+    }
+
+    #[test]
+    fn display_name_prefers_nick_then_global_then_username() {
+        let members = vec![
+            raw(1, "uname1", Some("Nick"), Some("Global")),
+            raw(2, "uname2", None, Some("Global")),
+            raw(3, "uname3", None, None),
+        ];
+        let out = non_offline_member_infos(
+            &members,
+            &presence_map(&[
+                (1, DiscordPresence::Online),
+                (2, DiscordPresence::Online),
+                (3, DiscordPresence::Online),
+            ]),
+        );
+        let by_id: HashMap<u64, &str> = out
+            .iter()
+            .map(|m| (m.user_id, m.display_name.as_str()))
+            .collect();
+        assert_eq!(by_id[&1], "Nick");
+        assert_eq!(by_id[&2], "Global");
+        assert_eq!(by_id[&3], "uname3");
+    }
+
+    #[test]
+    fn username_is_carried_through_unchanged() {
+        let members = vec![raw(7, "real_username", Some("Displayed"), None)];
+        let out =
+            non_offline_member_infos(&members, &presence_map(&[(7, DiscordPresence::Online)]));
+        assert_eq!(out[0].username, "real_username");
+        assert_eq!(out[0].display_name, "Displayed");
+    }
+
+    #[test]
+    fn empty_member_list_yields_empty_output() {
+        assert!(non_offline_member_infos(&[], &HashMap::new()).is_empty());
+    }
+
+    // --- filter_bridged_channels ---
+
+    #[test]
+    fn only_bridged_channel_ids_are_kept() {
+        let bridged = hset(&[10, 30]);
+        let out = filter_bridged_channels([10, 20, 30, 40].into_iter(), &bridged);
+        assert_eq!(out, vec![10, 30]);
+    }
+
+    #[test]
+    fn empty_bridged_set_filters_everything_out() {
+        let out = filter_bridged_channels([1, 2, 3].into_iter(), &hset(&[]));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn bridged_ids_not_present_in_guild_are_not_invented() {
+        // 99 is bridged but not among the guild's channels — must not appear.
+        let bridged = hset(&[10, 99]);
+        let out = filter_bridged_channels([10, 20].into_iter(), &bridged);
+        assert_eq!(out, vec![10]);
     }
 
     // --- wiremock integration tests for send_discord_message ---

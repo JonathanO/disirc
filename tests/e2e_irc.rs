@@ -198,7 +198,16 @@ fn spawn_bridge(config: Config) -> BridgeTasks {
     }
 }
 
-/// Inject a Discord channel message and wait for it to be relayed to IRC,
+/// A Discord channel message to inject as a relay probe.
+struct Probe<'a> {
+    author_id: u64,
+    author_name: &'a str,
+    author_display_name: &'a str,
+    channel_id: u64,
+    content: &'a str,
+}
+
+/// Inject a Discord channel message and wait for the resulting IRC line,
 /// re-injecting it if it does not arrive.
 ///
 /// A single injection is not sufficient: the bridge only routes Discord
@@ -209,16 +218,19 @@ fn spawn_bridge(config: Config) -> BridgeTasks {
 /// immediately afterwards can land in that window and be dropped with no
 /// retry. Re-injecting makes the probe robust against that gap.
 ///
-/// Panics if `total` elapses without the message reaching IRC.
+/// Waits for a line containing every fragment in `needles` — which need not be
+/// the message content, since the observable effect may be a JOIN carrying the
+/// pseudoclient's nick, or a PRIVMSG with mentions resolved. Returns the
+/// matched line so callers can make further assertions on it.
+///
+/// Panics if `total` elapses without a matching line.
 async fn relay_probe_until_seen(
     tasks: &BridgeTasks,
     client: &mut helpers::TestIrcClient,
-    author: (u64, &str, &str),
-    channel_id: u64,
-    content: &str,
+    probe: &Probe<'_>,
+    needles: &[&str],
     total: Duration,
-) {
-    let (author_id, author_name, author_display_name) = author;
+) -> String {
     let deadline = tokio::time::Instant::now() + total;
     loop {
         let remaining = deadline
@@ -226,17 +238,18 @@ async fn relay_probe_until_seen(
             .unwrap_or(Duration::ZERO);
         assert!(
             !remaining.is_zero(),
-            "timed out waiting for {content:?} to be relayed to IRC"
+            "timed out waiting for {needles:?} after relaying {:?}",
+            probe.content
         );
 
         tasks
             .discord_event_tx
             .send(DiscordEvent::MessageReceived {
-                channel_id,
-                author_id,
-                author_name: author_name.into(),
-                author_display_name: author_display_name.into(),
-                content: content.into(),
+                channel_id: probe.channel_id,
+                author_id: probe.author_id,
+                author_name: probe.author_name.into(),
+                author_display_name: probe.author_display_name.into(),
+                content: probe.content.into(),
                 attachments: vec![],
                 timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
                     .unwrap(),
@@ -246,12 +259,8 @@ async fn relay_probe_until_seen(
 
         // Wait a bounded slice for the relay, then re-inject if it was dropped.
         let attempt = remaining.min(Duration::from_secs(2));
-        if client
-            .try_expect_line_containing(content, attempt)
-            .await
-            .is_some()
-        {
-            return;
+        if let Some(line) = client.try_expect_line_matching(needles, attempt).await {
+            return line;
         }
     }
 }
@@ -364,24 +373,22 @@ async fn e2e_discord_to_irc_message_relay() {
 
     // Lazy channel membership: Alice is introduced but not in any channel
     // yet. She'll join when she speaks. Send a message to trigger the join.
-    tasks
-        .discord_event_tx
-        .send(DiscordEvent::MessageReceived {
-            channel_id: 111,
-            author_id: 1001,
-            author_name: "alice".into(),
-            author_display_name: "Alice".into(),
-            content: "hello from discord".into(),
-            attachments: vec![],
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
-        })
-        .await
-        .unwrap();
-
+    //
     // The IRC client should see a PRIVMSG from Alice's pseudoclient.
-    client
-        .expect_privmsg("alice", "hello from discord", Duration::from_secs(10))
-        .await;
+    relay_probe_until_seen(
+        &tasks,
+        &mut client,
+        &Probe {
+            author_id: 1001,
+            author_name: "alice",
+            author_display_name: "Alice",
+            channel_id: 111,
+            content: "hello from discord",
+        },
+        &["PRIVMSG", "alice", "hello from discord"],
+        Duration::from_secs(20),
+    )
+    .await;
 
     drop(tasks);
 }
@@ -494,23 +501,20 @@ async fn e2e_snapshot_before_link_up_still_appears_in_burst() {
 
     // EarlyUser was introduced in the burst (UID sent) but hasn't joined
     // any channel yet (lazy membership).  Send a message to trigger the join.
-    tasks
-        .discord_event_tx
-        .send(DiscordEvent::MessageReceived {
-            channel_id: 111,
+    relay_probe_until_seen(
+        &tasks,
+        &mut client,
+        &Probe {
             author_id: 3001,
-            author_name: "earlyuser".into(),
-            author_display_name: "EarlyUser".into(),
-            content: "hello from early user".into(),
-            attachments: vec![],
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
-        })
-        .await
-        .unwrap();
-
-    client
-        .expect_line_containing("earlyuser", Duration::from_secs(10))
-        .await;
+            author_name: "earlyuser",
+            author_display_name: "EarlyUser",
+            channel_id: 111,
+            content: "hello from early user",
+        },
+        &["earlyuser"],
+        Duration::from_secs(20),
+    )
+    .await;
 
     drop(tasks);
 }
@@ -551,24 +555,22 @@ async fn e2e_pseudoclient_appears_on_irc() {
 
     // Lazy membership: TestUser joins when they speak. Send a message
     // to trigger the join.
-    tasks
-        .discord_event_tx
-        .send(DiscordEvent::MessageReceived {
-            channel_id: 111,
-            author_id: 2001,
-            author_name: "testuser".into(),
-            author_display_name: "TestUser".into(),
-            content: "hello from testuser".into(),
-            attachments: vec![],
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
-        })
-        .await
-        .unwrap();
-
+    //
     // The test IRC client should see TestUser's pseudoclient in the channel.
-    client
-        .expect_line_containing("testuser", Duration::from_secs(10))
-        .await;
+    relay_probe_until_seen(
+        &tasks,
+        &mut client,
+        &Probe {
+            author_id: 2001,
+            author_name: "testuser",
+            author_display_name: "TestUser",
+            channel_id: 111,
+            content: "hello from testuser",
+        },
+        &["testuser"],
+        Duration::from_secs(20),
+    )
+    .await;
 
     drop(tasks);
 }
@@ -619,25 +621,23 @@ async fn e2e_discord_mention_resolved_to_nick_on_irc() {
 
     // Lazy channel membership: pseudoclients join when they speak.
     // Alice will join when her message is relayed below.
-    tasks
-        .discord_event_tx
-        .send(DiscordEvent::MessageReceived {
-            channel_id: 111,
+    //
+    // IRC should see resolved names, not raw IDs.  Match on "@Bob" so we
+    // land on the PRIVMSG rather than the JOIN.
+    let line = relay_probe_until_seen(
+        &tasks,
+        &mut client,
+        &Probe {
             author_id: 5001,
-            author_name: "alice".into(),
-            author_display_name: "Alice".into(),
-            content: "hey <@5002> check <#200> and <@&300>".into(),
-            attachments: vec![],
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
-        })
-        .await
-        .unwrap();
-
-    // IRC should see resolved names, not raw IDs.
-    // Use expect_privmsg to match specifically on the PRIVMSG, not JOINs.
-    let line = client
-        .expect_line_containing("@Bob", Duration::from_secs(10))
-        .await;
+            author_name: "alice",
+            author_display_name: "Alice",
+            channel_id: 111,
+            content: "hey <@5002> check <#200> and <@&300>",
+        },
+        &["@Bob"],
+        Duration::from_secs(20),
+    )
+    .await;
     assert!(
         line.contains("#general"),
         "channel mention <#200> should resolve to #general; got: {line:?}"
@@ -756,9 +756,14 @@ async fn e2e_killed_pseudoclient_reintroduced() {
     relay_probe_until_seen(
         &tasks,
         &mut client,
-        (10_001, "killtarget", "KillTarget"),
-        111,
-        "pre-kill probe",
+        &Probe {
+            author_id: 10_001,
+            author_name: "killtarget",
+            author_display_name: "KillTarget",
+            channel_id: 111,
+            content: "pre-kill probe",
+        },
+        &["pre-kill probe"],
         Duration::from_secs(20),
     )
     .await;
@@ -783,9 +788,14 @@ async fn e2e_killed_pseudoclient_reintroduced() {
     relay_probe_until_seen(
         &tasks,
         &mut client,
-        (10_001, "killtarget", "KillTarget"),
-        111,
-        "post-kill probe",
+        &Probe {
+            author_id: 10_001,
+            author_name: "killtarget",
+            author_display_name: "KillTarget",
+            channel_id: 111,
+            content: "post-kill probe",
+        },
+        &["post-kill probe"],
         Duration::from_secs(20),
     )
     .await;

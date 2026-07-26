@@ -113,8 +113,6 @@ fn unix_now() -> u64 {
 ///
 /// Runs until both event channels close (which happens when the connection
 /// tasks exit).
-// mutants::skip — requires live IRC + Discord connections to exercise
-#[mutants::skip]
 pub async fn run_bridge(
     config: &Config,
     config_path: &std::path::Path,
@@ -388,6 +386,245 @@ mod tests {
         assert!(
             bridge.state_dirty,
             "dirty flag should remain set when save fails"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // run_bridge
+    //
+    // The loop's whole interface is mpsc channels plus &Config / &Path — no
+    // socket is involved — so it can be driven directly.  Every test bounds
+    // the call in a timeout, because the failure mode for a dispatch loop is
+    // hanging rather than asserting.
+    // -----------------------------------------------------------------------
+
+    use crate::discord::{DiscordPresence, MemberInfo};
+    use crate::irc::S2SCommand;
+
+    /// Sending ends for one `run_bridge` invocation.
+    #[allow(clippy::struct_field_names)]
+    struct Harness {
+        irc_event_tx: mpsc::Sender<S2SEvent>,
+        discord_event_tx: mpsc::Sender<DiscordEvent>,
+        control_tx: mpsc::Sender<ControlEvent>,
+    }
+
+    /// Run `run_bridge` to completion against `setup`, which is handed the
+    /// sending ends before the loop is awaited.  Panics if the loop does not
+    /// exit within five seconds.
+    ///
+    /// Only for tests whose outcome does not depend on events being processed
+    /// before exit — `select!` may take the exit branch first.  Tests that
+    /// need an event's effect must drive the loop concurrently instead, as
+    /// `events_are_dispatched_and_commands_forwarded` does.
+    async fn run_bridge_until_exit(
+        config: &Config,
+        config_path: &std::path::Path,
+        setup: impl FnOnce(&mut Harness),
+    ) {
+        let (irc_event_tx, irc_event_rx) = mpsc::channel(16);
+        let (irc_cmd_tx, _irc_cmd_rx) = mpsc::channel(16);
+        let (discord_event_tx, discord_event_rx) = mpsc::channel(16);
+        let (discord_cmd_tx, _discord_cmd_rx) = mpsc::channel(16);
+        let (control_tx, control_rx) = mpsc::channel(16);
+
+        let mut harness = Harness {
+            irc_event_tx,
+            discord_event_tx,
+            control_tx,
+        };
+        setup(&mut harness);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_bridge(
+                config,
+                config_path,
+                irc_event_rx,
+                irc_cmd_tx,
+                discord_event_rx,
+                discord_cmd_tx,
+                control_rx,
+            ),
+        )
+        .await;
+        assert!(result.is_ok(), "run_bridge did not exit within 5s");
+    }
+
+    #[test]
+    fn shutdown_control_event_exits_loop_and_saves_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_path = tmp.path().join("state.json");
+        let config = config_with_state_file(Some(state_path.to_string_lossy().into_owned()));
+        let config_path = tmp.path().join("config.toml");
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_bridge_until_exit(&config, &config_path, |h| {
+                h.control_tx.try_send(ControlEvent::Shutdown).unwrap();
+            })
+            .await;
+        });
+
+        assert!(
+            state_path.exists(),
+            "clean shutdown must force a final state save"
+        );
+    }
+
+    #[test]
+    fn closing_irc_event_channel_exits_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config_with_state_file(None);
+        let config_path = tmp.path().join("config.toml");
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_bridge_until_exit(&config, &config_path, |h| {
+                // Replace the sender with a dropped one; recv() then yields None.
+                let (dead, _) = mpsc::channel(1);
+                h.irc_event_tx = dead;
+            })
+            .await;
+        });
+    }
+
+    #[test]
+    fn closing_discord_event_channel_exits_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config_with_state_file(None);
+        let config_path = tmp.path().join("config.toml");
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_bridge_until_exit(&config, &config_path, |h| {
+                let (dead, _) = mpsc::channel(1);
+                h.discord_event_tx = dead;
+            })
+            .await;
+        });
+    }
+
+    /// A closed control channel must disable that select branch rather than
+    /// exit the loop — otherwise `recv()` returning `None` would spin forever
+    /// on a ready branch.  The loop still ends via the event channels.
+    #[test]
+    fn closed_control_channel_disables_branch_without_exiting_early() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config_with_state_file(None);
+        let config_path = tmp.path().join("config.toml");
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_bridge_until_exit(&config, &config_path, |h| {
+                // Close control first, then the event channels.
+                let (dead_ctrl, _) = mpsc::channel(1);
+                h.control_tx = dead_ctrl;
+                let (dead_irc, _) = mpsc::channel(1);
+                h.irc_event_tx = dead_irc;
+            })
+            .await;
+        });
+    }
+
+    /// Events from both directions must reach `BridgeState` and the resulting
+    /// commands must be forwarded to the command channels.
+    ///
+    /// The loop is driven concurrently rather than pre-loaded and shut down:
+    /// `select!` picks randomly among ready branches, so queueing Shutdown
+    /// alongside the events lets the loop exit before processing them. The
+    /// driver instead waits for the command to actually arrive, and only then
+    /// requests shutdown.
+    ///
+    /// Whichever order `LinkUp` and `MemberSnapshot` are picked in, the member
+    /// ends up introduced — via the burst if `LinkUp` lands second, via the
+    /// live path if it lands first.
+    #[test]
+    fn events_are_dispatched_and_commands_forwarded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config_with_state_file(None);
+        let config_path = tmp.path().join("config.toml");
+
+        let found = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let (irc_event_tx, irc_event_rx) = mpsc::channel(16);
+            let (irc_cmd_tx, mut irc_cmd_rx) = mpsc::channel(16);
+            let (discord_event_tx, discord_event_rx) = mpsc::channel(16);
+            let (discord_cmd_tx, _discord_cmd_rx) = mpsc::channel(16);
+            let (control_tx, control_rx) = mpsc::channel(16);
+
+            let driver = async {
+                irc_event_tx.send(S2SEvent::LinkUp).await.unwrap();
+                discord_event_tx
+                    .send(DiscordEvent::MemberSnapshot {
+                        guild_id: 999,
+                        members: vec![MemberInfo {
+                            user_id: 4001,
+                            username: "Alice".into(),
+                            display_name: "Alice".into(),
+                            presence: DiscordPresence::Online,
+                        }],
+                        channel_ids: vec![111],
+                        channel_names: HashMap::new(),
+                        role_names: HashMap::new(),
+                        bot_user_id: 0,
+                    })
+                    .await
+                    .unwrap();
+
+                // Wait for the effect before shutting the loop down.
+                let found = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while let Some(cmd) = irc_cmd_rx.recv().await {
+                        if matches!(cmd, S2SCommand::IntroduceUser { .. }) {
+                            return true;
+                        }
+                    }
+                    false
+                })
+                .await
+                .unwrap_or(false);
+
+                let _ = control_tx.send(ControlEvent::Shutdown).await;
+                found
+            };
+
+            let ((), found) = tokio::join!(
+                run_bridge(
+                    &config,
+                    &config_path,
+                    irc_event_rx,
+                    irc_cmd_tx,
+                    discord_event_rx,
+                    discord_cmd_tx,
+                    control_rx,
+                ),
+                driver
+            );
+            found
+        });
+
+        assert!(
+            found,
+            "the online member should be introduced on IRC via the command channel"
+        );
+    }
+
+    /// A failing reload must be logged and the loop must keep running, not
+    /// abort. The config path here does not exist, so `config::reload` errors.
+    #[test]
+    #[tracing_test::traced_test]
+    fn failed_reload_is_logged_and_loop_continues() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config_with_state_file(None);
+        let missing = tmp.path().join("does_not_exist.toml");
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_bridge_until_exit(&config, &missing, |h| {
+                h.control_tx.try_send(ControlEvent::Reload).unwrap();
+                // Shutdown afterwards proves the loop survived the failure.
+                h.control_tx.try_send(ControlEvent::Shutdown).unwrap();
+            })
+            .await;
+        });
+
+        assert!(
+            logs_contain("Config reload failed"),
+            "a failing reload must be logged as a warning"
         );
     }
 }

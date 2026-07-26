@@ -6,14 +6,18 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-Cleanup review follow-ups (2026-07-17) — six stand-alone PRs; recommended merge order 1 → 2 → 3 → 4 → 5, 6 anytime:
+None.
 
-- [x] PR 1 — `fix(irc)`: `translate_inbound` panic on multibyte UID prefix (this PR)
-- [ ] PR 2 — `test`: prune redundant and vacuous tests
-- [ ] PR 3 — `test`: widen property-based coverage
-- [ ] PR 4 — `refactor`: dead code removal + simplifications
-- [ ] PR 5 — `chore`: clippy `--all-targets` cleanup + tighten the gate in CLAUDE.md
-- [ ] PR 6 — `chore(docs)`: LAYOUT.md refresh (stale rate-limiter rows)
+## Completed work
+
+Cleanup review follow-ups (2026-07-17) — six stand-alone PRs, all merged as of 2026-07-26:
+
+- [x] PR 1 — `fix(irc)`: `translate_inbound` panic on multibyte UID prefix
+- [x] PR 2 — `test`: prune redundant and vacuous tests
+- [x] PR 3 — `test`: widen property-based coverage
+- [x] PR 4 — `refactor`: dead code removal + simplifications
+- [x] PR 5 — `chore`: clippy `--all-targets` cleanup + tighten the gate in CLAUDE.md (#61)
+- [x] PR 6 — `chore(docs)`: LAYOUT.md refresh (stale rate-limiter rows)
 
 ## Spec status
 
@@ -59,6 +63,7 @@ None.
 
 ## Bugs fixed during integration
 
+- Flaky L3 test `e2e_killed_pseudoclient_reintroduced` — the test injected a Discord message immediately after `wait_for_bridge_in_links`, but LINKS visibility only proves the *server* registered the link, not that the bridge reached `LinkPhase::Ready`. Messages arriving before Ready are dropped by design (netsplit semantics, `orchestrator.rs`), so the single-shot probe could vanish with no retry and the test timed out after 10s. Fixed with a `relay_probe_until_seen` helper that re-injects until the relay lands. Note: the same latent race remains at the other four `MessageReceived` injection sites in `tests/e2e_irc.rs`, which assert on nick or resolved-mention rather than message content
 - Panic on multibyte UID prefix — `translate_inbound` byte-sliced `prefix[..3]`; a prefix whose third byte fell inside a multibyte UTF-8 character (or a U+FFFD from lossy decoding) panicked and killed the IRC connection task. Fixed with `prefix.get(..3)` fallback + never-panics property test
 - Missing `GUILDS` gateway intent — Discord never sent `GUILD_CREATE`, so pseudoclients were never created via the normal burst path
 - Double nick prefix on plain IRC→Discord path — `relay.rs` and `send.rs` both prepended `**[nick]**`

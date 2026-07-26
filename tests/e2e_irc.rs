@@ -198,6 +198,64 @@ fn spawn_bridge(config: Config) -> BridgeTasks {
     }
 }
 
+/// Inject a Discord channel message and wait for it to be relayed to IRC,
+/// re-injecting it if it does not arrive.
+///
+/// A single injection is not sufficient: the bridge only routes Discord
+/// messages once the S2S link reaches `LinkPhase::Ready`, and silently drops
+/// those arriving earlier (netsplit semantics — see `orchestrator.rs`).
+/// `wait_for_bridge_in_links` proves only that the *server* has registered the
+/// link, not that the bridge has finished its burst, so a message sent
+/// immediately afterwards can land in that window and be dropped with no
+/// retry. Re-injecting makes the probe robust against that gap.
+///
+/// Panics if `total` elapses without the message reaching IRC.
+async fn relay_probe_until_seen(
+    tasks: &BridgeTasks,
+    client: &mut helpers::TestIrcClient,
+    author: (u64, &str, &str),
+    channel_id: u64,
+    content: &str,
+    total: Duration,
+) {
+    let (author_id, author_name, author_display_name) = author;
+    let deadline = tokio::time::Instant::now() + total;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .unwrap_or(Duration::ZERO);
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for {content:?} to be relayed to IRC"
+        );
+
+        tasks
+            .discord_event_tx
+            .send(DiscordEvent::MessageReceived {
+                channel_id,
+                author_id,
+                author_name: author_name.into(),
+                author_display_name: author_display_name.into(),
+                content: content.into(),
+                attachments: vec![],
+                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
+            })
+            .await
+            .unwrap();
+
+        // Wait a bounded slice for the relay, then re-inject if it was dropped.
+        let attempt = remaining.min(Duration::from_secs(2));
+        if client
+            .try_expect_line_containing(content, attempt)
+            .await
+            .is_some()
+        {
+            return;
+        }
+    }
+}
+
 /// Poll LINKS until `bridge_name` appears, retrying every 500ms.
 /// Panics if `timeout_secs` elapses without success.
 async fn wait_for_bridge_in_links(
@@ -695,23 +753,15 @@ async fn e2e_killed_pseudoclient_reintroduced() {
         .unwrap();
 
     // Confirm the pseudoclient is introduced by having it speak.
-    tasks
-        .discord_event_tx
-        .send(DiscordEvent::MessageReceived {
-            channel_id: 111,
-            author_id: 10_001,
-            author_name: "killtarget".into(),
-            author_display_name: "KillTarget".into(),
-            content: "pre-kill probe".into(),
-            attachments: vec![],
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
-        })
-        .await
-        .unwrap();
-
-    client
-        .expect_line_containing("pre-kill probe", Duration::from_secs(10))
-        .await;
+    relay_probe_until_seen(
+        &tasks,
+        &mut client,
+        (10_001, "killtarget", "KillTarget"),
+        111,
+        "pre-kill probe",
+        Duration::from_secs(20),
+    )
+    .await;
 
     // Oper up (numeric 381 = RPL_YOUREOPER) and KILL the pseudoclient.
     client.send("OPER test test").await;
@@ -730,23 +780,15 @@ async fn e2e_killed_pseudoclient_reintroduced() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Confirm reintroduction by having the pseudoclient speak again.
-    tasks
-        .discord_event_tx
-        .send(DiscordEvent::MessageReceived {
-            channel_id: 111,
-            author_id: 10_001,
-            author_name: "killtarget".into(),
-            author_display_name: "KillTarget".into(),
-            content: "post-kill probe".into(),
-            attachments: vec![],
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
-        })
-        .await
-        .unwrap();
-
-    client
-        .expect_line_containing("post-kill probe", Duration::from_secs(10))
-        .await;
+    relay_probe_until_seen(
+        &tasks,
+        &mut client,
+        (10_001, "killtarget", "KillTarget"),
+        111,
+        "post-kill probe",
+        Duration::from_secs(20),
+    )
+    .await;
 
     drop(tasks);
 }

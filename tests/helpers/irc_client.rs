@@ -142,25 +142,33 @@ impl TestIrcClient {
     /// Read lines until one contains `needle`, responding to PING automatically.
     /// Panics if `timeout_dur` elapses first.
     pub async fn expect_line_containing(&mut self, needle: &str, timeout_dur: Duration) -> String {
+        self.try_expect_line_containing(needle, timeout_dur)
+            .await
+            .unwrap_or_else(|| panic!("timed out waiting for line containing {needle:?}"))
+    }
+
+    /// Like [`Self::expect_line_containing`] but returns `None` on timeout
+    /// instead of panicking, so callers can retry.
+    pub async fn try_expect_line_containing(
+        &mut self,
+        needle: &str,
+        timeout_dur: Duration,
+    ) -> Option<String> {
         let deadline = tokio::time::Instant::now() + timeout_dur;
         loop {
             let remaining = deadline
                 .checked_duration_since(tokio::time::Instant::now())
                 .unwrap_or(Duration::ZERO);
-            assert!(
-                !remaining.is_zero(),
-                "timed out waiting for line containing {needle:?}"
-            );
-            let line = self
-                .read_line_timeout(remaining)
-                .await
-                .unwrap_or_else(|| panic!("timed out waiting for line containing {needle:?}"));
+            if remaining.is_zero() {
+                return None;
+            }
+            let line = self.read_line_timeout(remaining).await?;
             if let Some(token) = line.strip_prefix("PING :") {
                 self.send(&format!("PONG :{token}")).await;
                 continue;
             }
             if line.contains(needle) {
-                return line;
+                return Some(line);
             }
         }
     }

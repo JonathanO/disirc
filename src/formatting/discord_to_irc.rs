@@ -807,9 +807,9 @@ mod tests {
     #[test]
     fn inline_code_with_formatting_before_code_block() {
         // The inline code `*not_italic*` must be picked up first (position 0)
-        // so its content is protected from markdown conversion.  If the match
-        // guard picked the later ``` first, the `*` would be converted to IRC
-        // italic control codes.
+        // so its content is protected from markdown conversion.  If delimiter
+        // selection picked the later ``` first, the `*` would be converted to
+        // IRC italic control codes.
         assert_eq!(
             markdown_to_irc("`*protected*` then ```block```"),
             "`*protected*` then ```block```"
@@ -819,12 +819,129 @@ mod tests {
     #[test]
     fn code_block_with_formatting_before_inline() {
         // The ``` block appears first (position 0) — its content must be
-        // protected.  If the match guard wrongly selected single backtick
+        // protected.  If delimiter selection wrongly chose single backtick
         // first, the `**bold**` would be converted.
         assert_eq!(
             markdown_to_irc("```**protected**``` then `inline`"),
             "```**protected**``` then `inline`"
         );
+    }
+
+    // ---- protect_code_spans: delimiter selection and round-trip -----------
+    //
+    // `protect_code_spans` finds the first backtick and treats it as a block
+    // delimiter iff it begins a "```".  These tests pin that decision and the
+    // span-boundary arithmetic.  The equivalence they establish is the one the
+    // old `t <= s` match-guard exclusion used to assert by comment alone:
+    // whichever delimiter is chosen, *all* code content ends up protected,
+    // because any leftover backticks are re-parsed on the next iteration.
+
+    /// A triple backtick at position 0 must be taken as one block span,
+    /// not as an inline span containing two stray backticks.
+    #[test]
+    fn triple_backtick_is_protected_as_a_single_block_span() {
+        let (out, spans) = protect_code_spans("```code```");
+        assert_eq!(spans, vec!["```code```".to_string()]);
+        assert!(!out.contains('`'), "no backticks may leak: {out:?}");
+    }
+
+    /// A lone backtick pair is an inline span.
+    #[test]
+    fn single_backtick_is_protected_as_an_inline_span() {
+        let (_out, spans) = protect_code_spans("`code`");
+        assert_eq!(spans, vec!["`code`".to_string()]);
+    }
+
+    /// Block and inline spans in the same text are extracted separately and
+    /// in source order.
+    #[test]
+    fn block_and_inline_spans_extracted_in_order() {
+        let (_out, spans) = protect_code_spans("```blk``` mid `inl`");
+        assert_eq!(
+            spans,
+            vec!["```blk```".to_string(), "`inl`".to_string()],
+            "spans must be captured in source order"
+        );
+    }
+
+    // Four backticks: the first three open a block whose closing delimiter is
+    // the next triple-backtick run.  Whatever the split, every backtick must
+    // end up inside a captured span or in the trailing remainder — never
+    // silently dropped.
+    #[test]
+    fn adjacent_backtick_runs_lose_no_content() {
+        for input in [
+            "````x````",
+            "```a``` `b`",
+            "`a` ```b```",
+            "``````",
+            "```` ````",
+        ] {
+            let (out, spans) = protect_code_spans(input);
+            let restored = restore_code_spans(&out, &spans);
+            assert_eq!(restored, input, "round-trip must be lossless for {input:?}");
+        }
+    }
+
+    /// Unclosed delimiters are passed through verbatim rather than swallowed.
+    #[test]
+    fn unclosed_delimiter_is_passed_through() {
+        let (out, spans) = protect_code_spans("`unclosed");
+        assert!(spans.is_empty(), "nothing should be extracted");
+        assert_eq!(out, "`unclosed");
+    }
+
+    #[test]
+    fn text_without_backticks_is_unchanged_and_extracts_nothing() {
+        let (out, spans) = protect_code_spans("plain **text** here");
+        assert!(spans.is_empty());
+        assert_eq!(out, "plain **text** here");
+    }
+
+    proptest! {
+        /// Protect-then-restore is the identity for arbitrary text.  This is
+        /// the core equivalence property: no matter which delimiter the
+        /// selection logic picks, no content is lost or duplicated.  It also
+        /// pins the span-boundary arithmetic — an off-by-one in `after_open`
+        /// or `full_span_end` breaks the round-trip.
+        #[test]
+        fn protect_restore_round_trip_is_identity(
+            s in r"[a-z *_~`\n]{0,60}"
+        ) {
+            let (out, spans) = protect_code_spans(&s);
+            prop_assert_eq!(restore_code_spans(&out, &spans), s);
+        }
+
+        /// Every extracted span must be a substring of the input that both
+        /// starts and ends with a backtick — i.e. the boundaries are real
+        /// delimiter positions, not arbitrary offsets.
+        #[test]
+        fn extracted_spans_are_well_formed(
+            s in r"[a-z ]{0,10}(`{1,3}[a-z ]{0,10}`{1,3}[a-z ]{0,10}){0,3}"
+        ) {
+            let (_out, spans) = protect_code_spans(&s);
+            for span in &spans {
+                prop_assert!(s.contains(span.as_str()), "span not a substring: {:?}", span);
+                prop_assert!(span.starts_with('`'), "span must open with a backtick: {:?}", span);
+                prop_assert!(span.ends_with('`'), "span must close with a backtick: {:?}", span);
+            }
+        }
+
+        /// Content inside a code span is never markdown-converted: whatever
+        /// the delimiter choice, no IRC control codes appear in the output for
+        /// text that is entirely inside backticks.
+        #[test]
+        fn code_content_is_never_markdown_converted(
+            inner in r"[a-z]{0,8}(\*\*|__|~~|\*)[a-z]{0,8}",
+            fence in r"`{1,3}"
+        ) {
+            let input = format!("{fence}{inner}{fence}");
+            let out = markdown_to_irc(&input);
+            prop_assert!(
+                !out.contains(IRC_BOLD) && !out.contains(IRC_ITALIC),
+                "markdown inside code was converted: {:?} -> {:?}", input, out
+            );
+        }
     }
 
     #[test]

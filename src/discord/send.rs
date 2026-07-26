@@ -253,8 +253,6 @@ pub(crate) fn snapshot_from_cache(
 /// new bridge channel is added via [`DiscordCommand::ReloadBridges`].
 ///
 /// Runs until the sender side of `rx` is dropped.
-// mutants::skip — async event loop requiring live Discord HTTP + cache
-#[mutants::skip]
 pub(crate) async fn process_discord_commands(
     http: Arc<Http>,
     cache: Arc<Cache>,
@@ -812,6 +810,270 @@ mod tests {
             send_dm(&http, 42, "hello").await;
 
             drop(send_mock);
+        }
+
+        // --- process_discord_commands dispatch ---
+
+        /// Spawn the command processor wired to a mock server, returning the
+        /// command sender, the event receiver, and the shared routing tables.
+        #[allow(clippy::type_complexity)]
+        fn spawn_processor(
+            server: &MockServer,
+        ) -> (
+            mpsc::Sender<DiscordCommand>,
+            mpsc::Receiver<DiscordEvent>,
+            Arc<RwLock<HashSet<u64>>>,
+            Arc<RwLock<HashSet<u64>>>,
+            tokio::task::JoinHandle<()>,
+        ) {
+            let http = Arc::new(mock_http(server));
+            let cache = Arc::new(Cache::new());
+            let (cmd_tx, cmd_rx) = mpsc::channel(8);
+            let (event_tx, event_rx) = mpsc::channel(8);
+            let self_filter: Arc<RwLock<HashSet<u64>>> = Arc::new(RwLock::new(HashSet::new()));
+            let channel_ids: Arc<RwLock<HashSet<u64>>> = Arc::new(RwLock::new(HashSet::new()));
+
+            let handle = tokio::spawn(process_discord_commands(
+                http,
+                cache,
+                cmd_rx,
+                event_tx,
+                Arc::clone(&self_filter),
+                Arc::clone(&channel_ids),
+            ));
+
+            (cmd_tx, event_rx, self_filter, channel_ids, handle)
+        }
+
+        #[tokio::test]
+        async fn send_message_command_dispatches_to_channel_send() {
+            let server = MockServer::start().await;
+
+            let post_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/api/v\d+/channels/999/messages"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            let (cmd_tx, _event_rx, _sf, _cids, handle) = spawn_processor(&server);
+
+            cmd_tx
+                .send(DiscordCommand::SendMessage {
+                    channel_id: 999,
+                    webhook_url: None,
+                    sender_nick: "nick".into(),
+                    text: "**[nick]** hello".into(),
+                })
+                .await
+                .unwrap();
+
+            // Dropping the sender ends the loop; awaiting the handle guarantees
+            // the command was fully processed before we assert.
+            drop(cmd_tx);
+            handle.await.unwrap();
+
+            drop(post_mock);
+        }
+
+        #[tokio::test]
+        async fn send_message_command_uses_webhook_when_url_present() {
+            let server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path_regex(r"webhooks/\d+/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(webhook_json()))
+                .mount(&server)
+                .await;
+
+            let post_mock = Mock::given(method("POST"))
+                .and(path_regex(r"webhooks/\d+/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            let (cmd_tx, _event_rx, _sf, _cids, handle) = spawn_processor(&server);
+
+            cmd_tx
+                .send(DiscordCommand::SendMessage {
+                    channel_id: 999,
+                    webhook_url: Some(webhook_url()),
+                    sender_nick: "nick".into(),
+                    text: "hello".into(),
+                })
+                .await
+                .unwrap();
+
+            drop(cmd_tx);
+            handle.await.unwrap();
+
+            drop(post_mock);
+        }
+
+        #[tokio::test]
+        async fn send_dm_command_dispatches_to_dm_send() {
+            let server = MockServer::start().await;
+
+            let open_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/users/@me/channels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(dm_channel_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            let send_mock = Mock::given(method("POST"))
+                .and(path_regex(
+                    format!(r"/channels/{DM_CHANNEL_ID}/messages").as_str(),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            let (cmd_tx, _event_rx, _sf, _cids, handle) = spawn_processor(&server);
+
+            cmd_tx
+                .send(DiscordCommand::SendDm {
+                    recipient_user_id: 42,
+                    text: "**[nick]** hi".into(),
+                })
+                .await
+                .unwrap();
+
+            drop(cmd_tx);
+            handle.await.unwrap();
+
+            drop(open_mock);
+            drop(send_mock);
+        }
+
+        /// `SendBotDm` shares an arm with `SendDm` — it must take the same path.
+        #[tokio::test]
+        async fn send_bot_dm_command_dispatches_to_dm_send() {
+            let server = MockServer::start().await;
+
+            let open_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/users/@me/channels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(dm_channel_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            let send_mock = Mock::given(method("POST"))
+                .and(path_regex(
+                    format!(r"/channels/{DM_CHANNEL_ID}/messages").as_str(),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            let (cmd_tx, _event_rx, _sf, _cids, handle) = spawn_processor(&server);
+
+            cmd_tx
+                .send(DiscordCommand::SendBotDm {
+                    recipient_user_id: 42,
+                    text: "bot notice".into(),
+                })
+                .await
+                .unwrap();
+
+            drop(cmd_tx);
+            handle.await.unwrap();
+
+            drop(open_mock);
+            drop(send_mock);
+        }
+
+        #[tokio::test]
+        async fn reload_bridges_command_updates_routing_tables() {
+            let server = MockServer::start().await;
+            let (cmd_tx, _event_rx, self_filter, channel_ids, handle) = spawn_processor(&server);
+
+            // Seed then mutate, so both add and remove paths are exercised.
+            channel_ids.write().await.insert(555);
+            self_filter.write().await.insert(777);
+
+            cmd_tx
+                .send(DiscordCommand::ReloadBridges {
+                    added_channel_ids: vec![111],
+                    removed_channel_ids: vec![555],
+                    added_webhook_ids: vec![222],
+                    removed_webhook_ids: vec![777],
+                })
+                .await
+                .unwrap();
+
+            drop(cmd_tx);
+            handle.await.unwrap();
+
+            let cids = channel_ids.read().await;
+            assert!(cids.contains(&111), "added channel must be routed");
+            assert!(!cids.contains(&555), "removed channel must be dropped");
+            let sf = self_filter.read().await;
+            assert!(sf.contains(&222), "added webhook must be filtered");
+            assert!(!sf.contains(&777), "removed webhook must be unfiltered");
+        }
+
+        /// With an empty cache no snapshot can be built, so the added channel
+        /// must produce a warning rather than an event.
+        #[tokio::test]
+        async fn reload_bridges_emits_no_event_when_channel_absent_from_cache() {
+            let server = MockServer::start().await;
+            let (cmd_tx, mut event_rx, _sf, _cids, handle) = spawn_processor(&server);
+
+            cmd_tx
+                .send(DiscordCommand::ReloadBridges {
+                    added_channel_ids: vec![111],
+                    removed_channel_ids: vec![],
+                    added_webhook_ids: vec![],
+                    removed_webhook_ids: vec![],
+                })
+                .await
+                .unwrap();
+
+            drop(cmd_tx);
+            handle.await.unwrap();
+
+            // The processor has exited and dropped its event_tx, so recv()
+            // resolves to None only if nothing was ever emitted.
+            assert!(
+                event_rx.recv().await.is_none(),
+                "no MemberSnapshot should be emitted for an uncached channel"
+            );
+        }
+
+        /// The loop must drain every queued command, not just the first.
+        #[tokio::test]
+        async fn processor_drains_all_queued_commands() {
+            let server = MockServer::start().await;
+
+            let post_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/api/v\d+/channels/999/messages"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(3)
+                .mount_as_scoped(&server)
+                .await;
+
+            let (cmd_tx, _event_rx, _sf, _cids, handle) = spawn_processor(&server);
+
+            for i in 0..3 {
+                cmd_tx
+                    .send(DiscordCommand::SendMessage {
+                        channel_id: 999,
+                        webhook_url: None,
+                        sender_nick: "nick".into(),
+                        text: format!("message {i}"),
+                    })
+                    .await
+                    .unwrap();
+            }
+
+            drop(cmd_tx);
+            handle.await.unwrap();
+
+            drop(post_mock);
         }
     }
 }

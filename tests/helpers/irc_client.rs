@@ -154,6 +154,19 @@ impl TestIrcClient {
         needle: &str,
         timeout_dur: Duration,
     ) -> Option<String> {
+        self.try_expect_line_matching(&[needle], timeout_dur).await
+    }
+
+    /// Read lines until one contains *every* fragment in `needles`, responding
+    /// to PING automatically.  Returns `None` on timeout instead of panicking,
+    /// so callers can retry.
+    ///
+    /// An empty `needles` slice matches the first non-PING line.
+    pub async fn try_expect_line_matching(
+        &mut self,
+        needles: &[&str],
+        timeout_dur: Duration,
+    ) -> Option<String> {
         let deadline = tokio::time::Instant::now() + timeout_dur;
         loop {
             let remaining = deadline
@@ -167,7 +180,7 @@ impl TestIrcClient {
                 self.send(&format!("PONG :{token}")).await;
                 continue;
             }
-            if line.contains(needle) {
+            if needles.iter().all(|n| line.contains(n)) {
                 return Some(line);
             }
         }
@@ -183,32 +196,15 @@ impl TestIrcClient {
         text_fragment: &str,
         timeout_dur: Duration,
     ) {
-        let deadline = tokio::time::Instant::now() + timeout_dur;
-        loop {
-            let remaining = deadline
-                .checked_duration_since(tokio::time::Instant::now())
-                .unwrap_or(Duration::ZERO);
-            assert!(
-                !remaining.is_zero(),
-                "timed out waiting for PRIVMSG from nick~={nick_fragment:?} \
+        // :nick!user@host PRIVMSG target :text
+        self.try_expect_line_matching(&["PRIVMSG", nick_fragment, text_fragment], timeout_dur)
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "timed out waiting for PRIVMSG from nick~={nick_fragment:?} \
                  with text~={text_fragment:?}"
-            );
-            let line = self
-                .read_line_timeout(remaining)
-                .await
-                .unwrap_or_else(|| panic!("timed out waiting for PRIVMSG"));
-            if let Some(token) = line.strip_prefix("PING :") {
-                self.send(&format!("PONG :{token}")).await;
-                continue;
-            }
-            // :nick!user@host PRIVMSG target :text
-            if line.contains("PRIVMSG")
-                && line.contains(nick_fragment)
-                && line.contains(text_fragment)
-            {
-                return;
-            }
-        }
+                )
+            });
     }
 
     /// Wait for the server to send a line containing numeric `code`.

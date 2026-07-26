@@ -112,8 +112,6 @@ async fn send_plain(http: &Http, channel_id: u64, text: &str) {
 ///
 /// Opens (or reuses) a DM channel with the recipient, then sends the message.
 /// The `text` should already be formatted (e.g. `**[nick]** content`).
-// mutants::skip — requires live Discord HTTP connection
-#[mutants::skip]
 pub(crate) async fn send_dm(http: &Http, recipient_user_id: u64, text: &str) {
     let dm_channel = match UserId::new(recipient_user_id).create_dm_channel(http).await {
         Ok(ch) => ch,
@@ -684,6 +682,136 @@ mod tests {
 
             // Asserts exactly 1 plain channel POST on drop.
             drop(post_mock);
+        }
+
+        // --- send_dm integration tests ---
+
+        const DM_CHANNEL_ID: &str = "888";
+
+        fn dm_channel_json() -> serde_json::Value {
+            serde_json::json!({
+                "id": DM_CHANNEL_ID,
+                "type": 1,
+                "last_message_id": null,
+                "last_pin_timestamp": null,
+                "recipients": [{
+                    "id": "42",
+                    "username": "recipient",
+                    "discriminator": "0000",
+                    "global_name": null,
+                    "avatar": null
+                }]
+            })
+        }
+
+        #[tokio::test]
+        async fn send_dm_opens_channel_and_posts_message() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            // POST /users/@me/channels — open DM channel
+            let open_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/users/@me/channels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(dm_channel_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            // POST /channels/{DM_CHANNEL_ID}/messages — send message
+            let send_mock = Mock::given(method("POST"))
+                .and(path_regex(
+                    format!(r"/channels/{DM_CHANNEL_ID}/messages").as_str(),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            send_dm(&http, 42, "**[nick]** hello").await;
+
+            drop(open_mock);
+            drop(send_mock);
+        }
+
+        #[tokio::test]
+        async fn send_dm_suppresses_at_everyone_and_at_here() {
+            use wiremock::matchers::body_string_contains;
+
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            Mock::given(method("POST"))
+                .and(path_regex(r"/users/@me/channels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(dm_channel_json()))
+                .mount(&server)
+                .await;
+
+            // The message body must contain the ZWSP-suppressed forms, not the raw pings.
+            let send_mock = Mock::given(method("POST"))
+                .and(path_regex(
+                    format!(r"/channels/{DM_CHANNEL_ID}/messages").as_str(),
+                ))
+                .and(body_string_contains("@\u{200B}everyone"))
+                .and(body_string_contains("@\u{200B}here"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            send_dm(&http, 42, "**[nick]** @everyone @here look").await;
+
+            drop(send_mock);
+        }
+
+        #[tokio::test]
+        async fn send_dm_dropped_when_open_channel_fails() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            // Open DM returns 403 — user has DMs disabled or blocked the bot.
+            Mock::given(method("POST"))
+                .and(path_regex(r"/users/@me/channels"))
+                .respond_with(ResponseTemplate::new(403))
+                .mount(&server)
+                .await;
+
+            // The send POST must NOT be attempted after open failure.
+            let send_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/channels/\d+/messages"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(0)
+                .mount_as_scoped(&server)
+                .await;
+
+            send_dm(&http, 42, "hello").await;
+
+            drop(send_mock);
+        }
+
+        #[tokio::test]
+        async fn send_dm_swallows_send_failure() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            Mock::given(method("POST"))
+                .and(path_regex(r"/users/@me/channels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(dm_channel_json()))
+                .mount(&server)
+                .await;
+
+            // Send returns 500; must not panic.  Function returns () either way.
+            let send_mock = Mock::given(method("POST"))
+                .and(path_regex(
+                    format!(r"/channels/{DM_CHANNEL_ID}/messages").as_str(),
+                ))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            send_dm(&http, 42, "hello").await;
+
+            drop(send_mock);
         }
     }
 }

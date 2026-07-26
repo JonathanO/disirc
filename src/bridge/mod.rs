@@ -43,8 +43,6 @@ pub use state::{DiscordState, IrcState, apply_discord_event, apply_irc_event};
 ///
 /// Returns an empty map if persistence is disabled, the file doesn't exist,
 /// or the file is corrupt.  Errors are logged as warnings.
-// mutants::skip — I/O + config plumbing; tested via integration tests
-#[mutants::skip]
 fn load_seed_state(
     config: &Config,
 ) -> std::collections::HashMap<u64, crate::persist::PersistedPseudoclient> {
@@ -81,8 +79,6 @@ fn load_seed_state(
 }
 
 /// Save persisted state to disk if the dirty flag is set.
-// mutants::skip — I/O wrapper; tested via integration tests
-#[mutants::skip]
 fn maybe_save_state(bridge: &mut BridgeState) {
     if !bridge.state_dirty {
         return;
@@ -190,4 +186,208 @@ pub async fn run_bridge(
     // Final save on clean shutdown.
     bridge.state_dirty = true;
     maybe_save_state(&mut bridge);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        BridgeEntry, DiscordConfig, FormattingConfig, IrcConfig, PseudoclientConfig,
+    };
+    use std::collections::HashMap;
+    use std::fs;
+
+    fn config_with_state_file(state_file: Option<String>) -> Config {
+        Config {
+            discord: DiscordConfig { token: "x".into() },
+            irc: IrcConfig {
+                uplink: "localhost".into(),
+                port: 6667,
+                tls: false,
+                link_name: "bridge.test".into(),
+                link_password: "pw".into(),
+                sid: "002".into(),
+                description: "test".into(),
+                connect_timeout: 15,
+            },
+            pseudoclients: PseudoclientConfig {
+                ident: "discord".into(),
+                reintroduce_on_kill: false,
+                dm_bridging: true,
+                channel_idle_timeout_secs: 0,
+                offline_timeout_secs: 0,
+                state_file,
+            },
+            formatting: FormattingConfig::default(),
+            bridges: vec![BridgeEntry {
+                discord_channel_id: "111".into(),
+                irc_channel: "#test".into(),
+                webhook_url: None,
+            }],
+        }
+    }
+
+    // --- load_seed_state ---
+
+    #[test]
+    fn load_seed_state_none_path_returns_empty() {
+        let config = config_with_state_file(None);
+        let seed = load_seed_state(&config);
+        assert!(seed.is_empty());
+    }
+
+    /// `NotFound` branch must return empty AND log at INFO level ("starting
+    /// fresh" without an error).  The log-level distinction pins the match-guard
+    /// mutants — both branches return the same value, only the log differs.
+    #[test]
+    #[tracing_test::traced_test]
+    fn load_seed_state_missing_file_returns_empty_and_logs_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("does_not_exist.json");
+        let config = config_with_state_file(Some(path.to_string_lossy().into_owned()));
+        let seed = load_seed_state(&config);
+        assert!(seed.is_empty());
+        assert!(
+            logs_contain("No persisted state file"),
+            "expected INFO 'No persisted state file' for missing file"
+        );
+        assert!(
+            !logs_contain("Failed to load persisted state"),
+            "must not log WARN 'Failed to load' for a plain missing file"
+        );
+    }
+
+    /// Non-`NotFound` I/O errors must log at WARN, not INFO.  This catches the
+    /// `guard-with-true` mutant on `e.kind() == NotFound` — with the mutation,
+    /// any I/O error takes the `NotFound` arm and logs INFO instead.  We trigger
+    /// a non-`NotFound` I/O error by pointing at a directory rather than a file
+    /// (yields `IsADirectory` on Linux).
+    #[test]
+    #[tracing_test::traced_test]
+    fn load_seed_state_io_error_other_than_not_found_logs_warn() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Path IS the directory; read_to_string on it returns an I/O error
+        // whose kind is *not* NotFound.
+        let path = tmp.path().to_path_buf();
+        let config = config_with_state_file(Some(path.to_string_lossy().into_owned()));
+        let seed = load_seed_state(&config);
+        assert!(seed.is_empty());
+        assert!(
+            logs_contain("Failed to load persisted state"),
+            "expected WARN for non-NotFound I/O error"
+        );
+        assert!(
+            !logs_contain("No persisted state file"),
+            "must not log INFO 'No persisted state file' for non-NotFound I/O error"
+        );
+    }
+
+    /// Non-NotFound errors (e.g. corrupt JSON) must return empty AND log at
+    /// WARN level.  This paired with the missing-file test catches the
+    /// match-guard mutants on `e.kind() == NotFound`.
+    #[test]
+    #[tracing_test::traced_test]
+    fn load_seed_state_corrupt_file_returns_empty_and_logs_warn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        fs::write(&path, "not valid json {{{").unwrap();
+        let config = config_with_state_file(Some(path.to_string_lossy().into_owned()));
+        let seed = load_seed_state(&config);
+        assert!(seed.is_empty());
+        assert!(
+            logs_contain("Failed to load persisted state"),
+            "expected WARN 'Failed to load persisted state' for corrupt file"
+        );
+        assert!(
+            !logs_contain("No persisted state file"),
+            "must not log INFO 'No persisted state file' for a corrupt file"
+        );
+    }
+
+    #[test]
+    fn load_seed_state_valid_file_returns_filtered_seed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        // #test is configured; #other is not — must be filtered out.
+        let json = r##"{
+            "version": 1,
+            "pseudoclients": {
+                "42": {
+                    "channels": ["#test", "#other"],
+                    "last_active": 100,
+                    "channel_last_active": {"#test": 90, "#other": 80},
+                    "went_offline_at": null
+                }
+            }
+        }"##;
+        fs::write(&path, json).unwrap();
+        let config = config_with_state_file(Some(path.to_string_lossy().into_owned()));
+        let seed = load_seed_state(&config);
+        assert_eq!(seed.len(), 1);
+        let pc = seed.get(&42).expect("user 42 present");
+        assert_eq!(pc.channels, vec!["#test".to_string()]);
+        assert!(pc.channel_last_active.contains_key("#test"));
+        assert!(!pc.channel_last_active.contains_key("#other"));
+    }
+
+    // --- maybe_save_state ---
+
+    #[test]
+    fn maybe_save_state_noop_when_not_dirty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        let config = config_with_state_file(Some(path.to_string_lossy().into_owned()));
+        let mut bridge = BridgeState::new(&config, HashMap::new());
+        // state_dirty is false by default.
+        maybe_save_state(&mut bridge);
+        assert!(
+            !path.exists(),
+            "no file should be written when state_dirty is false"
+        );
+    }
+
+    #[test]
+    fn maybe_save_state_noop_when_state_file_is_none() {
+        let config = config_with_state_file(None);
+        let mut bridge = BridgeState::new(&config, HashMap::new());
+        bridge.state_dirty = true;
+        // Must not panic when path is None.
+        maybe_save_state(&mut bridge);
+        // state_dirty should remain true since there was nothing to save to.
+        assert!(bridge.state_dirty);
+    }
+
+    #[test]
+    fn maybe_save_state_writes_and_clears_dirty_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        let config = config_with_state_file(Some(path.to_string_lossy().into_owned()));
+        let mut bridge = BridgeState::new(&config, HashMap::new());
+        bridge.state_dirty = true;
+        maybe_save_state(&mut bridge);
+        assert!(path.exists(), "file should be written when dirty");
+        assert!(
+            !bridge.state_dirty,
+            "dirty flag should be cleared on success"
+        );
+    }
+
+    #[test]
+    fn maybe_save_state_write_failure_keeps_dirty_flag() {
+        // Point at a path whose parent directory does not exist — write fails.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("missing_dir").join("state.json");
+        let config = config_with_state_file(Some(path.to_string_lossy().into_owned()));
+        let mut bridge = BridgeState::new(&config, HashMap::new());
+        bridge.state_dirty = true;
+        maybe_save_state(&mut bridge);
+        assert!(
+            bridge.state_dirty,
+            "dirty flag should remain set when save fails"
+        );
+    }
 }

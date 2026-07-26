@@ -29,9 +29,12 @@ Mutation-exclusion audit (2026-07-26) — reviewed every `#[mutants::skip]` and
 - [x] `load_seed_state` / `maybe_save_state` — skips removed; 8 tempdir tests,
       log-level assertions pin the `NotFound` branch
 - [x] `unix_signal_loop` — skip removed; existing signal test already covered it
-- [x] `snapshot_from_cache` — skip narrowed: pure logic extracted into
-      `non_offline_member_infos` + `filter_bridged_channels` (10 new tests);
-      only the cache-access shim stays skipped
+- [x] `snapshot_from_cache` — skip removed entirely: pure logic extracted into
+      `non_offline_member_infos` + `filter_bridged_channels` (10 tests), and the
+      cache path itself covered by populating a serenity `Cache` from a
+      `GUILD_CREATE` fixture (4 tests)
+- [x] `run_bridge` — skip removed; "requires live IRC + Discord connections" was
+      false, the loop is pure mpsc + `&Config` / `&Path` (6 tests)
 - [x] `protect_code_spans` — stale `exclude_re` entry deleted (the `t <= s` match
       guard it named no longer exists after 6e0aa40); replaced with 6 unit tests
       and 3 properties incl. protect→restore round-trip identity

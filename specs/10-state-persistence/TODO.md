@@ -16,7 +16,6 @@
 ## Equivalent/excluded mutants
 
 - `unix_now` in `bridge/mod.rs`: `#[mutants::skip]` — non-deterministic clock function
-- `run_bridge` in `bridge/mod.rs`: `#[mutants::skip]` — async `select!` dispatch loop requiring live IRC + Discord connections
 - `non_unix_signal_loop` in `signal.rs`: `#[mutants::skip]` — `#[cfg(not(unix))]`, does not compile on the Linux CI target
 
 Previously skipped, now covered — no longer excluded:
@@ -28,6 +27,13 @@ Previously skipped, now covered — no longer excluded:
 - `unix_signal_loop` in `signal.rs` — already covered by the existing
   `unix_signals_map_to_control_events` test; the skip was masking real coverage.
   Mutation run: 6 mutants, 2 caught, 4 unviable, 0 missed.
+- `run_bridge` in `bridge/mod.rs` — the skip claimed live IRC and Discord
+  connections were needed, but the loop's whole interface is mpsc channels plus
+  `&Config` / `&Path`. 6 tests cover shutdown-exits-and-saves, each event channel
+  closing, a closed control channel disabling its branch without exiting early,
+  event dispatch through to the command channels, and a failing reload being
+  logged without aborting the loop.
+  Mutation run for `bridge/mod.rs`: 9 tested, 6 caught, 3 unviable, 0 missed.
 
 ## Notes
 

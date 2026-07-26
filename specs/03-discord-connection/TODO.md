@@ -43,18 +43,22 @@ require a live Discord gateway `Context` that cannot be constructed in unit test
 
 ### Integration-only — network-dependent functions (`send.rs`)
 
-These functions perform live Discord HTTP calls (`Webhook::from_url`,
-`ChannelId::to_channel`, `GuildId::members`, `webhook.execute`). They cannot be
-unit-tested without a mock HTTP layer. All pure logic inside them (username
-sanitisation, mention suppression, routing table mutation) is unit-tested in separate
-functions with full coverage.
+Discord HTTP calls are exercised through a `wiremock` mock server: serenity's
+`HttpBuilder::proxy()` routes all requests to a local mock, so `send_discord_message`,
+`send_dm` and `process_discord_commands` are all covered by real dispatch tests rather
+than being skipped. Only `snapshot_from_cache` remains skipped.
 
-| Location | Mutation |
-|---|---|
-| `send.rs:61` | `send_discord_message` → `()` |
-| `send.rs` | `snapshot_from_cache` → `None` | Requires a populated serenity `Cache`; all logic inside delegates to helpers unit-tested elsewhere. |
-| `send.rs` | `delete !` in `snapshot_from_cache` offline filter | Same function; `DiscordPresence::is_non_offline()` is tested in `types.rs` (4 tests), and the identical `!is_non_offline()` filter in `build_member_snapshot_event` is caught by handler tests. The `!` inside `snapshot_from_cache` is integration-only. |
-| `send.rs` | `process_discord_commands` → `()` | Requires live Discord HTTP and channel pairs. |
+| Location | Mutation | Reason |
+|---|---|---|
+| `send.rs` | `snapshot_from_cache` → `None` | Thin cache-access shim. Populating a serenity `Cache` requires deserializing a fully-formed `GUILD_CREATE` payload; the interesting logic is extracted into `non_offline_member_infos` and `filter_bridged_channels`, which are unit-tested directly (10 tests covering presence defaulting, offline filtering, display-name precedence, and bridged-channel filtering). |
+
+Previously skipped, now covered — no longer excluded:
+
+- `send_dm` — 4 wiremock tests (DM channel open + send, mention suppression, open
+  failure short-circuits the send, send failure is swallowed).
+- `process_discord_commands` — 7 tests covering `SendMessage` (plain and webhook
+  paths), `SendDm`, `SendBotDm`, `ReloadBridges` routing-table updates, the
+  uncached-channel warning path, and multi-command drain.
 
 ### TIMEOUT = caught
 

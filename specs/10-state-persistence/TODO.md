@@ -15,8 +15,19 @@
 
 ## Equivalent/excluded mutants
 
-- `load_seed_state` and `maybe_save_state` in `bridge/mod.rs`: `#[mutants::skip]` — I/O + config plumbing wrappers
-- `non_unix_signal_loop` and `unix_signal_loop` in `signal.rs`: `#[mutants::skip]` — platform-specific signal handling
+- `unix_now` in `bridge/mod.rs`: `#[mutants::skip]` — non-deterministic clock function
+- `run_bridge` in `bridge/mod.rs`: `#[mutants::skip]` — async `select!` dispatch loop requiring live IRC + Discord connections
+- `non_unix_signal_loop` in `signal.rs`: `#[mutants::skip]` — `#[cfg(not(unix))]`, does not compile on the Linux CI target
+
+Previously skipped, now covered — no longer excluded:
+
+- `load_seed_state` and `maybe_save_state` in `bridge/mod.rs` — 8 tempdir-based tests.
+  The `NotFound`-vs-other-error branch is pinned by `tracing-test` log-level assertions
+  (INFO "No persisted state file" vs WARN "Failed to load persisted state"), since both
+  branches return the same empty map and differ only in logging.
+- `unix_signal_loop` in `signal.rs` — already covered by the existing
+  `unix_signals_map_to_control_events` test; the skip was masking real coverage.
+  Mutation run: 6 mutants, 2 caught, 4 unviable, 0 missed.
 
 ## Notes
 

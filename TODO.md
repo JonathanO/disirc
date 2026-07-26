@@ -19,6 +19,24 @@ Cleanup review follow-ups (2026-07-17) — six stand-alone PRs, all merged as of
 - [x] PR 5 — `chore`: clippy `--all-targets` cleanup + tighten the gate in CLAUDE.md (#61)
 - [x] PR 6 — `chore(docs)`: LAYOUT.md refresh (stale rate-limiter rows)
 
+Mutation-exclusion audit (2026-07-26) — reviewed every `#[mutants::skip]` and
+`exclude_re` entry for whether the exclusion was justified:
+
+- [x] `send_dm` — skip removed; 4 wiremock tests added (the sibling
+      `send_discord_message` was already wiremock-tested, contradicting the
+      "requires live HTTP" justification)
+- [x] `process_discord_commands` — skip removed; 7 dispatch tests added
+- [x] `load_seed_state` / `maybe_save_state` — skips removed; 8 tempdir tests,
+      log-level assertions pin the `NotFound` branch
+- [x] `unix_signal_loop` — skip removed; existing signal test already covered it
+- [x] `snapshot_from_cache` — skip narrowed: pure logic extracted into
+      `non_offline_member_infos` + `filter_bridged_channels` (10 new tests);
+      only the cache-access shim stays skipped
+- [x] `protect_code_spans` — stale `exclude_re` entry deleted (the `t <= s` match
+      guard it named no longer exists after 6e0aa40); replaced with 6 unit tests
+      and 3 properties incl. protect→restore round-trip identity
+- [x] `split_long_line` `> with <` exclusion — verified still live and justified
+
 ## Spec status
 
 | Spec | Status | Detail |

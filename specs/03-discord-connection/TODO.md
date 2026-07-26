@@ -41,24 +41,27 @@ require a live Discord gateway `Context` that cannot be constructed in unit test
 | `handler.rs:246` | `guild_member_addition` → `()` |
 | `handler.rs:263` | `guild_member_removal` → `()` |
 
-### Integration-only — network-dependent functions (`send.rs`)
+### Network- and cache-dependent functions (`send.rs`) — no longer excluded
+
+Nothing in `send.rs` is skipped any more.
 
 Discord HTTP calls are exercised through a `wiremock` mock server: serenity's
-`HttpBuilder::proxy()` routes all requests to a local mock, so `send_discord_message`,
-`send_dm` and `process_discord_commands` are all covered by real dispatch tests rather
-than being skipped. Only `snapshot_from_cache` remains skipped.
-
-| Location | Mutation | Reason |
-|---|---|---|
-| `send.rs` | `snapshot_from_cache` → `None` | Thin cache-access shim. Populating a serenity `Cache` requires deserializing a fully-formed `GUILD_CREATE` payload; the interesting logic is extracted into `non_offline_member_infos` and `filter_bridged_channels`, which are unit-tested directly (10 tests covering presence defaulting, offline filtering, display-name precedence, and bridged-channel filtering). |
-
-Previously skipped, now covered — no longer excluded:
+`HttpBuilder::proxy()` routes all requests to a local mock. The serenity `Cache` is
+populated the same way the Gateway would populate it — by deserializing a
+`GUILD_CREATE` payload into `GuildCreateEvent` and calling `Cache::update`.
 
 - `send_dm` — 4 wiremock tests (DM channel open + send, mention suppression, open
   failure short-circuits the send, send failure is swallowed).
 - `process_discord_commands` — 7 tests covering `SendMessage` (plain and webhook
   paths), `SendDm`, `SendBotDm`, `ReloadBridges` routing-table updates, the
   uncached-channel warning path, and multi-command drain.
+- `snapshot_from_cache` — 4 tests against a populated cache (guild resolved by
+  channel, offline member excluded, nick precedence, only bridged channels
+  reported, plus both `None` paths). Its pure logic also lives in
+  `non_offline_member_infos` and `filter_bridged_channels`, covered by 10 further
+  unit tests.
+
+Mutation run for `send.rs`: 23 tested, 18 caught, 2 unviable, 3 timeouts, 0 missed.
 
 ### TIMEOUT = caught
 

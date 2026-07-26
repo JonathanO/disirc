@@ -224,12 +224,6 @@ pub(crate) fn filter_bridged_channels(
 ///
 /// Returns `None` if the channel or its guild is not present in the cache
 /// (should not happen in normal operation after startup).
-// mutants::skip — thin cache-access shim; interesting logic lives in
-// non_offline_member_infos and filter_bridged_channels, which are unit-tested.
-// Populating a serenity Cache from disirc's test harness would require
-// deserializing a fully-formed GUILD_CREATE payload and offers no additional
-// coverage beyond the extracted helpers.
-#[mutants::skip]
 pub(crate) fn snapshot_from_cache(
     cache: &Cache,
     channel_id: u64,
@@ -575,6 +569,114 @@ mod tests {
         let cache = Cache::new();
         let empty = std::collections::HashSet::new();
         assert!(snapshot_from_cache(&cache, 99_999, &empty).is_none());
+    }
+
+    /// A `GUILD_CREATE` payload, as serenity would receive it over the Gateway.
+    ///
+    /// Guild 1 owns channels 10 and 11 and members 5 (online, nicked "Ali")
+    /// and 6 (no presence entry, so offline). This is the minimal field set
+    /// serenity's `GuildCreateEvent` deserializer accepts.
+    const GUILD_CREATE_JSON: &str = r#"{
+        "id": "1", "name": "guild", "icon": null, "icon_hash": null,
+        "splash": null, "discovery_splash": null, "owner_id": "2",
+        "verification_level": 0, "default_message_notifications": 0,
+        "explicit_content_filter": 0, "roles": [], "emojis": [],
+        "features": [], "mfa_level": 0, "application_id": null,
+        "system_channel_id": null, "system_channel_flags": 0,
+        "rules_channel_id": null, "max_presences": null, "max_members": null,
+        "vanity_url_code": null, "description": null, "banner": null,
+        "premium_tier": 0, "premium_subscription_count": 0,
+        "preferred_locale": "en-US", "public_updates_channel_id": null,
+        "max_video_channel_users": null, "max_stage_video_channel_users": null,
+        "nsfw_level": 0, "stickers": [], "premium_progress_bar_enabled": false,
+        "joined_at": "2025-01-01T00:00:00.000Z", "large": false,
+        "unavailable": false, "member_count": 2, "voice_states": [],
+        "threads": [], "stage_instances": [], "guild_scheduled_events": [],
+        "channels": [
+            {"id":"10","type":0,"name":"general","guild_id":"1","position":0,"permission_overwrites":[]},
+            {"id":"11","type":0,"name":"other","guild_id":"1","position":1,"permission_overwrites":[]}
+        ],
+        "members": [
+            {"user":{"id":"5","username":"alice","discriminator":"0000","global_name":null,"avatar":null},
+             "nick":"Ali","roles":[],"joined_at":"2025-01-01T00:00:00.000Z","deaf":false,"mute":false,"flags":0},
+            {"user":{"id":"6","username":"bob","discriminator":"0000","global_name":null,"avatar":null},
+             "nick":null,"roles":[],"joined_at":"2025-01-01T00:00:00.000Z","deaf":false,"mute":false,"flags":0}
+        ],
+        "presences": [
+            {"user":{"id":"5"},"status":"online","activities":[],"client_status":{}}
+        ]
+    }"#;
+
+    /// Build a cache populated from [`GUILD_CREATE_JSON`].
+    fn populated_cache() -> Cache {
+        let mut event: serenity::model::event::GuildCreateEvent =
+            serde_json::from_str(GUILD_CREATE_JSON).expect("guild fixture should deserialize");
+        let cache = Cache::new();
+        cache.update(&mut event);
+        cache
+    }
+
+    #[test]
+    fn snapshot_from_cache_builds_event_for_cached_channel() {
+        let cache = populated_cache();
+        let bridged: std::collections::HashSet<u64> = [10].into_iter().collect();
+
+        let event = snapshot_from_cache(&cache, 10, &bridged).expect("channel 10 is cached");
+
+        let DiscordEvent::MemberSnapshot {
+            guild_id,
+            members,
+            channel_ids,
+            channel_names,
+            role_names,
+            ..
+        } = event
+        else {
+            panic!("expected a MemberSnapshot");
+        };
+
+        assert_eq!(guild_id, 1, "must resolve the owning guild by channel");
+
+        // Only the member with a non-offline presence is included, and the
+        // guild nick wins over the username.
+        assert_eq!(members.len(), 1, "offline member must be excluded");
+        assert_eq!(members[0].user_id, 5);
+        assert_eq!(members[0].display_name, "Ali");
+        assert_eq!(members[0].presence, DiscordPresence::Online);
+
+        // Channel 11 belongs to the guild but is not bridged.
+        assert_eq!(channel_ids, vec![10], "only bridged channels are reported");
+
+        // The reload path deliberately leaves these empty.
+        assert!(channel_names.is_empty());
+        assert!(role_names.is_empty());
+    }
+
+    /// The guild is cached, but the requested channel is not one of its
+    /// channels — the guild scan must not match it.
+    #[test]
+    fn snapshot_from_cache_returns_none_for_channel_outside_cached_guild() {
+        let cache = populated_cache();
+        let bridged: std::collections::HashSet<u64> = [10].into_iter().collect();
+        assert!(snapshot_from_cache(&cache, 12_345, &bridged).is_none());
+    }
+
+    /// Every bridged channel of the guild is reported, not just the one asked
+    /// about — the snapshot seeds routing for the whole guild.
+    #[test]
+    fn snapshot_from_cache_reports_all_bridged_channels_of_the_guild() {
+        let cache = populated_cache();
+        let bridged: std::collections::HashSet<u64> = [10, 11].into_iter().collect();
+
+        let event = snapshot_from_cache(&cache, 10, &bridged).expect("channel 10 is cached");
+        let DiscordEvent::MemberSnapshot {
+            mut channel_ids, ..
+        } = event
+        else {
+            panic!("expected a MemberSnapshot");
+        };
+        channel_ids.sort_unstable();
+        assert_eq!(channel_ids, vec![10, 11]);
     }
 
     // --- non_offline_member_infos ---

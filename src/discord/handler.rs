@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use serenity::async_trait;
 use serenity::client::{Context, EventHandler};
+use serenity::http::Http;
 use serenity::model::channel::Message;
 use serenity::model::gateway::{Presence, Ready};
 use serenity::model::guild::{Guild, Member};
-use serenity::model::id::GuildId;
+use serenity::model::id::{ChannelId, GuildId, MessageId};
 use serenity::model::user::{OnlineStatus, User};
 use tokio::sync::{RwLock, mpsc};
 use tracing::{info, trace};
@@ -253,6 +254,129 @@ pub(crate) fn guild_create_event(
     event
 }
 
+/// Build the [`DiscordEvent::PresenceUpdated`] for a `PRESENCE_UPDATE` payload.
+///
+/// Extracted from the `presence_update` shim for the same reason as
+/// [`guild_create_event`]: the shim itself is unreachable from unit tests, and
+/// cargo-mutants only emits a coarse "replace with `()`" for it.
+///
+/// Returns `None` for presences without a guild ID (DM-only presences), which
+/// the bridge has no channel to relay to.
+pub(crate) fn presence_update_event(new_data: &Presence) -> Option<DiscordEvent> {
+    // Extract display name from the presence payload's partial user/member.
+    let nick = new_data
+        .user
+        .member
+        .as_ref()
+        .and_then(|m| m.nick.as_deref());
+    let global_name = new_data.user.global_name.as_deref();
+    let username = new_data.user.name.as_deref();
+    let display_name = username.map(|u| resolve_display_name(nick, global_name, u).to_owned());
+
+    tracing::debug!(
+        user_id = new_data.user.id.get(),
+        guild_id = ?new_data.guild_id.map(GuildId::get),
+        status = ?new_data.status,
+        ?display_name,
+        "presence_update received"
+    );
+
+    presence_event(
+        new_data.user.id.get(),
+        new_data.guild_id.map(GuildId::get),
+        new_data.status,
+        username.map(str::to_owned),
+        display_name,
+    )
+}
+
+/// How an incoming `MESSAGE_CREATE` should be handled.
+///
+/// Produced by [`classify_message`] so that the routing decision and the field
+/// marshalling behind it are testable independently of the `message` shim,
+/// which cannot be called without a live Gateway `Context`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IncomingMessage {
+    /// A direct message. `referenced_message_id` is set when the DM is a reply,
+    /// and the referenced content must be fetched over HTTP before relaying.
+    Dm {
+        author_id: u64,
+        author_name: String,
+        content: String,
+        referenced_message_id: Option<MessageId>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    /// A message in a guild channel.
+    Guild {
+        channel_id: u64,
+        author_id: u64,
+        author_name: String,
+        display_name: String,
+        content: String,
+        attachments: Vec<String>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+}
+
+/// Decide how to handle an incoming `MESSAGE_CREATE` and marshal its fields.
+///
+/// A message with no `guild_id` is a DM.  Note that this classifies only; the
+/// self-filter and bridged-channel checks happen later, in `handle_dm_event`
+/// and `handle_message_event`.
+pub(crate) fn classify_message(msg: &Message) -> IncomingMessage {
+    if msg.guild_id.is_none() {
+        IncomingMessage::Dm {
+            author_id: msg.author.id.get(),
+            author_name: msg.author.name.clone(),
+            content: msg.content.clone(),
+            referenced_message_id: msg
+                .message_reference
+                .as_ref()
+                .and_then(|msg_ref| msg_ref.message_id),
+            timestamp: *msg.timestamp,
+        }
+    } else {
+        let member_nick = msg.member.as_ref().and_then(|m| m.nick.as_deref());
+        IncomingMessage::Guild {
+            channel_id: msg.channel_id.get(),
+            author_id: msg.author.id.get(),
+            author_name: msg.author.name.clone(),
+            display_name: resolve_display_name(
+                member_nick,
+                msg.author.global_name.as_deref(),
+                &msg.author.name,
+            )
+            .to_owned(),
+            content: msg.content.clone(),
+            attachments: msg.attachments.iter().map(|a| a.url.clone()).collect(),
+            timestamp: *msg.timestamp,
+        }
+    }
+}
+
+/// Fetch the content of a DM that is being replied to, for quote context.
+///
+/// A failure here is not fatal — the reply is still worth relaying without the
+/// quoted text — so errors are logged and flattened to `None`.
+pub(crate) async fn fetch_referenced_content(
+    http: &Http,
+    channel_id: ChannelId,
+    ref_id: MessageId,
+) -> Option<String> {
+    match channel_id.message(http, ref_id).await {
+        Ok(m) => Some(m.content),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                ref_id = ref_id.get(),
+                channel_id = channel_id.get(),
+                "Failed to fetch referenced DM message; relaying without quote context"
+            );
+            None
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DiscordHandler methods — testable inner logic called by the shims below
 // ---------------------------------------------------------------------------
@@ -353,82 +477,54 @@ impl EventHandler for DiscordHandler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        if msg.guild_id.is_none() {
-            // DM — resolve referenced message content if this is a reply.
-            let referenced_content = if let Some(ref msg_ref) = msg.message_reference {
-                if let Some(ref_id) = msg_ref.message_id {
-                    match msg.channel_id.message(&ctx.http, ref_id).await {
-                        Ok(m) => Some(m.content),
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                ref_id = ref_id.get(),
-                                channel_id = msg.channel_id.get(),
-                                "Failed to fetch referenced DM message; relaying without quote context"
-                            );
-                            None
-                        }
+        match classify_message(&msg) {
+            IncomingMessage::Dm {
+                author_id,
+                author_name,
+                content,
+                referenced_message_id,
+                timestamp,
+            } => {
+                let referenced_content = match referenced_message_id {
+                    Some(ref_id) => {
+                        fetch_referenced_content(&ctx.http, msg.channel_id, ref_id).await
                     }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            self.handle_dm_event(
-                msg.author.id.get(),
-                msg.author.name.clone(),
-                msg.content.clone(),
-                referenced_content,
-                *msg.timestamp,
-            )
-            .await;
-        } else {
-            let member_nick = msg.member.as_ref().and_then(|m| m.nick.as_deref());
-            let display_name = resolve_display_name(
-                member_nick,
-                msg.author.global_name.as_deref(),
-                &msg.author.name,
-            )
-            .to_owned();
-            self.handle_message_event(
-                msg.channel_id.get(),
-                msg.author.id.get(),
-                msg.author.name.clone(),
+                    None => None,
+                };
+                self.handle_dm_event(
+                    author_id,
+                    author_name,
+                    content,
+                    referenced_content,
+                    timestamp,
+                )
+                .await;
+            }
+            IncomingMessage::Guild {
+                channel_id,
+                author_id,
+                author_name,
                 display_name,
-                msg.content.clone(),
-                msg.attachments.iter().map(|a| a.url.clone()).collect(),
-                *msg.timestamp,
-            )
-            .await;
+                content,
+                attachments,
+                timestamp,
+            } => {
+                self.handle_message_event(
+                    channel_id,
+                    author_id,
+                    author_name,
+                    display_name,
+                    content,
+                    attachments,
+                    timestamp,
+                )
+                .await;
+            }
         }
     }
 
     async fn presence_update(&self, _ctx: Context, new_data: Presence) {
-        // Extract display name from the presence payload's partial user/member.
-        let nick = new_data
-            .user
-            .member
-            .as_ref()
-            .and_then(|m| m.nick.as_deref());
-        let global_name = new_data.user.global_name.as_deref();
-        let username = new_data.user.name.as_deref();
-        let display_name = username.map(|u| resolve_display_name(nick, global_name, u).to_owned());
-
-        tracing::debug!(
-            user_id = new_data.user.id.get(),
-            guild_id = ?new_data.guild_id.map(GuildId::get),
-            status = ?new_data.status,
-            ?display_name,
-            "presence_update received"
-        );
-        if let Some(event) = presence_event(
-            new_data.user.id.get(),
-            new_data.guild_id.map(GuildId::get),
-            new_data.status,
-            username.map(str::to_owned),
-            display_name,
-        ) {
+        if let Some(event) = presence_update_event(&new_data) {
             let _ = self.event_tx.send(event).await;
         }
     }
@@ -609,6 +705,330 @@ mod tests {
         assert_eq!(channel_names.get(&10).map(String::as_str), Some("general"));
         assert_eq!(channel_names.get(&11).map(String::as_str), Some("other"));
         assert_eq!(role_names.get(&20).map(String::as_str), Some("mods"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // presence_update_event
+    // ---------------------------------------------------------------------------
+
+    /// A `PRESENCE_UPDATE` payload. `nick` and `global_name` are injected so
+    /// display-name precedence can be exercised; `guild_id` may be omitted.
+    fn presence_json(
+        guild_id: Option<&str>,
+        username: Option<&str>,
+        global_name: Option<&str>,
+        nick: Option<&str>,
+    ) -> serde_json::Value {
+        let mut user = serde_json::json!({ "id": "5" });
+        if let Some(u) = username {
+            user["username"] = serde_json::json!(u);
+            user["discriminator"] = serde_json::json!("0000");
+        }
+        if let Some(g) = global_name {
+            user["global_name"] = serde_json::json!(g);
+        }
+        if let Some(n) = nick {
+            user["member"] = serde_json::json!({
+                "nick": n,
+                "roles": [],
+                "joined_at": "2025-01-01T00:00:00.000Z",
+                "deaf": false, "mute": false, "flags": 0
+            });
+        }
+        let mut payload = serde_json::json!({
+            "user": user,
+            "status": "online",
+            "activities": [],
+            "client_status": {}
+        });
+        if let Some(g) = guild_id {
+            payload["guild_id"] = serde_json::json!(g);
+        }
+        payload
+    }
+
+    fn parse_presence(value: &serde_json::Value) -> Presence {
+        serde_json::from_value(value.clone()).expect("presence fixture should deserialize")
+    }
+
+    #[test]
+    fn presence_update_event_prefers_nick_then_global_name() {
+        let with_nick = parse_presence(&presence_json(
+            Some("100"),
+            Some("alice"),
+            Some("Global"),
+            Some("Nick"),
+        ));
+        let Some(DiscordEvent::PresenceUpdated { display_name, .. }) =
+            presence_update_event(&with_nick)
+        else {
+            panic!("expected a PresenceUpdated");
+        };
+        assert_eq!(display_name.as_deref(), Some("Nick"));
+
+        let no_nick = parse_presence(&presence_json(
+            Some("100"),
+            Some("alice"),
+            Some("Global"),
+            None,
+        ));
+        let Some(DiscordEvent::PresenceUpdated { display_name, .. }) =
+            presence_update_event(&no_nick)
+        else {
+            panic!("expected a PresenceUpdated");
+        };
+        assert_eq!(display_name.as_deref(), Some("Global"));
+
+        let bare = parse_presence(&presence_json(Some("100"), Some("alice"), None, None));
+        let Some(DiscordEvent::PresenceUpdated { display_name, .. }) = presence_update_event(&bare)
+        else {
+            panic!("expected a PresenceUpdated");
+        };
+        assert_eq!(display_name.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn presence_update_event_without_guild_id_is_dropped() {
+        let presence = parse_presence(&presence_json(None, Some("alice"), None, None));
+        assert!(
+            presence_update_event(&presence).is_none(),
+            "a presence with no guild has no bridged channel to relay to"
+        );
+    }
+
+    #[test]
+    fn presence_update_event_without_username_has_no_display_name() {
+        // PRESENCE_UPDATE may carry only a partial user (just the ID).
+        let presence = parse_presence(&presence_json(Some("100"), None, None, None));
+        let Some(DiscordEvent::PresenceUpdated {
+            user_id,
+            username,
+            display_name,
+            ..
+        }) = presence_update_event(&presence)
+        else {
+            panic!("expected a PresenceUpdated");
+        };
+        assert_eq!(user_id, 5);
+        assert_eq!(username, None);
+        assert_eq!(
+            display_name, None,
+            "no username means no name to resolve against"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // classify_message
+    // ---------------------------------------------------------------------------
+
+    /// A `MESSAGE_CREATE` payload. `guild_id` absent means a DM.
+    fn message_json(
+        guild_id: Option<&str>,
+        referenced_id: Option<&str>,
+        nick: Option<&str>,
+        global_name: Option<&str>,
+        attachments: &[&str],
+    ) -> serde_json::Value {
+        let attachments: Vec<serde_json::Value> = attachments
+            .iter()
+            .enumerate()
+            .map(|(i, url)| {
+                serde_json::json!({
+                    "id": (i + 1).to_string(), "filename": "f.png",
+                    "size": 1, "url": url, "proxy_url": url
+                })
+            })
+            .collect();
+        let mut author = serde_json::json!({
+            "id": "5", "username": "alice", "discriminator": "0000", "avatar": null
+        });
+        if let Some(g) = global_name {
+            author["global_name"] = serde_json::json!(g);
+        }
+        let mut payload = serde_json::json!({
+            "id": "1", "channel_id": "10", "author": author,
+            "content": "hello", "timestamp": "2025-01-01T00:00:00.000Z",
+            "edited_timestamp": null, "tts": false, "mention_everyone": false,
+            "mentions": [], "mention_roles": [], "attachments": attachments,
+            "embeds": [], "pinned": false, "type": 0
+        });
+        if let Some(g) = guild_id {
+            payload["guild_id"] = serde_json::json!(g);
+        }
+        if let Some(r) = referenced_id {
+            payload["message_reference"] =
+                serde_json::json!({ "message_id": r, "channel_id": "10" });
+        }
+        if let Some(n) = nick {
+            payload["member"] = serde_json::json!({
+                "nick": n, "roles": [], "joined_at": "2025-01-01T00:00:00.000Z",
+                "deaf": false, "mute": false, "flags": 0
+            });
+        }
+        payload
+    }
+
+    fn parse_message(value: &serde_json::Value) -> Message {
+        serde_json::from_value(value.clone()).expect("message fixture should deserialize")
+    }
+
+    #[test]
+    fn classify_message_without_guild_id_is_a_dm() {
+        let msg = parse_message(&message_json(None, None, None, None, &[]));
+
+        let IncomingMessage::Dm {
+            author_id,
+            author_name,
+            content,
+            referenced_message_id,
+            ..
+        } = classify_message(&msg)
+        else {
+            panic!("expected a Dm");
+        };
+
+        assert_eq!(author_id, 5);
+        assert_eq!(author_name, "alice");
+        assert_eq!(content, "hello");
+        assert_eq!(referenced_message_id, None, "not a reply");
+    }
+
+    #[test]
+    fn classify_message_dm_reply_carries_referenced_id() {
+        let msg = parse_message(&message_json(None, Some("77"), None, None, &[]));
+
+        let IncomingMessage::Dm {
+            referenced_message_id,
+            ..
+        } = classify_message(&msg)
+        else {
+            panic!("expected a Dm");
+        };
+
+        assert_eq!(referenced_message_id, Some(MessageId::new(77)));
+    }
+
+    #[test]
+    fn classify_message_with_guild_id_is_a_guild_message() {
+        let msg = parse_message(&message_json(
+            Some("100"),
+            None,
+            Some("Ali"),
+            Some("Global"),
+            &["https://cdn.example/a.png", "https://cdn.example/b.png"],
+        ));
+
+        let IncomingMessage::Guild {
+            channel_id,
+            author_id,
+            author_name,
+            display_name,
+            content,
+            attachments,
+            ..
+        } = classify_message(&msg)
+        else {
+            panic!("expected a Guild message");
+        };
+
+        assert_eq!(channel_id, 10);
+        assert_eq!(author_id, 5);
+        assert_eq!(author_name, "alice");
+        assert_eq!(display_name, "Ali", "member nick wins");
+        assert_eq!(content, "hello");
+        assert_eq!(
+            attachments,
+            vec![
+                "https://cdn.example/a.png".to_string(),
+                "https://cdn.example/b.png".to_string()
+            ],
+            "attachment URLs are collected in order"
+        );
+    }
+
+    #[test]
+    fn classify_message_guild_falls_back_through_display_names() {
+        let with_global =
+            parse_message(&message_json(Some("100"), None, None, Some("Global"), &[]));
+        let IncomingMessage::Guild { display_name, .. } = classify_message(&with_global) else {
+            panic!("expected a Guild message");
+        };
+        assert_eq!(display_name, "Global", "global_name wins when no nick");
+
+        let bare = parse_message(&message_json(Some("100"), None, None, None, &[]));
+        let IncomingMessage::Guild { display_name, .. } = classify_message(&bare) else {
+            panic!("expected a Guild message");
+        };
+        assert_eq!(display_name, "alice", "username is the last resort");
+    }
+
+    #[test]
+    fn classify_message_ignores_message_reference_on_guild_messages() {
+        // A guild reply carries a message_reference too, but the guild path has
+        // no quote-fetch step, so it must not be routed as a DM.
+        let msg = parse_message(&message_json(Some("100"), Some("77"), None, None, &[]));
+        assert!(matches!(
+            classify_message(&msg),
+            IncomingMessage::Guild { .. }
+        ));
+    }
+
+    // ---------------------------------------------------------------------------
+    // fetch_referenced_content
+    // ---------------------------------------------------------------------------
+
+    mod fetch_referenced {
+        use super::*;
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn mock_http(server: &MockServer) -> Http {
+            serenity::http::HttpBuilder::new("test-token")
+                .proxy(server.uri())
+                .ratelimiter_disabled(true)
+                .build()
+        }
+
+        #[tokio::test]
+        async fn returns_content_on_success() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            Mock::given(method("GET"))
+                .and(path_regex(r"channels/\d+/messages/\d+"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json(
+                    None,
+                    None,
+                    None,
+                    None,
+                    &[],
+                )))
+                .mount(&server)
+                .await;
+
+            let content =
+                fetch_referenced_content(&http, ChannelId::new(10), MessageId::new(77)).await;
+
+            assert_eq!(content.as_deref(), Some("hello"));
+        }
+
+        #[tokio::test]
+        async fn returns_none_on_http_error() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            Mock::given(method("GET"))
+                .and(path_regex(r"channels/\d+/messages/\d+"))
+                .respond_with(ResponseTemplate::new(403))
+                .mount(&server)
+                .await;
+
+            // A missing or forbidden quote must not stop the reply relaying.
+            let content =
+                fetch_referenced_content(&http, ChannelId::new(10), MessageId::new(77)).await;
+
+            assert_eq!(content, None);
+        }
     }
 
     // ---------------------------------------------------------------------------

@@ -97,8 +97,6 @@ fn maybe_save_state(bridge: &mut BridgeState) {
 }
 
 /// Current Unix timestamp in seconds.
-// mutants::skip — non-deterministic clock function; cannot be tested deterministically
-#[mutants::skip]
 fn unix_now() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -198,6 +196,26 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::fs;
+
+    /// `unix_now` must return a real wall-clock epoch value rather than a
+    /// constant.  The function is non-deterministic in its exact value, but it
+    /// is tightly bounded, and a bounds assertion is all that is needed to pin
+    /// the `map_or` success arm — an exact value is not required.
+    ///
+    /// This catches both a degenerate constant return and unit confusion
+    /// (`as_millis`/`as_nanos` in place of `as_secs`).
+    #[test]
+    fn unix_now_returns_plausible_epoch_seconds() {
+        // 2023-11-14T22:13:20Z — safely in the past, so this stays true forever.
+        const PAST: u64 = 1_700_000_000;
+        // 2286-11-20T17:46:40Z — far enough out never to bite in practice, but
+        // low enough that a millisecond-scale value trips it.
+        const FUTURE: u64 = 10_000_000_000;
+
+        let now = unix_now();
+        assert!(now > PAST, "unix_now() = {now}, expected > {PAST}");
+        assert!(now < FUTURE, "unix_now() = {now}, expected < {FUTURE}");
+    }
 
     fn config_with_state_file(state_file: Option<String>) -> Config {
         Config {

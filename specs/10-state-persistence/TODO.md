@@ -15,10 +15,17 @@
 
 ## Equivalent/excluded mutants
 
-- `unix_now` in `bridge/mod.rs`: `#[mutants::skip]` — non-deterministic clock function
-- `non_unix_signal_loop` in `signal.rs`: `#[mutants::skip]` — `#[cfg(not(unix))]`, does not compile on the Linux CI target
+- `non_unix_signal_loop` in `signal.rs`: `#[mutants::skip]` — `#[cfg(not(unix))]`, so on
+  the Linux CI target the mutated body is never compiled in, tests pass, and the mutant
+  would be reported as a false MISSED. This skip is load-bearing, not merely defensive.
 
 Previously skipped, now covered — no longer excluded:
+
+- `unix_now` in `bridge/mod.rs` — the "cannot be tested deterministically" justification
+  was wrong. Mutation testing needs a *distinguishing* assertion, not a deterministic
+  value: the function is non-deterministic in its exact result but tightly bounded, so a
+  bounds check on the epoch seconds kills both mutants (`-> 0`, `-> 1`) and is stable
+  forever. Mutation run: 2 tested, 2 caught, 0 missed.
 
 - `load_seed_state` and `maybe_save_state` in `bridge/mod.rs` — 8 tempdir-based tests.
   The `NotFound`-vs-other-error branch is pinned by `tracing-test` log-level assertions

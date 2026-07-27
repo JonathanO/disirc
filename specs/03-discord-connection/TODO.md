@@ -40,9 +40,18 @@ The `Context` constraint, verified against serenity 0.12.5: `Context`'s fields a
 means mocking Discord's gateway handshake, not just building a value.
 
 Because cargo-mutants only emits a coarse "replace with `()`" for each shim, any logic
-left inline in one is invisible to mutation testing. `guild_create` originally held ~60
-lines of guild-field marshalling; that is now extracted into `guild_create_event`, which
-is unit-tested and carries its own mutant. The remaining shims delegate on the first or
+left inline in one is invisible to mutation testing. All three shims that carried
+non-trivial logic have now been emptied out:
+
+| Shim | Was | Extracted into |
+|---|---|---|
+| `guild_create` | ~60 lines of guild-field marshalling | `guild_create_event` |
+| `message` | ~50 lines of routing + marshalling + an HTTP fetch | `classify_message` + `fetch_referenced_content` |
+| `presence_update` | ~29 lines of display-name resolution | `presence_update_event` |
+
+`fetch_referenced_content` takes `&Http` rather than a `Context`, so it is covered by
+wiremock on both the success and the error path — the error path matters because a
+failed quote fetch must still relay the reply. Every shim now delegates on its first or
 second statement.
 
 | Location | Mutation |

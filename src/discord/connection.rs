@@ -53,7 +53,12 @@ const INTENTS: GatewayIntents = GatewayIntents::from_bits_truncate(
 /// connection in the initial version.
 ///
 /// Spawns a separate task to drain `cmd_rx` and send outgoing messages.
-// mutants::skip — requires live Discord Gateway connection and bot token
+// mutants::skip — defensive only: this function returns `!`, so cargo-mutants
+// cannot synthesise a return value and currently generates no mutants for it
+// (the `INTENTS` const below is outside the function and *is* mutated and
+// tested).  The attribute is retained so that if the signature ever stops being
+// `-> !`, the resulting body-replacement mutant does not appear as a surprise
+// MISSED — exercising this function needs a live Gateway and bot token.
 #[mutants::skip]
 pub async fn run_discord(
     config: &DiscordConfig,

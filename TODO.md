@@ -40,6 +40,22 @@ Mutation-exclusion audit (2026-07-26) — reviewed every `#[mutants::skip]` and
       and 3 properties incl. protect→restore round-trip identity
 - [x] `split_long_line` `> with <` exclusion — verified still live and justified
 
+Mutation-exclusion re-audit (2026-07-27) — re-derived the inventory empirically by
+stripping every `#[mutants::skip]` and set-comparing `cargo mutants --list` before and
+after (702 vs 713 mutants; normalise away line/col first, since deleting the attribute
+lines shifts all later line numbers and makes a raw diff useless):
+
+- [x] `unix_now` — skip removed; the "non-deterministic" justification conflated
+      determinism with distinguishability. A bounds assertion kills both mutants.
+- [x] `run_discord` — skip suppressed *zero* mutants: the function returns `!`, so
+      cargo-mutants cannot synthesise a return value. Retained as a guard against a
+      future signature change, with the comment corrected to say so.
+- [x] `EventHandler` shims — confirmed justified. `Context`'s fields are all `pub`, but
+      `ShardMessenger`'s are `pub(crate)` to serenity and its only public constructor
+      takes `&ShardRunner`; `ShardRunner` needs a `Shard`, and `Shard::new` calls
+      `connect(&url).await` — a live WebSocket.
+- [x] `non_unix_signal_loop`, `main`, `config_path_from_args` — justified, unchanged.
+
 ## Spec status
 
 | Spec | Status | Detail |

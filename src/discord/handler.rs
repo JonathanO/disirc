@@ -167,6 +167,92 @@ pub(crate) fn build_member_snapshot_event(
     }
 }
 
+/// Build the [`DiscordEvent::MemberSnapshot`] for a `GUILD_CREATE` payload.
+///
+/// Extracted from the `guild_create` `EventHandler` shim so that it is
+/// reachable from unit tests and from mutation testing.  The shim itself
+/// cannot be exercised without a live Gateway — constructing a serenity
+/// [`Context`] requires a `ShardMessenger`, whose fields are `pub(crate)` to
+/// serenity and whose only public constructor takes a `&ShardRunner`, which in
+/// turn needs a `Shard` built by `Shard::new` over a real WebSocket.  Keeping
+/// this marshalling in the shim would hide it from mutation testing entirely,
+/// since cargo-mutants only emits a coarse "replace with `()`" for the shim.
+///
+/// `bridged` is the set of Discord channel IDs with an active bridge entry;
+/// only the guild's own channels that appear in it are reported.
+pub(crate) fn guild_create_event(
+    guild: &Guild,
+    bridged: &HashSet<u64>,
+    bot_user_id: u64,
+) -> DiscordEvent {
+    let presences: HashMap<u64, DiscordPresence> = guild
+        .presences
+        .iter()
+        .map(|(uid, p)| (uid.get(), map_online_status(p.status)))
+        .collect();
+
+    let raw: Vec<RawMemberData<'_>> = guild
+        .members
+        .values()
+        .map(|m| RawMemberData {
+            user_id: m.user.id.get(),
+            nick: m.nick.as_deref(),
+            global_name: m.user.global_name.as_deref(),
+            username: &m.user.name,
+        })
+        .collect();
+
+    // Determine which bridged channel IDs belong to this guild.
+    let guild_channel_ids: Vec<u64> = guild
+        .channels
+        .keys()
+        .filter(|cid| bridged.contains(&cid.get()))
+        .map(|cid| cid.get())
+        .collect();
+
+    // Extract channel and role names for mention resolution.
+    let channel_names: HashMap<u64, String> = guild
+        .channels
+        .iter()
+        .map(|(cid, ch)| (cid.get(), ch.name.clone()))
+        .collect();
+    let role_names: HashMap<u64, String> = guild
+        .roles
+        .iter()
+        .map(|(rid, role)| (rid.get(), role.name.clone()))
+        .collect();
+
+    tracing::debug!(
+        guild_id = guild.id.get(),
+        total_members = raw.len(),
+        total_presences = presences.len(),
+        bridged_channels = guild_channel_ids.len(),
+        guild_channels = guild.channels.len(),
+        guild_roles = role_names.len(),
+        "guild_create received"
+    );
+
+    let event = build_member_snapshot_event(
+        guild.id.get(),
+        &raw,
+        &presences,
+        guild_channel_ids,
+        channel_names,
+        role_names,
+        bot_user_id,
+    );
+
+    if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
+        tracing::debug!(
+            guild_id = guild.id.get(),
+            online_members = members.len(),
+            "emitting MemberSnapshot"
+        );
+    }
+
+    event
+}
+
 // ---------------------------------------------------------------------------
 // DiscordHandler methods — testable inner logic called by the shims below
 // ---------------------------------------------------------------------------
@@ -258,74 +344,11 @@ impl EventHandler for DiscordHandler {
 
     async fn guild_create(&self, ctx: Context, guild: Guild, _is_new: Option<bool>) {
         let bot_user_id = ctx.cache.current_user().id.get();
-        let presences: HashMap<u64, DiscordPresence> = guild
-            .presences
-            .iter()
-            .map(|(uid, p)| (uid.get(), map_online_status(p.status)))
-            .collect();
-
-        let raw: Vec<RawMemberData<'_>> = guild
-            .members
-            .values()
-            .map(|m| RawMemberData {
-                user_id: m.user.id.get(),
-                nick: m.nick.as_deref(),
-                global_name: m.user.global_name.as_deref(),
-                username: &m.user.name,
-            })
-            .collect();
-
-        // Determine which bridged channel IDs belong to this guild.
-        let guild_channel_ids: Vec<u64> = {
+        // Scope the read guard so it is released before the send await.
+        let event = {
             let bridged = self.bridged_channel_ids.read().await;
-            guild
-                .channels
-                .keys()
-                .filter(|cid| bridged.contains(&cid.get()))
-                .map(|cid| cid.get())
-                .collect()
+            guild_create_event(&guild, &bridged, bot_user_id)
         };
-
-        // Extract channel and role names for mention resolution.
-        let channel_names: HashMap<u64, String> = guild
-            .channels
-            .iter()
-            .map(|(cid, ch)| (cid.get(), ch.name.clone()))
-            .collect();
-        let role_names: HashMap<u64, String> = guild
-            .roles
-            .iter()
-            .map(|(rid, role)| (rid.get(), role.name.clone()))
-            .collect();
-
-        tracing::debug!(
-            guild_id = guild.id.get(),
-            total_members = raw.len(),
-            total_presences = presences.len(),
-            bridged_channels = guild_channel_ids.len(),
-            guild_channels = guild.channels.len(),
-            guild_roles = role_names.len(),
-            "guild_create received"
-        );
-
-        let event = build_member_snapshot_event(
-            guild.id.get(),
-            &raw,
-            &presences,
-            guild_channel_ids,
-            channel_names,
-            role_names,
-            bot_user_id,
-        );
-
-        if let DiscordEvent::MemberSnapshot { ref members, .. } = event {
-            tracing::debug!(
-                guild_id = guild.id.get(),
-                online_members = members.len(),
-                "emitting MemberSnapshot"
-            );
-        }
-
         let _ = self.event_tx.send(event).await;
     }
 
@@ -440,6 +463,153 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use tokio::sync::mpsc;
+
+    // ---------------------------------------------------------------------------
+    // guild_create_event
+    // ---------------------------------------------------------------------------
+
+    /// A `GUILD_CREATE` payload: guild 1, channels 10 (`general`) and 11
+    /// (`other`), role 20 (`mods`), members 5 (`alice`, nicked "Ali", online)
+    /// and 6 (`bob`, no nick, no presence entry → offline).
+    const GUILD_CREATE_JSON: &str = r#"{
+        "id": "1", "name": "guild", "icon": null, "icon_hash": null,
+        "splash": null, "discovery_splash": null, "owner_id": "2",
+        "verification_level": 0, "default_message_notifications": 0,
+        "explicit_content_filter": 0, "emojis": [],
+        "features": [], "mfa_level": 0, "application_id": null,
+        "system_channel_id": null, "system_channel_flags": 0,
+        "rules_channel_id": null, "max_presences": null, "max_members": null,
+        "vanity_url_code": null, "description": null, "banner": null,
+        "premium_tier": 0, "premium_subscription_count": 0,
+        "preferred_locale": "en-US", "public_updates_channel_id": null,
+        "max_video_channel_users": null, "max_stage_video_channel_users": null,
+        "nsfw_level": 0, "stickers": [], "premium_progress_bar_enabled": false,
+        "joined_at": "2025-01-01T00:00:00.000Z", "large": false,
+        "unavailable": false, "member_count": 2, "voice_states": [],
+        "threads": [], "stage_instances": [], "guild_scheduled_events": [],
+        "roles": [
+            {"id":"20","name":"mods","color":0,
+             "colors":{"primary_color":0,"secondary_color":null,"tertiary_color":null},
+             "hoist":false,"position":1,
+             "permissions":"0","managed":false,"mentionable":true}
+        ],
+        "channels": [
+            {"id":"10","type":0,"name":"general","guild_id":"1","position":0,"permission_overwrites":[]},
+            {"id":"11","type":0,"name":"other","guild_id":"1","position":1,"permission_overwrites":[]}
+        ],
+        "members": [
+            {"user":{"id":"5","username":"alice","discriminator":"0000","global_name":null,"avatar":null},
+             "nick":"Ali","roles":[],"joined_at":"2025-01-01T00:00:00.000Z","deaf":false,"mute":false,"flags":0},
+            {"user":{"id":"6","username":"bob","discriminator":"0000","global_name":"Bobby","avatar":null},
+             "nick":null,"roles":[],"joined_at":"2025-01-01T00:00:00.000Z","deaf":false,"mute":false,"flags":0}
+        ],
+        "presences": [
+            {"user":{"id":"5"},"status":"online","activities":[],"client_status":{}}
+        ]
+    }"#;
+
+    fn fixture_guild() -> Guild {
+        let event: serenity::model::event::GuildCreateEvent =
+            serde_json::from_str(GUILD_CREATE_JSON).expect("guild fixture should deserialize");
+        event.guild
+    }
+
+    #[test]
+    fn guild_create_event_reports_only_bridged_channels() {
+        let guild = fixture_guild();
+        let bridged: HashSet<u64> = [10, 999].into_iter().collect();
+
+        let DiscordEvent::MemberSnapshot { channel_ids, .. } =
+            guild_create_event(&guild, &bridged, 99)
+        else {
+            panic!("expected a MemberSnapshot");
+        };
+
+        // 11 belongs to the guild but is not bridged; 999 is bridged but
+        // belongs to a different guild.  Neither may appear.
+        assert_eq!(channel_ids, vec![10]);
+    }
+
+    #[test]
+    fn guild_create_event_with_no_bridged_channels_reports_none() {
+        let guild = fixture_guild();
+
+        let DiscordEvent::MemberSnapshot {
+            members,
+            channel_ids,
+            ..
+        } = guild_create_event(&guild, &HashSet::new(), 99)
+        else {
+            panic!("expected a MemberSnapshot");
+        };
+
+        assert!(channel_ids.is_empty());
+        // Members are still reported so their names are cached for later
+        // introduction via PRESENCE_UPDATE.
+        assert_eq!(members.len(), 2);
+    }
+
+    #[test]
+    fn guild_create_event_resolves_names_and_presence() {
+        let guild = fixture_guild();
+        let bridged: HashSet<u64> = [10].into_iter().collect();
+
+        let DiscordEvent::MemberSnapshot {
+            guild_id,
+            members,
+            bot_user_id,
+            ..
+        } = guild_create_event(&guild, &bridged, 99)
+        else {
+            panic!("expected a MemberSnapshot");
+        };
+
+        assert_eq!(guild_id, 1);
+        assert_eq!(bot_user_id, 99);
+
+        let alice = members
+            .iter()
+            .find(|m| m.user_id == 5)
+            .expect("alice must be present");
+        assert_eq!(alice.username, "alice");
+        assert_eq!(alice.display_name, "Ali", "guild nick wins");
+        assert_eq!(alice.presence, DiscordPresence::Online);
+
+        let bob = members
+            .iter()
+            .find(|m| m.user_id == 6)
+            .expect("bob must be present even though offline");
+        assert_eq!(
+            bob.display_name, "Bobby",
+            "global_name wins when there is no nick"
+        );
+        assert_eq!(
+            bob.presence,
+            DiscordPresence::Offline,
+            "a member with no presence entry defaults to offline"
+        );
+    }
+
+    #[test]
+    fn guild_create_event_extracts_all_channel_and_role_names() {
+        let guild = fixture_guild();
+        let bridged: HashSet<u64> = [10].into_iter().collect();
+
+        let DiscordEvent::MemberSnapshot {
+            channel_names,
+            role_names,
+            ..
+        } = guild_create_event(&guild, &bridged, 99)
+        else {
+            panic!("expected a MemberSnapshot");
+        };
+
+        // Name maps cover the whole guild, not just bridged channels — they
+        // back mention resolution, which can reference any channel or role.
+        assert_eq!(channel_names.get(&10).map(String::as_str), Some("general"));
+        assert_eq!(channel_names.get(&11).map(String::as_str), Some("other"));
+        assert_eq!(role_names.get(&20).map(String::as_str), Some("mods"));
+    }
 
     // ---------------------------------------------------------------------------
     // Test helper

@@ -28,9 +28,22 @@ equivalent mutants or integration-only. None represent real test gaps.
 The six serenity `EventHandler` trait methods (`ready`, `guild_create`, `message`,
 `presence_update`, `guild_member_addition`, `guild_member_removal`) are thin shims that
 delegate immediately to the inner functions (`handle_ready`, `handle_message_event`,
-`build_member_snapshot_event`, `presence_event`, `member_addition_event`,
+`guild_create_event`, `presence_event`, `member_addition_event`,
 `member_removal_event`). The inner functions are fully unit-tested. The shims themselves
 require a live Discord gateway `Context` that cannot be constructed in unit tests.
+
+The `Context` constraint, verified against serenity 0.12.5: `Context`'s fields are all
+`pub`, so a struct literal would work, but it needs a `ShardMessenger`, whose fields are
+`pub(crate)` to serenity and whose only public constructor takes a `&ShardRunner`.
+`ShardRunner::new` is public with all-`pub` options, but requires a `Shard`, and
+`Shard::new` calls `connect(&url).await` — a real WebSocket. Exercising a shim therefore
+means mocking Discord's gateway handshake, not just building a value.
+
+Because cargo-mutants only emits a coarse "replace with `()`" for each shim, any logic
+left inline in one is invisible to mutation testing. `guild_create` originally held ~60
+lines of guild-field marshalling; that is now extracted into `guild_create_event`, which
+is unit-tested and carries its own mutant. The remaining shims delegate on the first or
+second statement.
 
 | Location | Mutation |
 |---|---|

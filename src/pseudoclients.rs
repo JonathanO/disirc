@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::discord::DiscordPresence;
 use crate::irc::S2SCommand;
-use crate::irc::unreal::{IrcCommand, IrcMessage, SjoinParams};
+use crate::irc::unreal::{IrcCommand, IrcMessage};
 
 // ---------------------------------------------------------------------------
 // Nick sanitization
@@ -139,12 +139,6 @@ impl UidGenerator {
         self.assigned.remove(&discord_user_id);
     }
 
-    /// Reset all assignments (e.g. on reconnect).
-    pub fn reset(&mut self) {
-        self.assigned.clear();
-        self.counter = 0;
-    }
-
     /// Encode a counter value as a 6-char `[A-Z0-9]` string.
     ///
     /// Uses base-36 encoding (0-9, A-Z) to maximise the UID space.
@@ -157,12 +151,6 @@ impl UidGenerator {
             n /= 36;
         }
         chars.into_iter().map(char::from).collect()
-    }
-
-    /// Look up the UID for a Discord user, if already assigned.
-    #[must_use]
-    pub fn lookup(&self, discord_user_id: u64) -> Option<&str> {
-        self.assigned.get(&discord_user_id).map(String::as_str)
     }
 }
 
@@ -263,8 +251,6 @@ impl PseudoclientState {
 
 /// Manages all pseudoclients and their state.
 pub struct PseudoclientManager {
-    /// SID for our server link.
-    sid: String,
     /// Ident for all pseudoclients (from config).
     ident: String,
     /// UID generator.
@@ -284,7 +270,6 @@ impl PseudoclientManager {
     #[must_use]
     pub fn new(sid: &str, ident: &str) -> Self {
         Self {
-            sid: sid.to_string(),
             ident: ident.to_string(),
             uid_generator: UidGenerator::new(sid),
             by_discord_id: HashMap::new(),
@@ -307,7 +292,7 @@ impl PseudoclientManager {
     /// Introduce a pseudoclient for a Discord user.
     ///
     /// Returns the allocated state (uid, nick, channels), or `None` if the
-    /// user already has a pseudoclient (use `join_channel` to add channels).
+    /// user already has a pseudoclient (use `ensure_in_channel` to add channels).
     pub fn introduce(
         &mut self,
         discord_user_id: u64,
@@ -382,36 +367,6 @@ impl PseudoclientManager {
             uid,
             channel: channel.to_string(),
             ts: timestamp,
-        })
-    }
-
-    /// Join an existing pseudoclient to an additional channel.
-    ///
-    /// Returns the SJOIN message, or `None` if the pseudoclient doesn't exist
-    /// or is already in the channel.
-    pub fn join_channel(
-        &mut self,
-        discord_user_id: u64,
-        channel: &str,
-        timestamp: u64,
-    ) -> Option<IrcMessage> {
-        let state = self.by_discord_id.get_mut(&discord_user_id)?;
-
-        if state.channels.iter().any(|c| c == channel) {
-            return None;
-        }
-
-        state.channels.push(channel.to_string());
-
-        Some(IrcMessage {
-            tags: vec![],
-            prefix: Some(self.sid.clone()),
-            command: IrcCommand::Sjoin(SjoinParams {
-                timestamp,
-                channel: channel.to_string(),
-                modes: "+".to_string(),
-                members: vec![state.uid.clone()],
-            }),
         })
     }
 
@@ -521,15 +476,6 @@ impl PseudoclientManager {
         self.uid_to_discord.contains_key(uid)
     }
 
-    /// Reset all state (e.g. on reconnect).
-    pub fn reset(&mut self) {
-        self.by_discord_id.clear();
-        self.nick_to_discord.clear();
-        self.uid_to_discord.clear();
-        self.known_nicks = NickSet::new();
-        self.uid_generator.reset();
-    }
-
     /// Clear all registered external nicks. Called on link loss — the nicks
     /// will be re-registered from the burst on the next connection.
     pub fn clear_external_nicks(&mut self) {
@@ -540,23 +486,11 @@ impl PseudoclientManager {
         }
     }
 
-    /// Number of active pseudoclients.
-    #[must_use]
-    pub fn count(&self) -> usize {
-        self.by_discord_id.len()
-    }
-
     /// Clear the cached UID assignment for a Discord user so the next
     /// introduction allocates a fresh UID.  Used after KILL to avoid
     /// UID collisions with the recently-killed UID.
     pub fn forget_uid(&mut self, discord_user_id: u64) {
         self.uid_generator.forget(discord_user_id);
-    }
-
-    /// Returns `true` if no pseudoclients have been introduced.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.by_discord_id.is_empty()
     }
 
     /// Return the ident used for all pseudoclients.
@@ -880,25 +814,6 @@ mod tests {
     }
 
     #[test]
-    fn uid_generator_reset_clears() {
-        let mut uid_gen = UidGenerator::new("0D0");
-        let uid1 = uid_gen.get_or_create(100).to_string();
-        uid_gen.reset();
-        assert!(uid_gen.lookup(100).is_none());
-        // After reset, same user gets a fresh UID (counter reset too)
-        let uid2 = uid_gen.get_or_create(100).to_string();
-        assert_eq!(uid1, uid2); // counter resets to 0, so same encoding
-    }
-
-    #[test]
-    fn uid_generator_lookup() {
-        let mut uid_gen = UidGenerator::new("0D0");
-        assert!(uid_gen.lookup(100).is_none());
-        uid_gen.get_or_create(100);
-        assert!(uid_gen.lookup(100).is_some());
-    }
-
-    #[test]
     fn uid_encode_counter_zero() {
         assert_eq!(UidGenerator::encode_counter(0), "AAAAAA");
     }
@@ -966,11 +881,11 @@ mod tests {
         assert!(!state.uid.is_empty());
 
         // Internal maps are updated.
-        assert!(!mgr.is_empty());
+        assert!(mgr.iter_states().next().is_some());
         assert!(mgr.get_by_discord_id(100).is_some());
         assert!(mgr.get_by_nick("alice").is_some());
         assert!(mgr.get_by_nick("Alice").is_some()); // case-insensitive
-        assert_eq!(mgr.count(), 1);
+        assert_eq!(mgr.iter_states().count(), 1);
     }
 
     #[test]
@@ -1038,7 +953,7 @@ mod tests {
     #[test]
     fn is_empty_true_when_no_pseudoclients() {
         let mgr = make_manager();
-        assert!(mgr.is_empty());
+        assert!(mgr.iter_states().next().is_none());
     }
 
     #[test]
@@ -1095,7 +1010,7 @@ mod tests {
         mgr.quit(100, "bye");
         assert!(mgr.get_by_discord_id(100).is_none());
         assert!(mgr.get_by_nick("alice").is_none());
-        assert_eq!(mgr.count(), 0);
+        assert_eq!(mgr.iter_states().count(), 0);
     }
 
     #[test]
@@ -1182,46 +1097,6 @@ mod tests {
     // -------------------------------------------------------------------
     // PseudoclientManager — join/part channel
     // -------------------------------------------------------------------
-
-    #[test]
-    fn join_channel_generates_sjoin() {
-        let mut mgr = make_manager();
-        mgr.introduce(
-            100,
-            "alice",
-            "Alice",
-            &["#a".to_string()],
-            1000,
-            DiscordPresence::Online,
-        );
-        let msg = mgr.join_channel(100, "#b", 1001).unwrap();
-        assert_eq!(msg.prefix, Some("0D0".to_string()));
-        let IrcCommand::Sjoin(ref s) = msg.command else {
-            panic!("expected Sjoin");
-        };
-        assert_eq!(s.channel, "#b");
-        assert_eq!(s.timestamp, 1001);
-    }
-
-    #[test]
-    fn join_channel_already_in_returns_none() {
-        let mut mgr = make_manager();
-        mgr.introduce(
-            100,
-            "alice",
-            "Alice",
-            &["#a".to_string()],
-            1000,
-            DiscordPresence::Online,
-        );
-        assert!(mgr.join_channel(100, "#a", 1001).is_none());
-    }
-
-    #[test]
-    fn join_channel_unknown_user_returns_none() {
-        let mut mgr = make_manager();
-        assert!(mgr.join_channel(999, "#a", 1001).is_none());
-    }
 
     #[test]
     fn part_channel_with_remaining() {
@@ -1386,26 +1261,6 @@ mod tests {
         let uid = mgr.get_by_discord_id(100).unwrap().uid.clone();
         let state = mgr.get_by_uid(&uid).unwrap();
         assert_eq!(state.discord_user_id, 100);
-    }
-
-    #[test]
-    fn reset_clears_everything() {
-        let mut mgr = make_manager();
-        mgr.introduce(
-            100,
-            "alice",
-            "Alice",
-            &["#test".to_string()],
-            1000,
-            DiscordPresence::Online,
-        );
-        mgr.register_external_nick("bob");
-        mgr.reset();
-        assert_eq!(mgr.count(), 0);
-        assert!(mgr.get_by_discord_id(100).is_none());
-        assert!(mgr.get_by_nick("alice").is_none());
-        // External nicks are also cleared (network state rebuilt on reconnect)
-        assert!(!mgr.known_nicks.contains("bob"));
     }
 
     // -------------------------------------------------------------------

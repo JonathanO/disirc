@@ -27,24 +27,6 @@ pub(crate) const IRC_COLOR: char = '\x03';
 pub(crate) const IRC_RESET: char = '\x0f';
 
 // ---------------------------------------------------------------------------
-// Shared: server-time formatting
-// ---------------------------------------------------------------------------
-
-/// Format a Unix timestamp (seconds + millis) as ISO 8601 UTC.
-///
-/// Output: `YYYY-MM-DDTHH:MM:SS.mmmZ`
-#[must_use]
-pub fn format_server_time(unix_secs: i64, millis: u32) -> String {
-    use chrono::{DateTime, Utc};
-
-    // Clamp to valid range to prevent overflow in the nanosecond conversion.
-    let nanos = millis.min(999) * 1_000_000;
-    let dt = DateTime::<Utc>::from_timestamp(unix_secs, nanos)
-        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).expect("epoch is valid"));
-    dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
-}
-
-// ---------------------------------------------------------------------------
 // Re-exports — preserve the public API of `crate::formatting::*`
 // ---------------------------------------------------------------------------
 
@@ -53,54 +35,18 @@ pub use discord_to_irc::{
 };
 pub use irc_to_discord::{
     IrcMentionResolver, convert_irc_mentions, convert_nick_colon_mention,
-    irc_to_discord_formatting, irc_to_discord_plain, irc_to_discord_webhook, ping_fix_nick,
-    truncate_for_discord,
+    irc_to_discord_formatting, ping_fix_nick, truncate_for_discord,
 };
 
 // ---------------------------------------------------------------------------
-// Tests (shared / server-time)
+// Tests (cross-direction roundtrip)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn format_epoch() {
-        assert_eq!(format_server_time(0, 0), "1970-01-01T00:00:00.000Z");
-    }
-
-    #[test]
-    fn format_known_timestamp() {
-        // 2024-01-15 12:28:16.789 UTC
-        assert_eq!(
-            format_server_time(1_705_321_696, 789),
-            "2024-01-15T12:28:16.789Z"
-        );
-    }
-
     use proptest::prelude::*;
-
-    proptest! {
-        /// Any timestamp with ANY millis value — including out-of-range
-        /// millis, which are clamped to 999 — formats as a fixed-width
-        /// ISO 8601 UTC string.
-        #[test]
-        fn server_time_is_valid_iso8601(
-            secs in 0i64..4_102_444_800i64,
-            millis in proptest::num::u32::ANY,
-        ) {
-            let formatted = format_server_time(secs, millis);
-            assert!(formatted.ends_with('Z'));
-            assert_eq!(formatted.len(), 24); // YYYY-MM-DDTHH:MM:SS.mmmZ
-            assert_eq!(&formatted[4..5], "-");
-            assert_eq!(&formatted[7..8], "-");
-            assert_eq!(&formatted[10..11], "T");
-            assert_eq!(&formatted[13..14], ":");
-            assert_eq!(&formatted[16..17], ":");
-            assert_eq!(&formatted[19..20], ".");
-        }
-    }
 
     // -- Cross-direction roundtrip tests -------------------------------------
 

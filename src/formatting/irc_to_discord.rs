@@ -298,42 +298,6 @@ pub fn truncate_for_discord(text: &str) -> Cow<'_, str> {
 }
 
 // ---------------------------------------------------------------------------
-// Full pipeline
-// ---------------------------------------------------------------------------
-
-/// Format an IRC message for Discord using the webhook path.
-///
-/// Returns `(username, body)` where username has ping-fix applied.
-#[must_use]
-pub fn irc_to_discord_webhook(
-    nick: &str,
-    text: &str,
-    mention_resolver: &dyn IrcMentionResolver,
-) -> (String, String) {
-    let formatted = irc_to_discord_formatting(text);
-    let with_mentions = convert_irc_mentions(&formatted, mention_resolver);
-    let body = truncate_for_discord(&with_mentions).into_owned();
-    let username = ping_fix_nick(nick);
-    (username, body)
-}
-
-/// Format an IRC message for Discord using the plain path.
-///
-/// Returns a single string: `**[nick]** message text`.
-#[must_use]
-pub fn irc_to_discord_plain(
-    nick: &str,
-    text: &str,
-    mention_resolver: &dyn IrcMentionResolver,
-) -> String {
-    let formatted = irc_to_discord_formatting(text);
-    let with_mentions = convert_irc_mentions(&formatted, mention_resolver);
-    let fixed_nick = ping_fix_nick(nick);
-    let full = format!("**[{fixed_nick}]** {with_mentions}");
-    truncate_for_discord(&full).into_owned()
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -628,22 +592,6 @@ mod tests {
         let result = truncate_for_discord(&msg);
         assert!(result.ends_with(TRUNCATION_SUFFIX));
         assert!(result.chars().count() <= DISCORD_MAX_CHARS);
-    }
-
-    // -- Full pipeline -------------------------------------------------------
-
-    #[test]
-    fn irc_to_discord_webhook_pipeline() {
-        let (username, body) =
-            irc_to_discord_webhook("alice", "\x02hello\x02 @alice", &StubIrcResolver);
-        assert_eq!(username, "a\u{200B}lice");
-        assert_eq!(body, "**hello** <@111>");
-    }
-
-    #[test]
-    fn irc_to_discord_plain_pipeline() {
-        let result = irc_to_discord_plain("bob", "hello", &StubIrcResolver);
-        assert_eq!(result, "**[b\u{200B}ob]** hello");
     }
 
     // -- Proptest ------------------------------------------------------------

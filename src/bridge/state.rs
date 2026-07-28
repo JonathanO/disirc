@@ -615,7 +615,6 @@ mod tests {
             &S2SEvent::ChannelBurst {
                 channel: "#general".to_string(),
                 ts: 1_000,
-                members: vec![],
             },
         );
         apply_irc_event(
@@ -638,7 +637,6 @@ mod tests {
             &S2SEvent::ChannelBurst {
                 channel: "#general".to_string(),
                 ts: 1_700_000_000,
-                members: vec![],
             },
         );
         assert_eq!(state.ts_for_channel("#general"), Some(1_700_000_000));
@@ -654,7 +652,6 @@ mod tests {
             &S2SEvent::ChannelBurst {
                 channel: "#general".to_string(),
                 ts: 1_000,
-                members: vec![],
             },
         );
         apply_irc_event(
@@ -663,7 +660,6 @@ mod tests {
             &S2SEvent::ChannelBurst {
                 channel: "#general".to_string(),
                 ts: 2_000,
-                members: vec![],
             },
         );
         assert_eq!(state.ts_for_channel("#general"), Some(1_000));
@@ -679,7 +675,6 @@ mod tests {
             &S2SEvent::ChannelBurst {
                 channel: "#General".to_string(),
                 ts: 42,
-                members: vec![],
             },
         );
         assert_eq!(state.ts_for_channel("#general"), Some(42));

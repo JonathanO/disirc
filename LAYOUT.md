@@ -60,8 +60,8 @@ submodule for each concrete IRC server dialect.
 
 | File | What it contains |
 |------|-----------------|
-| `src/irc/mod.rs` | Re-exports `S2SEvent`, `S2SCommand`, `MemberPrefix` from `types.rs`. Declares the `unreal` submodule. |
-| `src/irc/types.rs` | **Protocol-agnostic boundary types.** `S2SEvent` — events emitted from the connection layer to the processing task (link up/down, users, channels, messages). `S2SCommand` — commands sent from the processing task to the connection layer. `MemberPrefix` — channel member privilege levels. Nothing in these types is UnrealIRCd-specific; they could be adapted for any S2S IRC dialect. |
+| `src/irc/mod.rs` | Re-exports `S2SEvent`, `S2SCommand` from `types.rs`. Declares the `unreal` submodule. |
+| `src/irc/types.rs` | **Protocol-agnostic boundary types.** `S2SEvent` — events emitted from the connection layer to the processing task (link up/down, users, channels, messages). `S2SCommand` — commands sent from the processing task to the connection layer. Nothing in these types is UnrealIRCd-specific; they could be adapted for any S2S IRC dialect. |
 
 ---
 

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use super::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
-use crate::irc::types::{MemberPrefix, S2SCommand, S2SEvent};
+use crate::irc::types::{S2SCommand, S2SEvent};
 
 /// Parse the `@time=` message tag value into a `DateTime<Utc>`.
 ///
@@ -12,38 +12,6 @@ fn parse_time_tag(tags: &[(String, Option<String>)]) -> Option<DateTime<Utc>> {
         .and_then(|(_, v)| v.as_deref())
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc))
-}
-
-/// Parse a SJOIN member list entry into a (uid, prefix) pair.
-///
-/// SJOIN entries use leading sigils for prefix status: `*` owner, `~` admin,
-/// `@` op, `%` half-op, `+` voice. Entries starting with `&`, `"`, or `'`
-/// are list-mode entries (bans, exceptions, invex) and are skipped.
-fn parse_sjoin_member(entry: &str) -> Option<(String, MemberPrefix)> {
-    // Skip list-mode entries (ban / exception / invex sigils).
-    if entry.starts_with(['&', '"', '\'']) {
-        return None;
-    }
-
-    let (prefix, uid) = if let Some(rest) = entry.strip_prefix('*') {
-        (MemberPrefix::Owner, rest)
-    } else if let Some(rest) = entry.strip_prefix('~') {
-        (MemberPrefix::Admin, rest)
-    } else if let Some(rest) = entry.strip_prefix('@') {
-        (MemberPrefix::Op, rest)
-    } else if let Some(rest) = entry.strip_prefix('%') {
-        (MemberPrefix::HalfOp, rest)
-    } else if let Some(rest) = entry.strip_prefix('+') {
-        (MemberPrefix::Voice, rest)
-    } else {
-        (MemberPrefix::None, entry)
-    };
-
-    if uid.is_empty() {
-        return None;
-    }
-
-    Some((uid.to_owned(), prefix))
 }
 
 /// Translate an inbound `IrcMessage` into an `S2SEvent`.
@@ -89,9 +57,7 @@ pub fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
         }
 
         IrcCommand::Sjoin(p) => {
-            let members: Vec<(String, MemberPrefix)> =
-                p.members.iter().filter_map(|m| parse_sjoin_member(m)).collect();
-            Some(S2SEvent::ChannelBurst { channel: p.channel.clone(), ts: p.timestamp, members })
+            Some(S2SEvent::ChannelBurst { channel: p.channel.clone(), ts: p.timestamp })
         }
 
         IrcCommand::Part { channel, reason } => Some(S2SEvent::UserParted {
@@ -549,77 +515,11 @@ mod tests {
                 members: vec!["@ABC000001".into(), "+ABC000002".into(), "ABC000003".into()],
             }),
         };
-        let S2SEvent::ChannelBurst {
-            channel,
-            ts,
-            members,
-        } = translate_inbound(&msg).unwrap()
-        else {
+        let S2SEvent::ChannelBurst { channel, ts } = translate_inbound(&msg).unwrap() else {
             panic!()
         };
         assert_eq!(channel, "#general");
         assert_eq!(ts, 1_700_000_000);
-        assert_eq!(
-            members,
-            vec![
-                ("ABC000001".into(), MemberPrefix::Op),
-                ("ABC000002".into(), MemberPrefix::Voice),
-                ("ABC000003".into(), MemberPrefix::None),
-            ]
-        );
-    }
-
-    #[test]
-    fn inbound_sjoin_skips_list_mode_entries() {
-        let msg = IrcMessage {
-            tags: vec![],
-            prefix: Some(SID.into()),
-            command: IrcCommand::Sjoin(SjoinParams {
-                timestamp: 1_700_000_000,
-                channel: "#general".into(),
-                modes: "+nb".into(),
-                members: vec!["&*!*@spam.invalid".into(), "ABC000001".into()],
-            }),
-        };
-        let S2SEvent::ChannelBurst { members, .. } = translate_inbound(&msg).unwrap() else {
-            panic!()
-        };
-        assert_eq!(members, vec![("ABC000001".into(), MemberPrefix::None)]);
-    }
-
-    #[test]
-    fn inbound_sjoin_all_prefix_types() {
-        let msg = IrcMessage {
-            tags: vec![],
-            prefix: Some(SID.into()),
-            command: IrcCommand::Sjoin(SjoinParams {
-                timestamp: 1_700_000_000,
-                channel: "#test".into(),
-                modes: "+".into(),
-                members: vec![
-                    "*ABC000001".into(),
-                    "~ABC000002".into(),
-                    "@ABC000003".into(),
-                    "%ABC000004".into(),
-                    "+ABC000005".into(),
-                    "ABC000006".into(),
-                ],
-            }),
-        };
-        let S2SEvent::ChannelBurst { members, .. } = translate_inbound(&msg).unwrap() else {
-            panic!()
-        };
-        assert_eq!(
-            members,
-            vec![
-                ("ABC000001".into(), MemberPrefix::Owner),
-                ("ABC000002".into(), MemberPrefix::Admin),
-                ("ABC000003".into(), MemberPrefix::Op),
-                ("ABC000004".into(), MemberPrefix::HalfOp),
-                ("ABC000005".into(), MemberPrefix::Voice),
-                ("ABC000006".into(), MemberPrefix::None),
-            ]
-        );
     }
 
     // -----------------------------------------------------------------------
@@ -1166,30 +1066,6 @@ mod tests {
             parse_time_tag(&tags),
             Some(Utc.timestamp_opt(1_700_000_000, 0).unwrap())
         );
-    }
-
-    // -----------------------------------------------------------------------
-    // parse_sjoin_member
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn sjoin_member_ban_sigil_skipped() {
-        assert!(parse_sjoin_member("&*!*@spam.invalid").is_none());
-    }
-
-    #[test]
-    fn sjoin_member_exception_sigil_skipped() {
-        assert!(parse_sjoin_member("\"*!*@allowed.invalid").is_none());
-    }
-
-    #[test]
-    fn sjoin_member_invex_sigil_skipped() {
-        assert!(parse_sjoin_member("'*!*@invited.invalid").is_none());
-    }
-
-    #[test]
-    fn sjoin_member_empty_after_prefix_skipped() {
-        assert!(parse_sjoin_member("@").is_none());
     }
 
     // -----------------------------------------------------------------------

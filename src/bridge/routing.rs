@@ -442,7 +442,6 @@ mod tests {
             &S2SEvent::ChannelBurst {
                 channel: "#general".to_string(),
                 ts: 9_999,
-                members: vec![],
             },
         );
         let cmds = produce_burst_commands(&pm, &irc, 1_000);

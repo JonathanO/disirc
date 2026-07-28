@@ -1,22 +1,5 @@
 use chrono::{DateTime, Utc};
 
-/// Prefix status of a channel member, ordered from highest to lowest privilege.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MemberPrefix {
-    /// Channel owner (~)
-    Owner,
-    /// Channel admin (&)
-    Admin,
-    /// Channel op (@)
-    Op,
-    /// Half-op (%)
-    HalfOp,
-    /// Voice (+)
-    Voice,
-    /// Regular member (no prefix)
-    None,
-}
-
 /// Protocol-agnostic events emitted by the connection module to the processing task.
 ///
 /// The processing task receives these over an `mpsc` channel and must never
@@ -67,8 +50,6 @@ pub enum S2SEvent {
         channel: String,
         /// Channel creation timestamp.
         ts: u64,
-        /// List of (uid, prefix) pairs for each member.
-        members: Vec<(String, MemberPrefix)>,
     },
 
     /// A user left a channel.

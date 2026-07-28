@@ -417,45 +417,6 @@ pub fn diff_bridges(old: &[BridgeEntry], new: &[BridgeEntry]) -> BridgeDiff {
     }
 }
 
-/// Check whether any non-reloadable fields differ between two configs.
-///
-/// Returns a list of human-readable field names that changed.  The caller
-/// should log these at `WARN` level.
-#[must_use]
-pub fn non_reloadable_changes(old: &Config, new: &Config) -> Vec<&'static str> {
-    let mut changed = Vec::new();
-
-    if old.discord.token != new.discord.token {
-        changed.push("discord.token");
-    }
-    if old.irc.uplink != new.irc.uplink {
-        changed.push("irc.uplink");
-    }
-    if old.irc.port != new.irc.port {
-        changed.push("irc.port");
-    }
-    if old.irc.tls != new.irc.tls {
-        changed.push("irc.tls");
-    }
-    if old.irc.link_name != new.irc.link_name {
-        changed.push("irc.link_name");
-    }
-    if old.irc.link_password != new.irc.link_password {
-        changed.push("irc.link_password");
-    }
-    if old.irc.sid != new.irc.sid {
-        changed.push("irc.sid");
-    }
-    if old.irc.description != new.irc.description {
-        changed.push("irc.description");
-    }
-    if old.pseudoclients.ident != new.pseudoclients.ident {
-        changed.push("pseudoclients.ident");
-    }
-
-    changed
-}
-
 /// Attempt to reload config from `path`, validating before returning the diff.
 ///
 /// On success returns `Ok((new_config, diff))`.  On failure returns an error;
@@ -989,45 +950,6 @@ mod tests {
         let diff = diff_bridges(&[bridge("111", "#a", None)], &[]);
         assert!(diff.added.is_empty());
         assert_eq!(diff.removed.len(), 1);
-    }
-
-    #[test]
-    fn non_reloadable_changes_none_when_identical() {
-        let cfg = valid_config();
-        let cfg2 = valid_config();
-        assert!(non_reloadable_changes(&cfg, &cfg2).is_empty());
-    }
-
-    #[test]
-    fn non_reloadable_changes_detects_all_fields() {
-        let cfg = valid_config();
-        let mut cfg2 = parse(FULL_TOML);
-        cfg2.discord.token = "different".to_string();
-        cfg2.irc.uplink = "other.example.net".to_string();
-        cfg2.irc.sid = "1AA".to_string();
-
-        let changes = non_reloadable_changes(&cfg, &cfg2);
-        assert!(changes.contains(&"discord.token"));
-        assert!(changes.contains(&"irc.uplink"));
-        assert!(changes.contains(&"irc.port"));
-        assert!(changes.contains(&"irc.tls"));
-        assert!(changes.contains(&"irc.description"));
-        assert!(changes.contains(&"irc.sid"));
-        assert!(changes.contains(&"pseudoclients.ident"));
-    }
-
-    #[test]
-    fn non_reloadable_ignores_bridge_changes() {
-        let cfg = valid_config();
-        let mut cfg2 = valid_config();
-        cfg2.bridges = vec![bridge("999", "#different", None)];
-        // Bridge changes are reloadable, so they should NOT appear
-        assert!(non_reloadable_changes(&cfg, &cfg2).is_empty());
-
-        // But changing token should appear
-        cfg2.discord.token = "new-token".to_string();
-        let changes = non_reloadable_changes(&cfg, &cfg2);
-        assert_eq!(changes, vec!["discord.token"]);
     }
 
     #[test]

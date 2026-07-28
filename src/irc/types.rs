@@ -149,13 +149,6 @@ pub enum S2SCommand {
         timestamp: Option<DateTime<Utc>>,
     },
 
-    /// Send a NOTICE from a pseudoclient.
-    SendNotice {
-        from_uid: String,
-        target: String,
-        text: String,
-    },
-
     /// Change a pseudoclient's nick.
     ChangeNick { uid: String, new_nick: String },
 

@@ -256,21 +256,6 @@ pub fn translate_outbound(
             }]
         }
 
-        S2SCommand::SendNotice {
-            from_uid,
-            target,
-            text,
-        } => {
-            vec![IrcMessage {
-                tags: vec![],
-                prefix: Some(from_uid.clone()),
-                command: IrcCommand::Notice {
-                    target: target.clone(),
-                    text: text.clone(),
-                },
-            }]
-        }
-
         S2SCommand::ChangeNick { uid, new_nick } => {
             vec![IrcMessage {
                 tags: vec![],

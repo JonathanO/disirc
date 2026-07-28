@@ -9,7 +9,7 @@ use super::{IRC_BOLD, IRC_ITALIC, IRC_UNDERLINE};
 /// Resolver trait for looking up Discord entities by ID.
 ///
 /// Implementations are provided by the bridge runtime; tests use stubs.
-pub trait DiscordResolver {
+pub(crate) trait DiscordResolver {
     /// Resolve a user ID to a display name / nick.
     fn resolve_user(&self, id: &str) -> Option<String>;
     /// Resolve a channel ID to a channel name (without `#`).
@@ -22,7 +22,7 @@ pub trait DiscordResolver {
 ///
 /// Handles: `<@id>`, `<@!id>`, `<#id>`, `<@&id>`, `<:name:id>`, `<a:name:id>`.
 #[must_use]
-pub fn resolve_mentions(text: &str, resolver: &dyn DiscordResolver) -> String {
+pub(crate) fn resolve_mentions(text: &str, resolver: &dyn DiscordResolver) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.char_indices().peekable();
 
@@ -104,7 +104,7 @@ const ESCAPE_BASE: u32 = 0xF_0000;
 /// 5. Italic `*` and word-boundary `_`
 /// 6. Strikethrough `~~` — passed through unchanged
 #[must_use]
-pub fn markdown_to_irc(text: &str) -> String {
+pub(crate) fn markdown_to_irc(text: &str) -> String {
     // Step 1: Replace backslash escapes with sentinels
     let mut result = replace_backslash_escapes(text);
 
@@ -342,7 +342,7 @@ const CODE_CONTINUATION: &str = "\x02>\x02 ";
 /// - Code block continuation prefixing
 /// - Length splitting at word boundaries
 #[must_use]
-pub fn split_for_irc(text: &str) -> Vec<String> {
+pub(crate) fn split_for_irc(text: &str) -> Vec<String> {
     // Normalise newlines
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
 
@@ -463,7 +463,7 @@ fn split_long_line(line: &str, max_bytes: usize) -> Vec<String> {
 ///
 /// Returns a list of lines to send as separate `PRIVMSG` messages.
 #[must_use]
-pub fn discord_to_irc(text: &str, resolver: &dyn DiscordResolver) -> Vec<String> {
+pub(crate) fn discord_to_irc(text: &str, resolver: &dyn DiscordResolver) -> Vec<String> {
     let resolved = resolve_mentions(text, resolver);
     let formatted = markdown_to_irc(&resolved);
     split_for_irc(&formatted)

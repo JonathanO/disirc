@@ -18,7 +18,7 @@ use crate::pseudoclients::PseudoclientManager;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
-pub enum PersistError {
+pub(crate) enum PersistError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
@@ -36,23 +36,23 @@ const STATE_VERSION: u32 = 1;
 
 /// Top-level persisted state.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PersistedState {
-    pub version: u32,
+pub(crate) struct PersistedState {
+    pub(crate) version: u32,
     /// Map of Discord user ID (as string) → persisted pseudoclient data.
-    pub pseudoclients: HashMap<String, PersistedPseudoclient>,
+    pub(crate) pseudoclients: HashMap<String, PersistedPseudoclient>,
 }
 
 /// Per-user persisted data.
 ///
 /// Only fields that cannot be reconstructed from live Discord/IRC sources.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedPseudoclient {
-    pub channels: Vec<String>,
-    pub last_active: u64,
+pub(crate) struct PersistedPseudoclient {
+    pub(crate) channels: Vec<String>,
+    pub(crate) last_active: u64,
     #[serde(default)]
-    pub channel_last_active: HashMap<String, u64>,
+    pub(crate) channel_last_active: HashMap<String, u64>,
     #[serde(default)]
-    pub went_offline_at: Option<u64>,
+    pub(crate) went_offline_at: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ pub struct PersistedPseudoclient {
 /// Returns `Ok(state)` on success, or an error if the file cannot be read,
 /// parsed, or has an unsupported version.  Callers should log the error and
 /// fall back to empty state rather than aborting startup.
-pub fn load_state(path: &Path) -> Result<PersistedState, PersistError> {
+pub(crate) fn load_state(path: &Path) -> Result<PersistedState, PersistError> {
     let contents = std::fs::read_to_string(path)?;
     let state: PersistedState = serde_json::from_str(&contents)?;
     if state.version != STATE_VERSION {
@@ -76,7 +76,7 @@ pub fn load_state(path: &Path) -> Result<PersistedState, PersistError> {
 /// Save state to a JSON file using atomic write (temp + fsync + rename).
 ///
 /// Callers should log errors rather than aborting on failure.
-pub fn save_state(path: &Path, state: &PersistedState) -> Result<(), PersistError> {
+pub(crate) fn save_state(path: &Path, state: &PersistedState) -> Result<(), PersistError> {
     let json = serde_json::to_string_pretty(state)?;
 
     let file_name = path.file_name().ok_or_else(|| {
@@ -98,7 +98,7 @@ pub fn save_state(path: &Path, state: &PersistedState) -> Result<(), PersistErro
 }
 
 /// Extract persistable state from the current `PseudoclientManager`.
-pub fn snapshot_from_pm(pm: &PseudoclientManager) -> PersistedState {
+pub(crate) fn snapshot_from_pm(pm: &PseudoclientManager) -> PersistedState {
     let mut pseudoclients = HashMap::new();
 
     for state in pm.iter_states() {
@@ -128,7 +128,7 @@ pub fn snapshot_from_pm(pm: &PseudoclientManager) -> PersistedState {
 /// Convert a `PersistedState` into a seed map keyed by Discord user ID.
 ///
 /// Entries for channels not in `valid_channels` are filtered out.
-pub fn into_seed_map(
+pub(crate) fn into_seed_map(
     state: PersistedState,
     valid_channels: &[&str],
 ) -> HashMap<u64, PersistedPseudoclient> {

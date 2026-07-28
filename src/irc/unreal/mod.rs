@@ -5,4 +5,4 @@ pub(crate) mod irc_message;
 mod translation;
 
 pub use connection::run_connection;
-pub use irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
+pub(crate) use irc_message::{IrcCommand, IrcMessage};

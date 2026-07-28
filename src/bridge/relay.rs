@@ -15,7 +15,7 @@ use crate::irc::S2SCommand;
 ///
 /// Each formatted text line becomes one `S2SCommand::SendMessage`.
 /// Attachment URLs follow as additional `SendMessage` commands, in order.
-pub fn discord_to_irc_commands(
+pub(crate) fn discord_to_irc_commands(
     uid: &str,
     irc_channel: &str,
     content: &str,
@@ -81,7 +81,7 @@ fn extract_action(text: &str) -> Option<&str> {
 /// Ping-fix (`U+200B` after the first character) is applied to the nick
 /// wherever it appears as a label: webhook username, `**[nick]**` prefix,
 /// and the `* nick` action prefix.
-pub fn irc_to_discord_command(
+pub(crate) fn irc_to_discord_command(
     channel_id: u64,
     webhook_url: Option<&str>,
     sender_nick: &str,

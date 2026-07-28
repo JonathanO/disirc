@@ -1,6 +1,7 @@
 pub mod connection;
 mod handler;
-pub mod send;
-pub mod types;
+pub(crate) mod send;
+pub(crate) mod types;
 
-pub use types::{DiscordCommand, DiscordEvent, DiscordPresence, MemberInfo, webhook_id_from_url};
+pub(crate) use types::webhook_id_from_url;
+pub use types::{DiscordCommand, DiscordEvent, DiscordPresence, MemberInfo};

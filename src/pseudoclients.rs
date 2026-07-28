@@ -10,7 +10,7 @@ use crate::irc::unreal::{IrcCommand, IrcMessage};
 
 /// Characters allowed in IRC nicks per `UnrealIRCd` defaults.
 #[must_use]
-pub fn is_valid_nick_char(c: char) -> bool {
+pub(crate) fn is_valid_nick_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
@@ -24,7 +24,7 @@ pub fn is_valid_nick_char(c: char) -> bool {
 /// 2. If result starts with a digit, prefix with `d`.
 /// 3. Truncate to 30 characters.
 #[must_use]
-pub fn sanitize_nick(username: &str) -> String {
+pub(crate) fn sanitize_nick(username: &str) -> String {
     let mut nick: String = username
         .chars()
         .map(|c| if is_valid_nick_char(c) { c } else { '_' })
@@ -49,7 +49,7 @@ pub fn sanitize_nick(username: &str) -> String {
 /// 3. Truncate + append last 8 hex digits of Discord user ID.
 /// 4. Final fallback: `d` + 6-char UID suffix (guaranteed unique).
 #[must_use]
-pub fn resolve_nick(
+pub(crate) fn resolve_nick(
     base: &str,
     discord_user_id: u64,
     uid: &str,
@@ -88,7 +88,7 @@ pub fn resolve_nick(
 /// UID format: 3-char SID + 6 alphanumeric chars.
 /// Example: `0D0ABCXYZ` → `dABCXYZ` (but we take last 6 of 9-char UID).
 #[must_use]
-pub fn uid_nick(uid: &str) -> String {
+pub(crate) fn uid_nick(uid: &str) -> String {
     debug_assert!(uid.len() >= 4, "UID too short: {uid}");
     let suffix = &uid[uid.len().saturating_sub(6)..];
     format!("d{suffix}")
@@ -102,7 +102,7 @@ pub fn uid_nick(uid: &str) -> String {
 ///
 /// UIDs are `<SID>` + 6 alphanumeric chars (`[A-Z0-9]`), stable per Discord
 /// user ID for the duration of the session.
-pub struct UidGenerator {
+pub(crate) struct UidGenerator {
     sid: String,
     /// Maps Discord user ID → assigned UID for session stability.
     assigned: HashMap<u64, String>,
@@ -113,7 +113,7 @@ pub struct UidGenerator {
 impl UidGenerator {
     /// Create a new generator for the given SID (3 chars).
     #[must_use]
-    pub fn new(sid: &str) -> Self {
+    pub(crate) fn new(sid: &str) -> Self {
         debug_assert!(sid.len() == 3, "SID must be 3 characters: {sid}");
         Self {
             sid: sid.to_string(),
@@ -125,7 +125,7 @@ impl UidGenerator {
     /// Get or create a UID for a Discord user ID.
     ///
     /// Returns the same UID if called again with the same `discord_user_id`.
-    pub fn get_or_create(&mut self, discord_user_id: u64) -> &str {
+    pub(crate) fn get_or_create(&mut self, discord_user_id: u64) -> &str {
         self.assigned.entry(discord_user_id).or_insert_with(|| {
             let suffix = Self::encode_counter(self.counter);
             self.counter += 1;
@@ -135,7 +135,7 @@ impl UidGenerator {
 
     /// Remove a single UID assignment so the next `get_or_create` for this
     /// user allocates a fresh UID. Used after a KILL to avoid UID collisions.
-    pub fn forget(&mut self, discord_user_id: u64) {
+    pub(crate) fn forget(&mut self, discord_user_id: u64) {
         self.assigned.remove(&discord_user_id);
     }
 
@@ -162,29 +162,29 @@ impl UidGenerator {
 ///
 /// IRC nicks are compared case-insensitively (ASCII).
 #[derive(Debug, Default)]
-pub struct NickSet {
+pub(crate) struct NickSet {
     nicks: HashSet<String>,
 }
 
 impl NickSet {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Insert a nick into the set.
-    pub fn insert(&mut self, nick: &str) {
+    pub(crate) fn insert(&mut self, nick: &str) {
         self.nicks.insert(nick.to_ascii_lowercase());
     }
 
     /// Remove a nick from the set.
-    pub fn remove(&mut self, nick: &str) {
+    pub(crate) fn remove(&mut self, nick: &str) {
         self.nicks.remove(&nick.to_ascii_lowercase());
     }
 
     /// Check if a nick is in the set (case-insensitive).
     #[must_use]
-    pub fn contains(&self, nick: &str) -> bool {
+    pub(crate) fn contains(&self, nick: &str) -> bool {
         self.nicks.contains(&nick.to_ascii_lowercase())
     }
 }
@@ -195,30 +195,30 @@ impl NickSet {
 
 /// Per-pseudoclient state.
 #[derive(Debug, Clone)]
-pub struct PseudoclientState {
-    pub discord_user_id: u64,
-    pub uid: String,
-    pub nick: String,
+pub(crate) struct PseudoclientState {
+    pub(crate) discord_user_id: u64,
+    pub(crate) uid: String,
+    pub(crate) nick: String,
     /// Original Discord username (the unique @handle).
-    pub username: String,
-    pub display_name: String,
-    pub channels: Vec<String>,
-    pub presence: DiscordPresence,
+    pub(crate) username: String,
+    pub(crate) display_name: String,
+    pub(crate) channels: Vec<String>,
+    pub(crate) presence: DiscordPresence,
     /// Set after a KILL during the burst window.  The pseudoclient will be
     /// reintroduced (with nick re-resolution) when `BurstComplete` arrives.
-    pub needs_reintroduce: bool,
+    pub(crate) needs_reintroduce: bool,
     /// Last time the user sent a message in any channel (Unix seconds).
-    pub last_active: u64,
+    pub(crate) last_active: u64,
     /// Per-channel last activity time (Unix seconds).
-    pub channel_last_active: std::collections::HashMap<String, u64>,
+    pub(crate) channel_last_active: std::collections::HashMap<String, u64>,
     /// When the user's presence changed to Offline (Unix seconds).
     /// `None` if the user is not offline.
-    pub went_offline_at: Option<u64>,
+    pub(crate) went_offline_at: Option<u64>,
 }
 
 impl PseudoclientState {
     /// Build the `S2SCommand::IntroduceUser` for this pseudoclient.
-    pub fn introduce_command(&self, ident: &str) -> S2SCommand {
+    pub(crate) fn introduce_command(&self, ident: &str) -> S2SCommand {
         S2SCommand::IntroduceUser {
             uid: self.uid.clone(),
             nick: self.nick.clone(),
@@ -230,7 +230,7 @@ impl PseudoclientState {
 
     /// Build the AWAY command for this pseudoclient's current presence.
     /// Returns `None` for Online (no away status).
-    pub fn away_command(&self) -> Option<S2SCommand> {
+    pub(crate) fn away_command(&self) -> Option<S2SCommand> {
         match self.presence {
             DiscordPresence::Idle => Some(S2SCommand::SetAway {
                 uid: self.uid.clone(),
@@ -250,7 +250,7 @@ impl PseudoclientState {
 }
 
 /// Manages all pseudoclients and their state.
-pub struct PseudoclientManager {
+pub(crate) struct PseudoclientManager {
     /// Ident for all pseudoclients (from config).
     ident: String,
     /// UID generator.
@@ -268,7 +268,7 @@ pub struct PseudoclientManager {
 impl PseudoclientManager {
     /// Create a new manager with the given config values.
     #[must_use]
-    pub fn new(sid: &str, ident: &str) -> Self {
+    pub(crate) fn new(sid: &str, ident: &str) -> Self {
         Self {
             ident: ident.to_string(),
             uid_generator: UidGenerator::new(sid),
@@ -280,12 +280,12 @@ impl PseudoclientManager {
     }
 
     /// Register an external IRC nick (from burst or network events).
-    pub fn register_external_nick(&mut self, nick: &str) {
+    pub(crate) fn register_external_nick(&mut self, nick: &str) {
         self.known_nicks.insert(nick);
     }
 
     /// Remove an external IRC nick (quit/nick change).
-    pub fn unregister_external_nick(&mut self, nick: &str) {
+    pub(crate) fn unregister_external_nick(&mut self, nick: &str) {
         self.known_nicks.remove(nick);
     }
 
@@ -293,7 +293,7 @@ impl PseudoclientManager {
     ///
     /// Returns the allocated state (uid, nick, channels), or `None` if the
     /// user already has a pseudoclient (use `ensure_in_channel` to add channels).
-    pub fn introduce(
+    pub(crate) fn introduce(
         &mut self,
         discord_user_id: u64,
         username: &str,
@@ -340,7 +340,11 @@ impl PseudoclientManager {
     ///
     /// Returns the removed state, or `None` if no pseudoclient exists for
     /// this Discord user.
-    pub fn quit(&mut self, discord_user_id: u64, _reason: &str) -> Option<PseudoclientState> {
+    pub(crate) fn quit(
+        &mut self,
+        discord_user_id: u64,
+        _reason: &str,
+    ) -> Option<PseudoclientState> {
         let state = self.by_discord_id.remove(&discord_user_id)?;
         self.known_nicks.remove(&state.nick);
         self.nick_to_discord
@@ -351,7 +355,7 @@ impl PseudoclientManager {
 
     /// Ensure a pseudoclient is in a channel.  Returns `JoinChannel` if
     /// they weren't already in it, `None` if they were (or don't exist).
-    pub fn ensure_in_channel(
+    pub(crate) fn ensure_in_channel(
         &mut self,
         discord_user_id: u64,
         channel: &str,
@@ -375,7 +379,7 @@ impl PseudoclientManager {
     /// Returns `PartResult::Part` with the PART line, `PartResult::Quit` if
     /// the pseudoclient has no remaining channels, or `PartResult::NotFound`
     /// if the pseudoclient doesn't exist or isn't in the channel.
-    pub fn part_channel(
+    pub(crate) fn part_channel(
         &mut self,
         discord_user_id: u64,
         channel: &str,
@@ -421,7 +425,7 @@ impl PseudoclientManager {
     /// Handle an SVSNICK: update the nick in all state maps.
     ///
     /// Returns `true` if the nick was updated, `false` if the UID is unknown.
-    pub fn apply_svsnick(&mut self, uid: &str, new_nick: &str) -> bool {
+    pub(crate) fn apply_svsnick(&mut self, uid: &str, new_nick: &str) -> bool {
         let Some(&discord_user_id) = self.uid_to_discord.get(uid) else {
             return false;
         };
@@ -444,12 +448,12 @@ impl PseudoclientManager {
 
     /// Look up a pseudoclient by Discord user ID.
     #[must_use]
-    pub fn get_by_discord_id(&self, discord_user_id: u64) -> Option<&PseudoclientState> {
+    pub(crate) fn get_by_discord_id(&self, discord_user_id: u64) -> Option<&PseudoclientState> {
         self.by_discord_id.get(&discord_user_id)
     }
 
     /// Mutable lookup by Discord user ID.
-    pub fn get_by_discord_id_mut(
+    pub(crate) fn get_by_discord_id_mut(
         &mut self,
         discord_user_id: u64,
     ) -> Option<&mut PseudoclientState> {
@@ -458,27 +462,27 @@ impl PseudoclientManager {
 
     /// Look up a pseudoclient by IRC nick (case-insensitive).
     #[must_use]
-    pub fn get_by_nick(&self, nick: &str) -> Option<&PseudoclientState> {
+    pub(crate) fn get_by_nick(&self, nick: &str) -> Option<&PseudoclientState> {
         let discord_id = self.nick_to_discord.get(&nick.to_ascii_lowercase())?;
         self.by_discord_id.get(discord_id)
     }
 
     /// Look up a pseudoclient by IRC UID.
     #[must_use]
-    pub fn get_by_uid(&self, uid: &str) -> Option<&PseudoclientState> {
+    pub(crate) fn get_by_uid(&self, uid: &str) -> Option<&PseudoclientState> {
         let discord_id = self.uid_to_discord.get(uid)?;
         self.by_discord_id.get(discord_id)
     }
 
     /// Check if a UID belongs to one of our pseudoclients.
     #[must_use]
-    pub fn is_our_uid(&self, uid: &str) -> bool {
+    pub(crate) fn is_our_uid(&self, uid: &str) -> bool {
         self.uid_to_discord.contains_key(uid)
     }
 
     /// Clear all registered external nicks. Called on link loss — the nicks
     /// will be re-registered from the burst on the next connection.
-    pub fn clear_external_nicks(&mut self) {
+    pub(crate) fn clear_external_nicks(&mut self) {
         self.known_nicks = NickSet::new();
         // Re-add our own pseudoclient nicks so they're still tracked.
         for state in self.by_discord_id.values() {
@@ -489,18 +493,18 @@ impl PseudoclientManager {
     /// Clear the cached UID assignment for a Discord user so the next
     /// introduction allocates a fresh UID.  Used after KILL to avoid
     /// UID collisions with the recently-killed UID.
-    pub fn forget_uid(&mut self, discord_user_id: u64) {
+    pub(crate) fn forget_uid(&mut self, discord_user_id: u64) {
         self.uid_generator.forget(discord_user_id);
     }
 
     /// Return the ident used for all pseudoclients.
     #[must_use]
-    pub fn ident(&self) -> &str {
+    pub(crate) fn ident(&self) -> &str {
         &self.ident
     }
 
     /// Iterate over all active pseudoclient states.
-    pub fn iter_states(&self) -> impl Iterator<Item = &PseudoclientState> {
+    pub(crate) fn iter_states(&self) -> impl Iterator<Item = &PseudoclientState> {
         self.by_discord_id.values()
     }
 
@@ -508,13 +512,13 @@ impl PseudoclientManager {
     /// `mark_needs_reintroduce`.  Unlike `quit`, this does NOT touch
     /// `known_nicks` — those were already cleaned up when the pseudoclient
     /// was marked.
-    pub fn remove_marked(&mut self, discord_user_id: u64) -> Option<PseudoclientState> {
+    pub(crate) fn remove_marked(&mut self, discord_user_id: u64) -> Option<PseudoclientState> {
         self.by_discord_id.remove(&discord_user_id)
     }
 
     /// Clear all `needs_reintroduce` flags (e.g. on `LinkDown`; a fresh
     /// connection starts clean; all pseudoclients will be burst normally).
-    pub fn clear_needs_reintroduce(&mut self) {
+    pub(crate) fn clear_needs_reintroduce(&mut self) {
         for state in self.by_discord_id.values_mut() {
             state.needs_reintroduce = false;
         }
@@ -525,7 +529,7 @@ impl PseudoclientManager {
     /// The entry stays in PM (the user is still desired) but the old UID
     /// is dead on the network.  `produce_burst_commands` will skip entries
     /// with this flag.  The orchestrator clears the flag after reintroduction.
-    pub fn mark_needs_reintroduce(&mut self, discord_user_id: u64) {
+    pub(crate) fn mark_needs_reintroduce(&mut self, discord_user_id: u64) {
         if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
             state.needs_reintroduce = true;
             // Remove from nick/uid maps since the identity is dead on IRC.
@@ -542,7 +546,11 @@ impl PseudoclientManager {
     /// and updates all internal maps.  Returns `Some((old_nick, new_nick))` if
     /// the nick actually changed, `None` if the user doesn't exist or the
     /// username/nick is unchanged.
-    pub fn rename(&mut self, discord_user_id: u64, new_username: &str) -> Option<(String, String)> {
+    pub(crate) fn rename(
+        &mut self,
+        discord_user_id: u64,
+        new_username: &str,
+    ) -> Option<(String, String)> {
         let state = self.by_discord_id.get(&discord_user_id)?;
         if state.username == new_username {
             return None;
@@ -586,7 +594,7 @@ impl PseudoclientManager {
     ///
     /// Returns `true` if the pseudoclient was found and updated, `false` if
     /// no pseudoclient exists for `discord_user_id`.
-    pub fn update_presence(
+    pub(crate) fn update_presence(
         &mut self,
         discord_user_id: u64,
         presence: DiscordPresence,
@@ -608,7 +616,7 @@ impl PseudoclientManager {
     }
 
     /// Record that a pseudoclient sent a message in a channel.
-    pub fn record_activity(&mut self, discord_user_id: u64, channel: &str, now_ts: u64) {
+    pub(crate) fn record_activity(&mut self, discord_user_id: u64, channel: &str, now_ts: u64) {
         if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
             state.last_active = now_ts;
             state
@@ -618,7 +626,7 @@ impl PseudoclientManager {
     }
 
     /// Record global activity without a channel (e.g. DMs).
-    pub fn record_global_activity(&mut self, discord_user_id: u64, now_ts: u64) {
+    pub(crate) fn record_global_activity(&mut self, discord_user_id: u64, now_ts: u64) {
         if let Some(state) = self.by_discord_id.get_mut(&discord_user_id) {
             state.last_active = now_ts;
         }
@@ -627,7 +635,7 @@ impl PseudoclientManager {
 
 /// Result of `part_channel`.
 #[derive(Debug, PartialEq)]
-pub enum PartResult {
+pub(crate) enum PartResult {
     /// Pseudoclient parted but remains in other channels.
     Part(IrcMessage),
     /// Pseudoclient had no remaining channels and was quit.

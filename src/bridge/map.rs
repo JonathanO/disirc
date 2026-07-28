@@ -6,13 +6,13 @@ use crate::config::BridgeEntry;
 
 /// Immutable snapshot of one bridge entry as seen by the routing layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BridgeInfo {
+pub(crate) struct BridgeInfo {
     /// Discord channel ID (numeric).
-    pub discord_channel_id: u64,
+    pub(crate) discord_channel_id: u64,
     /// IRC channel name (e.g. `#general`).
-    pub irc_channel: String,
+    pub(crate) irc_channel: String,
     /// Optional webhook URL for the preferred send path.
-    pub webhook_url: Option<String>,
+    pub(crate) webhook_url: Option<String>,
 }
 
 /// Bidirectional channel routing table.
@@ -21,7 +21,7 @@ pub struct BridgeInfo {
 /// directions.  Replaced atomically on config reload — the processing task
 /// swaps the whole map rather than mutating it in place.
 #[derive(Debug, Default, Clone)]
-pub struct BridgeMap {
+pub(crate) struct BridgeMap {
     /// Discord channel ID → bridge info.
     by_discord: std::collections::HashMap<u64, BridgeInfo>,
     /// IRC channel name (lowercased) → discord channel ID (for reverse lookup).
@@ -34,7 +34,7 @@ impl BridgeMap {
     /// Entries with an unparseable `discord_channel_id` are silently skipped
     /// (config validation should have already rejected them).
     #[must_use]
-    pub fn from_config(bridges: &[BridgeEntry]) -> Self {
+    pub(crate) fn from_config(bridges: &[BridgeEntry]) -> Self {
         let mut map = Self::default();
         for entry in bridges {
             let Ok(discord_id) = entry.discord_channel_id.parse::<u64>() else {
@@ -54,13 +54,13 @@ impl BridgeMap {
 
     /// Look up a bridge by Discord channel ID.
     #[must_use]
-    pub fn by_discord_id(&self, id: u64) -> Option<&BridgeInfo> {
+    pub(crate) fn by_discord_id(&self, id: u64) -> Option<&BridgeInfo> {
         self.by_discord.get(&id)
     }
 
     /// Look up a bridge by IRC channel name (case-insensitive).
     #[must_use]
-    pub fn by_irc_channel(&self, channel: &str) -> Option<&BridgeInfo> {
+    pub(crate) fn by_irc_channel(&self, channel: &str) -> Option<&BridgeInfo> {
         self.by_irc
             .get(&channel.to_lowercase())
             .and_then(|id| self.by_discord.get(id))

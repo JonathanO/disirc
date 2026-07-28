@@ -16,13 +16,13 @@ use thiserror::Error;
 /// A single IRC message with optional `IRCv3` tags, an optional source prefix,
 /// and a typed command.
 #[derive(Debug, Clone, PartialEq)]
-pub struct IrcMessage {
+pub(crate) struct IrcMessage {
     /// `IRCv3` message tags (key, optional value).  Order is preserved.
-    pub tags: Vec<(String, Option<String>)>,
+    pub(crate) tags: Vec<(String, Option<String>)>,
     /// Source prefix (server name or UID), without the leading `:`.
-    pub prefix: Option<String>,
+    pub(crate) prefix: Option<String>,
     /// The typed command and its parameters.
-    pub command: IrcCommand,
+    pub(crate) command: IrcCommand,
 }
 
 /// Parameters for the `UID` command (user introduction burst).
@@ -30,56 +30,56 @@ pub struct IrcMessage {
 /// Corresponds to the 12-field `UID` command in the `UnrealIRCd` S2S protocol.
 /// Field order matches the wire format exactly.
 #[derive(Debug, Clone, PartialEq)]
-pub struct UidParams {
+pub(crate) struct UidParams {
     /// IRC nickname.
-    pub nick: String,
+    pub(crate) nick: String,
     /// Hop count from the introducing server.  Always `1` for pseudoclients
     /// we introduce ourselves.
-    pub hop_count: u32,
+    pub(crate) hop_count: u32,
     /// UNIX timestamp at which the user was introduced (seconds).
-    pub timestamp: u64,
+    pub(crate) timestamp: u64,
     /// Ident / username (the `~user` part of a hostmask).
-    pub ident: String,
+    pub(crate) ident: String,
     /// Real hostname of the user.
-    pub host: String,
+    pub(crate) host: String,
     /// Globally unique user ID (SID prefix + 6 alphanumeric chars).
-    pub uid: String,
+    pub(crate) uid: String,
     /// Services account stamp.  `"0"` means the user is not logged in to
     /// any services account.
-    pub services_stamp: String,
+    pub(crate) services_stamp: String,
     /// User mode string (e.g. `"+i"`).
-    pub umodes: String,
+    pub(crate) umodes: String,
     /// Displayed virtual hostname.  `"*"` means no vhost is set and the
     /// real hostname is shown.
-    pub vhost: String,
+    pub(crate) vhost: String,
     /// Cloaked hostname used for host-hiding.  `"*"` if not set.
-    pub cloaked_host: String,
+    pub(crate) cloaked_host: String,
     /// Real IP address, or `"*"` if hidden / not applicable.
-    pub ip: String,
+    pub(crate) ip: String,
     /// GECOS / realname field (the trailing parameter on the wire).
-    pub realname: String,
+    pub(crate) realname: String,
 }
 
 /// Parameters for the `SJOIN` command (channel burst).
 #[derive(Debug, Clone, PartialEq)]
-pub struct SjoinParams {
+pub(crate) struct SjoinParams {
     /// Channel creation / burst timestamp (seconds).
-    pub timestamp: u64,
+    pub(crate) timestamp: u64,
     /// Channel name, including the `#` sigil.
-    pub channel: String,
+    pub(crate) channel: String,
     /// Channel mode string at burst time (e.g. `"+"` for no modes, `"+nt"`).
     /// Does not include mode parameters; those are not preserved by this type.
-    pub modes: String,
+    pub(crate) modes: String,
     /// UIDs of members being introduced into the channel.  Each entry may be
     /// prefixed with one or more status-mode characters (`@` for op, `+` for
     /// voice, etc.).  Empty string means the channel is being created with no
     /// initial members (mode-only SJOIN).
-    pub members: Vec<String>,
+    pub(crate) members: Vec<String>,
 }
 
 /// Typed IRC command variants used within `disirc`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum IrcCommand {
+pub(crate) enum IrcCommand {
     // ---- Authentication / handshake ----
     /// `PASS` — link password, sent before `SERVER`/`SID` during handshake.
     Pass {
@@ -220,7 +220,7 @@ pub enum IrcCommand {
 
 /// Error returned by [`IrcMessage::parse`].
 #[derive(Debug, Clone, PartialEq, Error)]
-pub enum ParseError {
+pub(crate) enum ParseError {
     /// Line is empty or contains only whitespace / CRLF.
     #[error("line is empty")]
     Empty,
@@ -235,7 +235,7 @@ pub enum ParseError {
 
 /// Error returned by [`IrcMessage::to_wire`].
 #[derive(Debug, Clone, PartialEq, Error)]
-pub enum SerializeError {
+pub(crate) enum SerializeError {
     /// A non-trailing parameter was empty or contained a space.
     #[error("non-trailing parameter {index} {value:?} is invalid (empty or contains space)")]
     InvalidParam { index: usize, value: String },
@@ -257,7 +257,7 @@ impl IrcMessage {
     ///
     /// - [`ParseError::Empty`] if the line is empty or whitespace-only.
     /// - [`ParseError::MissingParams`] if a known command has fewer parameters than required.
-    pub fn parse(line: &str) -> Result<Self, ParseError> {
+    pub(crate) fn parse(line: &str) -> Result<Self, ParseError> {
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
         if line.trim_start().is_empty() {
             return Err(ParseError::Empty);
@@ -310,7 +310,7 @@ impl IrcMessage {
     ///   contains a space.
     /// - [`SerializeError::LineTooLong`] if the line (excluding `\r\n`) exceeds
     ///   4096 bytes.
-    pub fn to_wire(&self) -> Result<String, SerializeError> {
+    pub(crate) fn to_wire(&self) -> Result<String, SerializeError> {
         let mut out = String::new();
 
         // Tags

@@ -23,7 +23,7 @@ struct IrcStyle {
 
 /// Parse IRC formatted text into styled spans, then emit Discord markdown.
 #[must_use]
-pub fn irc_to_discord_formatting(text: &str) -> String {
+pub(crate) fn irc_to_discord_formatting(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut style = IrcStyle::default();
     let mut current_text = String::new();
@@ -132,14 +132,14 @@ fn flush_span(result: &mut String, style: &IrcStyle, text: &str) {
 // ---------------------------------------------------------------------------
 
 /// Resolver trait for looking up IRC nicks → Discord user IDs.
-pub trait IrcMentionResolver {
+pub(crate) trait IrcMentionResolver {
     /// Look up a Discord user ID from an IRC nick (case-insensitive).
     fn resolve_nick(&self, nick: &str) -> Option<String>;
 }
 
 /// Convert `@nick` in IRC text to Discord `<@user_id>` mentions.
 #[must_use]
-pub fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> String {
+pub(crate) fn convert_irc_mentions(text: &str, resolver: &dyn IrcMentionResolver) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.char_indices().peekable();
     let mut prev_char: Option<char> = None;
@@ -201,7 +201,7 @@ fn is_mention_boundary(prev: Option<char>) -> bool {
 ///
 /// If no match is found, the text is returned unchanged.
 #[must_use]
-pub fn convert_nick_colon_mention(text: &str, resolver: &dyn IrcMentionResolver) -> String {
+pub(crate) fn convert_nick_colon_mention(text: &str, resolver: &dyn IrcMentionResolver) -> String {
     let Some(pos) = text.find(": ") else {
         return text.to_string();
     };
@@ -232,7 +232,7 @@ pub fn convert_nick_colon_mention(text: &str, resolver: &dyn IrcMentionResolver)
 /// This prevents Discord from pinging users whose display name matches.
 /// Applied only to the nick field (webhook username or `[nick]` prefix).
 #[must_use]
-pub fn ping_fix_nick(nick: &str) -> String {
+pub(crate) fn ping_fix_nick(nick: &str) -> String {
     let mut chars = nick.chars();
     match chars.next() {
         Some(first) => {
@@ -263,7 +263,7 @@ const TRUNCATION_SUFFIX: &str = "\u{2026} [truncated]";
 /// (7 codepoints, 1 grapheme) spends 7 of the budget — but our cut point
 /// must still land on a grapheme boundary to avoid rendering a half-emoji.
 #[must_use]
-pub fn truncate_for_discord(text: &str) -> Cow<'_, str> {
+pub(crate) fn truncate_for_discord(text: &str) -> Cow<'_, str> {
     use unicode_segmentation::UnicodeSegmentation;
 
     if text.chars().count() <= DISCORD_MAX_CHARS {

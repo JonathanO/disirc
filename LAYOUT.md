@@ -3,13 +3,23 @@
 This file describes every module in `src/` and what belongs in each one.
 Update it whenever a module is added, removed, or significantly refactored.
 
+**Visibility convention:** everything in the crate is `pub(crate)` except the
+handful of items `main.rs` and `tests/` actually consume — `config::*`,
+`bridge::run_bridge`, `discord::connection::run_discord`,
+`discord::{DiscordCommand, DiscordEvent, DiscordPresence, MemberInfo}`,
+`irc::unreal::run_connection`, `irc::{S2SCommand, S2SEvent}`, and
+`signal::{ControlEvent, spawn_signal_handler}`. This is load-bearing: `pub`
+items are exempt from rustc's `dead_code` analysis, so widening a visibility
+beyond what is needed silently switches off dead-code detection for that item.
+Keep new items `pub(crate)`.
+
 ---
 
 ## Top-level modules (`src/`)
 
 | File / dir | What it contains |
 |------------|-----------------|
-| `src/lib.rs` | Crate root — declares all public modules; `#![deny(unsafe_code)]`. |
+| `src/lib.rs` | Crate root — declares all modules; `#![deny(unsafe_code)]`. `formatting`, `persist`, and `pseudoclients` are crate-private. |
 | `src/main.rs` | Binary entry point — loads config, spawns the IRC connection task and Discord connection task via `tokio::spawn`, then runs the bridge loop on the main thread. The three components communicate via `tokio::sync::mpsc` channels. Uses `tracing-subscriber` with `RUST_LOG` env-filter. |
 | `src/config.rs` | Configuration file format (`Config`, `IrcConfig`, `BridgeEntry`, etc.) and validation. Read from `config.toml` at startup. Hot-reload support via `reload()` → `BridgeDiff`. |
 | `src/formatting/` | Bidirectional text transforms: Discord markdown ↔ IRC formatting codes, mention/emoji expansion, message splitting, truncation. No I/O. See below. |
@@ -30,7 +40,7 @@ in `mod.rs`.
 
 | File | What it contains |
 |------|-----------------|
-| `src/formatting/mod.rs` | Shared IRC control character constants (`BOLD`, `ITALIC`, etc.), public trait definitions (`DiscordResolver`, `IrcMentionResolver`), re-exports of both submodules' public API, and cross-direction roundtrip property tests. |
+| `src/formatting/mod.rs` | Shared IRC control character constants (`BOLD`, `ITALIC`, etc.), public trait definitions (`DiscordResolver`, `IrcMentionResolver`), re-exports of the crate-visible API of both submodules, and cross-direction roundtrip property tests. |
 | `src/formatting/discord_to_irc.rs` | Discord→IRC transforms: `discord_to_irc` (top-level entry point), `resolve_mentions`, `markdown_to_irc`, `split_for_irc`. Private helpers for escape sentinels, code span protection, word boundary underscores, and paired marker conversion. All Discord→IRC tests and property tests. |
 | `src/formatting/irc_to_discord.rs` | IRC→Discord transforms: `irc_to_discord_formatting`, `convert_irc_mentions`, `convert_nick_colon_mention`, `ping_fix_nick`, `truncate_for_discord`, and the `IrcMentionResolver` trait. All IRC→Discord tests and property tests. |
 
@@ -44,7 +54,7 @@ main event loop. No direct I/O; operates on protocol-agnostic types
 
 | File | What it contains |
 |------|-----------------|
-| `src/bridge/mod.rs` | Re-exports all public types and functions. Contains `unix_now` and the `run_bridge` async event loop — a thin dispatcher that receives events from IRC/Discord channels, delegates to `BridgeState`, forwards the resulting commands, runs the once-a-minute idle-timeout tick, and loads/saves persisted pseudoclient state. |
+| `src/bridge/mod.rs` | Re-exports `BridgeState`. Contains `unix_now` and the `run_bridge` async event loop — a thin dispatcher that receives events from IRC/Discord channels, delegates to `BridgeState`, forwards the resulting commands, runs the once-a-minute idle-timeout tick, and loads/saves persisted pseudoclient state. |
 | `src/bridge/orchestrator.rs` | `BridgeState` — all mutable bridge state with synchronous handler methods (`handle_irc_event`, `handle_discord_event`, `check_idle_timeouts`). Owns `PseudoclientManager`, `IrcState`, `DiscordState`, and `LinkPhase`. Manages pseudoclient burst/reburst, KILL reintroduction with cooldown, idle-timeout PART/QUIT, persisted-state seeding, and config reload. Contains `BridgeIrcResolver` / `BridgeDiscordResolver` for mention resolution. |
 | `src/bridge/map.rs` | `BridgeInfo` (immutable snapshot of one bridge entry) and `BridgeMap` (bidirectional O(1) channel routing table built from config). |
 | `src/bridge/relay.rs` | Message format conversion: `discord_to_irc_commands` (Discord message → Vec of `S2SCommand::SendMessage`), `irc_to_discord_command` (IRC PRIVMSG/NOTICE/ACTION → `DiscordCommand::SendMessage`). Private `extract_action` helper for CTCP ACTION parsing. |
@@ -73,7 +83,7 @@ protocol. The rest of the application communicates with it only through the
 
 | File | What it contains |
 |------|-----------------|
-| `src/irc/unreal/mod.rs` | Re-exports `run_connection` (the public entry point) and the four public wire types (`IrcMessage`, `IrcCommand`, `UidParams`, `SjoinParams`) for use by `pseudoclients.rs`. Declares all private submodules. |
+| `src/irc/unreal/mod.rs` | Re-exports `run_connection` (the public entry point) and the wire types `IrcMessage` / `IrcCommand` for use by `pseudoclients.rs`. Declares all private submodules. |
 | `src/irc/unreal/irc_message.rs` | **Wire type definitions.** `IrcMessage` (tags + prefix + command), `IrcCommand` enum covering all commands used in the handshake and session (PASS, SERVER, SID, UID, SJOIN, PRIVMSG, PING, PONG, …), `UidParams`, `SjoinParams`. Parsing (`IrcMessage::parse`) and serialisation (`IrcMessage::to_wire`). |
 | `src/irc/unreal/framing.rs` | `LineReader<R>` / `LineWriter<W>` — generic async line framing over any `AsyncRead`/`AsyncWrite`. Strips `\r\n`, enforces the 4096-byte line limit, replaces invalid UTF-8. Used by the connection layer to turn a raw byte stream into `IrcMessage` values. |
 | `src/irc/unreal/connect.rs` | TCP/TLS connection factory: `connect(host, port, tls)` returns a `(IrcReader, IrcWriter)` pair. Uses `tokio-rustls` with a permissive `ServerCertVerifier` (`AcceptAnyCert`) because IRC uplinks commonly use self-signed certificates; the link password is the actual authentication mechanism. |
@@ -163,7 +173,7 @@ The architecture is designed for testability without a live Discord connection:
 
 | File | What it contains |
 |------|-----------------|
-| `src/discord/mod.rs` | Re-exports `DiscordCommand`, `DiscordEvent`, `DiscordPresence`, `MemberInfo`, `webhook_id_from_url`. Declares `connection`, `handler`, `send`, and `types` submodules. |
+| `src/discord/mod.rs` | Re-exports `DiscordCommand`, `DiscordEvent`, `DiscordPresence`, `MemberInfo` (public) and `webhook_id_from_url` (crate-internal). Declares `connection`, `handler`, `send`, and `types` submodules. |
 | `src/discord/types.rs` | **Boundary types.** `DiscordEvent` — events emitted from the Discord handler to the bridge loop (messages, member snapshots, presence updates, member add/remove). `DiscordCommand` — commands sent from the bridge loop to the Discord send task (send message, reload bridges). `DiscordPresence` — online/idle/dnd/offline enum. `MemberInfo` — per-member snapshot data. `webhook_id_from_url` — extracts the webhook ID from a Discord webhook URL. |
 | `src/discord/connection.rs` | `run_discord` — the public entry point. Creates the serenity `Client` with the gateway handler, spawns the webhook send task, and runs the gateway event loop. Never returns. Manages `self_filter` (webhook ID set for loop prevention) and `channel_ids` (bridged channel set). |
 | `src/discord/handler.rs` | `DiscordHandler` — implements serenity's `EventHandler` trait. Converts gateway events (`message`, `guild_create`, `guild_member_addition`, `guild_member_removal`, `presence_update`) into `DiscordEvent` values sent to the bridge loop via `mpsc`. Builds `MemberSnapshot` events from guild data. Pure helper functions are extracted and unit tested separately. |

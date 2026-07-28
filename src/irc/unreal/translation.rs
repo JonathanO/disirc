@@ -24,7 +24,7 @@ fn parse_time_tag(tags: &[(String, Option<String>)]) -> Option<DateTime<Utc>> {
 ///
 /// `ERROR` messages must be handled specially by the caller (they trigger a
 /// link-down transition); this function returns `None` for them.
-pub fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
+pub(crate) fn translate_inbound(msg: &IrcMessage) -> Option<S2SEvent> {
     let prefix = msg.prefix.as_deref().unwrap_or("");
 
     match &msg.command {
@@ -156,7 +156,7 @@ const IP: &str = "*";
 /// - `our_sid`: the SID configured for this bridge server.
 /// - `mtags_active`: whether `@time=` tags should be emitted on `SendMessage`.
 /// - `now_ts`: the current Unix timestamp (seconds), used for user introductions.
-pub fn translate_outbound(
+pub(crate) fn translate_outbound(
     cmd: &S2SCommand,
     our_sid: &str,
     mtags_active: bool,

@@ -17,7 +17,7 @@ impl DiscordPresence {
     /// which is used to exclude members from the initial burst and from cache
     /// snapshots on config reload.
     #[must_use]
-    pub fn is_non_offline(self) -> bool {
+    pub(crate) fn is_non_offline(self) -> bool {
         self != Self::Offline
     }
 }
@@ -163,7 +163,7 @@ pub enum DiscordCommand {
 /// events originating from that webhook, making it safe to store in the
 /// self-message filter set.
 #[must_use]
-pub fn webhook_id_from_url(url: &str) -> Option<u64> {
+pub(crate) fn webhook_id_from_url(url: &str) -> Option<u64> {
     let path = url
         .strip_prefix("https://discord.com/api/webhooks/")
         .or_else(|| url.strip_prefix("https://canary.discord.com/api/webhooks/"))

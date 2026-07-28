@@ -40,7 +40,7 @@ in `mod.rs`.
 
 | File | What it contains |
 |------|-----------------|
-| `src/formatting/mod.rs` | Shared IRC control character constants (`BOLD`, `ITALIC`, etc.), public trait definitions (`DiscordResolver`, `IrcMentionResolver`), re-exports of the crate-visible API of both submodules, and cross-direction roundtrip property tests. |
+| `src/formatting/mod.rs` | Shared IRC control character constants (`BOLD`, `ITALIC`, etc.), re-exports of the crate-visible API of both submodules (including the `DiscordResolver` / `IrcMentionResolver` traits, which are defined in the submodules), and cross-direction roundtrip property tests. |
 | `src/formatting/discord_to_irc.rs` | Discord→IRC transforms: `discord_to_irc` (top-level entry point), `resolve_mentions`, `markdown_to_irc`, `split_for_irc`. Private helpers for escape sentinels, code span protection, word boundary underscores, and paired marker conversion. All Discord→IRC tests and property tests. |
 | `src/formatting/irc_to_discord.rs` | IRC→Discord transforms: `irc_to_discord_formatting`, `convert_irc_mentions`, `convert_nick_colon_mention`, `ping_fix_nick`, `truncate_for_discord`, and the `IrcMentionResolver` trait. All IRC→Discord tests and property tests. |
 

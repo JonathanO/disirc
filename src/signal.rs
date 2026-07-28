@@ -20,22 +20,14 @@ pub enum ControlEvent {
 /// Spawn a background task that listens for OS signals and forwards them as
 /// [`ControlEvent`]s. Returns the receiving end of the channel.
 ///
-/// On Unix, `SIGHUP` sends [`ControlEvent::Reload`].
-/// On non-Unix platforms, `SIGHUP` is not available; the returned receiver
-/// will never yield an event (reload is not supported on those platforms in v1).
+/// `SIGHUP` sends [`ControlEvent::Reload`]; `SIGTERM` / `SIGINT` send
+/// [`ControlEvent::Shutdown`].
 pub fn spawn_signal_handler() -> mpsc::Receiver<ControlEvent> {
     let (tx, rx) = mpsc::channel(1);
-
-    #[cfg(unix)]
     tokio::spawn(unix_signal_loop(tx));
-
-    #[cfg(not(unix))]
-    tokio::spawn(non_unix_signal_loop(tx));
-
     rx
 }
 
-#[cfg(unix)]
 async fn unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
     use tokio::signal::unix::{SignalKind, signal};
 
@@ -86,17 +78,6 @@ async fn unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
     }
 }
 
-/// Non-Unix: only Ctrl-C (SIGINT equivalent) is available.
-#[cfg(not(unix))]
-// mutants::skip — platform-specific signal handling
-#[mutants::skip]
-async fn non_unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
-    if tokio::signal::ctrl_c().await.is_ok() {
-        tracing::info!("Ctrl-C received — initiating graceful shutdown");
-        let _ = tx.send(ControlEvent::Shutdown).await;
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -105,24 +86,9 @@ async fn non_unix_signal_loop(tx: mpsc::Sender<ControlEvent>) {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     use std::time::Duration;
 
-    /// On non-Unix platforms, the signal handler waits for Ctrl-C.
-    /// Verify the channel stays open (handler is running, not dropped).
-    #[cfg(not(unix))]
-    #[tokio::test]
-    async fn non_unix_handler_keeps_channel_open() {
-        let mut rx = spawn_signal_handler();
-        let result = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
-        assert!(
-            result.is_err(),
-            "channel should stay open (handler waiting for Ctrl-C)"
-        );
-    }
-
     /// Send a signal to ourselves and wait up to 1s for the next event.
-    #[cfg(unix)]
     async fn send_signal_and_recv(
         rx: &mut mpsc::Receiver<ControlEvent>,
         signal_name: &'static str,
@@ -151,7 +117,6 @@ mod tests {
     ///
     /// Order matters: SIGHUP (Reload) must come before SIGTERM/SIGINT,
     /// because Shutdown breaks the signal loop and closes the channel.
-    #[cfg(unix)]
     #[tokio::test]
     async fn unix_signals_map_to_control_events() {
         // SIGHUP → Reload; loop keeps running.

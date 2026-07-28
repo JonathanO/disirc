@@ -33,4 +33,17 @@ exclude_re = [
     # now-empty buffer and panicked on the underflow.  `slice::strip_suffix`
     # has no underflow to panic on, which is the point of using it.
     "replace == with != in LineReader<R>::next_line",
+
+    # next_line: replacing the whole body with a constant `Ok(Some(...))`.
+    # These two differ from the entries above — framing.rs *does* have tests that
+    # fail on them instantly (`reads_crlf_line` asserts the decoded line, and
+    # `eof_at_start_returns_none` asserts `is_none()`).  The kill is still
+    # reported as TIMEOUT because a mutated `next_line` that never yields `None`
+    # makes the connection-loop tests in connection.rs spin forever, so the test
+    # *process* never exits to report the failure the framing tests already
+    # produced.  Nothing about next_line itself can fix that; the read loops are
+    # correct to run until EOF.  Pre-dates the strip_suffix change (verified by
+    # running `cargo mutants --file src/irc/unreal/framing.rs` on both sides) —
+    # they only surface in CI now because the file appears in the PR diff.
+    'replace LineReader<R>::next_line -> io::Result<Option<String>> with Ok\(Some',
 ]

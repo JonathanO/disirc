@@ -13,12 +13,12 @@ use super::irc_message::IrcMessage;
 const MAX_LINE_BYTES: usize = 4096;
 
 /// Wraps an `AsyncRead` and yields one decoded IRC line per call.
-pub struct LineReader<R> {
+pub(crate) struct LineReader<R> {
     inner: BufReader<R>,
 }
 
 impl<R: tokio::io::AsyncRead + Unpin> LineReader<R> {
-    pub fn new(reader: R) -> Self {
+    pub(crate) fn new(reader: R) -> Self {
         Self {
             inner: BufReader::new(reader),
         }
@@ -35,7 +35,7 @@ impl<R: tokio::io::AsyncRead + Unpin> LineReader<R> {
     /// and the method loops to return the next valid line.
     ///
     /// Invalid UTF-8 bytes are replaced with U+FFFD.
-    pub async fn next_line(&mut self) -> io::Result<Option<String>> {
+    pub(crate) async fn next_line(&mut self) -> io::Result<Option<String>> {
         loop {
             let mut raw: Vec<u8> = Vec::with_capacity(512);
             let n = self.inner.read_until(b'\n', &mut raw).await?;
@@ -44,20 +44,8 @@ impl<R: tokio::io::AsyncRead + Unpin> LineReader<R> {
             }
 
             // Strip trailing \r\n or bare \n.
-            // `raw.len() >= 1` is guaranteed here because `read_until` returned
-            // `n > 0` bytes, so the first indexing is safe without a length check.
-            //
-            // The `end > 0` guard on the *second* strip IS required: a bare `\n`
-            // input leaves `end = 0` after stripping the newline, and the guard
-            // prevents a usize underflow/panic when checking `raw[end - 1]`.
-            let end = raw.len();
-            let end = if raw[end - 1] == b'\n' { end - 1 } else { end };
-            let end = if end > 0 && raw[end - 1] == b'\r' {
-                end - 1
-            } else {
-                end
-            };
-            let payload = &raw[..end];
+            let payload = raw.strip_suffix(b"\n").unwrap_or(&raw);
+            let payload = payload.strip_suffix(b"\r").unwrap_or(payload);
 
             if payload.len() > MAX_LINE_BYTES {
                 tracing::warn!(
@@ -74,12 +62,12 @@ impl<R: tokio::io::AsyncRead + Unpin> LineReader<R> {
 }
 
 /// Wraps an `AsyncWrite` and serialises `IrcMessage` values as wire lines.
-pub struct LineWriter<W> {
+pub(crate) struct LineWriter<W> {
     inner: W,
 }
 
 impl<W: tokio::io::AsyncWrite + Unpin> LineWriter<W> {
-    pub fn new(writer: W) -> Self {
+    pub(crate) fn new(writer: W) -> Self {
         Self { inner: writer }
     }
 
@@ -87,7 +75,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> LineWriter<W> {
     ///
     /// Returns `Err` if the message cannot be serialised (e.g. too long) or if
     /// the underlying write fails.
-    pub async fn write_message(&mut self, msg: &IrcMessage) -> io::Result<()> {
+    pub(crate) async fn write_message(&mut self, msg: &IrcMessage) -> io::Result<()> {
         let wire = msg
             .to_wire()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
@@ -98,7 +86,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> LineWriter<W> {
     /// Write a raw pre-formatted line (must already include `\r\n`).
     ///
     /// Used for PING/PONG bypassing the rate limiter.
-    pub async fn write_raw(&mut self, line: &str) -> io::Result<()> {
+    pub(crate) async fn write_raw(&mut self, line: &str) -> io::Result<()> {
         self.inner.write_all(line.as_bytes()).await?;
         self.inner.flush().await
     }

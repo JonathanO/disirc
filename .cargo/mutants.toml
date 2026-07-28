@@ -21,4 +21,16 @@ exclude_re = [
     # mutated function never returns.  Restructuring the loop moves the
     # mutation target but doesn't eliminate it.  See mutants.rs exit codes.
     "replace > with < in split_long_line",
+
+    # next_line: the `n == 0` EOF check.  Replacing `==` with `!=` means EOF is
+    # never detected, so the `loop` re-reads a zero-byte result forever and the
+    # function never returns.  Same kill-but-classified-as-TIMEOUT situation as
+    # `split_long_line` above, and for the same reason: no assertion-based test
+    # can catch it, because any test that calls `next_line` hangs with it.
+    #
+    # Note this mutant was previously CAUGHT rather than TIMEOUT, but only by
+    # accident: the old hand-rolled `\r\n` strip did `raw[raw.len() - 1]` on the
+    # now-empty buffer and panicked on the underflow.  `slice::strip_suffix`
+    # has no underflow to panic on, which is the point of using it.
+    "replace == with != in LineReader<R>::next_line",
 ]

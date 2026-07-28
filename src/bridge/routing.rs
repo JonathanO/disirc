@@ -16,7 +16,7 @@ use super::state::{DiscordState, IrcState};
 /// Each pseudoclient gets an `IntroduceUser` followed by one `JoinChannel`
 /// per mapped IRC channel.  The sequence ends with `BurstComplete`.
 /// Called on every `LinkUp` event.
-pub fn produce_burst_commands(
+pub(crate) fn produce_burst_commands(
     pm: &PseudoclientManager,
     irc_state: &IrcState,
     now_ts: u64,
@@ -51,7 +51,7 @@ pub fn produce_burst_commands(
 /// - `from_uid` is one of our own pseudoclients (loop prevention), or
 /// - `target` is not a mapped IRC channel.
 #[allow(clippy::too_many_arguments)]
-pub fn route_irc_to_discord(
+pub(crate) fn route_irc_to_discord(
     pm: &PseudoclientManager,
     bridge_map: &BridgeMap,
     irc_state: &IrcState,
@@ -83,7 +83,7 @@ pub fn route_irc_to_discord(
 /// Returns `Some(SendDm)` if the target is one of our pseudoclients, `None`
 /// otherwise (not a pseudoclient UID — could be a channel or external user).
 #[allow(clippy::too_many_arguments)]
-pub fn route_irc_to_dm(
+pub(crate) fn route_irc_to_dm(
     pm: &PseudoclientManager,
     irc_state: &IrcState,
     from_uid: &str,
@@ -123,7 +123,7 @@ pub fn route_irc_to_dm(
 /// Returns `Some(nick)` if the message starts with `**[` and contains `]**`,
 /// `None` otherwise.
 #[must_use]
-pub fn extract_nick_from_prefix(text: &str) -> Option<&str> {
+pub(crate) fn extract_nick_from_prefix(text: &str) -> Option<&str> {
     let rest = text.strip_prefix("**[")?;
     let end = rest.find("]**")?;
     let nick = &rest[..end];
@@ -139,7 +139,7 @@ pub fn extract_nick_from_prefix(text: &str) -> Option<&str> {
 /// addressing.  Returns [`DmRouteResult::Relay`] when a target is found,
 /// or [`DmRouteResult::Error`] with a help/error message to send back to
 /// the Discord user as a bot DM.
-pub fn route_dm_to_irc(
+pub(crate) fn route_dm_to_irc(
     pm: &PseudoclientManager,
     irc_state: &IrcState,
     author_id: u64,
@@ -198,7 +198,7 @@ pub fn route_dm_to_irc(
 
 /// Result of routing a Discord DM to IRC.
 #[derive(Debug)]
-pub enum DmRouteResult {
+pub(crate) enum DmRouteResult {
     /// Relay as an IRC PRIVMSG.
     Relay {
         from_uid: String,
@@ -240,7 +240,7 @@ fn format_dm_to_irc(content: &str, resolver: &dyn DiscordResolver) -> String {
 /// (to the single mapped channel) if it is not yet known to `pm`.
 /// Returns an empty vec when `channel_id` is not mapped.
 #[allow(clippy::too_many_arguments)]
-pub fn route_discord_to_irc(
+pub(crate) fn route_discord_to_irc(
     pm: &mut PseudoclientManager,
     bridge_map: &BridgeMap,
     irc_state: &IrcState,
@@ -314,7 +314,7 @@ pub fn route_discord_to_irc(
 ///
 /// Called in the bridge loop before `apply_discord_event` so that
 /// `apply_discord_event` can use the (now-current) guild→irc-channel map.
-pub fn update_guild_irc_channels(
+pub(crate) fn update_guild_irc_channels(
     discord_state: &mut DiscordState,
     bridge_map: &BridgeMap,
     guild_id: u64,

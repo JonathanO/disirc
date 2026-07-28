@@ -164,10 +164,10 @@ pub(crate) fn apply_reload(
 /// Raw member fields extracted from serenity `Member` values, in a shape
 /// that isolates the pure filtering/mapping logic from serenity types.
 pub(crate) struct RawMember {
-    pub user_id: u64,
-    pub username: String,
-    pub nick: Option<String>,
-    pub global_name: Option<String>,
+    pub(crate) user_id: u64,
+    pub(crate) username: String,
+    pub(crate) nick: Option<String>,
+    pub(crate) global_name: Option<String>,
 }
 
 /// Build the non-offline `Vec<MemberInfo>` from raw member data and a

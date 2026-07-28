@@ -21,9 +21,9 @@ use tokio_rustls::rustls::{
 use super::framing::{LineReader, LineWriter};
 
 /// Erased read half: works for both plain TCP and TLS.
-pub type IrcReader = LineReader<Box<dyn tokio::io::AsyncRead + Unpin + Send>>;
+pub(crate) type IrcReader = LineReader<Box<dyn tokio::io::AsyncRead + Unpin + Send>>;
 /// Erased write half: works for both plain TCP and TLS.
-pub type IrcWriter = LineWriter<Box<dyn tokio::io::AsyncWrite + Unpin + Send>>;
+pub(crate) type IrcWriter = LineWriter<Box<dyn tokio::io::AsyncWrite + Unpin + Send>>;
 
 /// Open a TCP (or TLS) connection to an IRC server and return framed halves.
 ///
@@ -33,7 +33,7 @@ pub type IrcWriter = LineWriter<Box<dyn tokio::io::AsyncWrite + Unpin + Send>>;
 ///
 /// Returns `Err` if the TCP connection is refused or if the TLS handshake
 /// fails.
-pub async fn connect(
+pub(crate) async fn connect(
     host: &str,
     port: u16,
     tls: bool,

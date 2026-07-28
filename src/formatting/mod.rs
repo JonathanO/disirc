@@ -26,14 +26,8 @@ pub(crate) const IRC_REVERSE: char = '\x16';
 pub(crate) const IRC_COLOR: char = '\x03';
 pub(crate) const IRC_RESET: char = '\x0f';
 
-// ---------------------------------------------------------------------------
-// Re-exports — preserve the public API of `crate::formatting::*`
-// ---------------------------------------------------------------------------
-
-pub use discord_to_irc::{
-    DiscordResolver, discord_to_irc, markdown_to_irc, resolve_mentions, split_for_irc,
-};
-pub use irc_to_discord::{
+pub(crate) use discord_to_irc::{DiscordResolver, discord_to_irc};
+pub(crate) use irc_to_discord::{
     IrcMentionResolver, convert_irc_mentions, convert_nick_colon_mention,
     irc_to_discord_formatting, ping_fix_nick, truncate_for_discord,
 };
@@ -44,6 +38,7 @@ pub use irc_to_discord::{
 
 #[cfg(test)]
 mod tests {
+    use super::discord_to_irc::markdown_to_irc;
     use super::*;
 
     use proptest::prelude::*;

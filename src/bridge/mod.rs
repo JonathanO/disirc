@@ -8,7 +8,7 @@
 //! - [`orchestrator`] — Stateful event handler (`BridgeState`).
 
 mod map;
-pub mod orchestrator;
+pub(crate) mod orchestrator;
 mod relay;
 mod routing;
 mod state;
@@ -22,18 +22,7 @@ use crate::discord::{DiscordCommand, DiscordEvent};
 use crate::irc::{S2SCommand, S2SEvent};
 use crate::signal::ControlEvent;
 
-// ---------------------------------------------------------------------------
-// Re-exports — preserve the public API of `crate::bridge::*`
-// ---------------------------------------------------------------------------
-
-pub use map::{BridgeInfo, BridgeMap};
-pub use orchestrator::BridgeState;
-pub use relay::{discord_to_irc_commands, irc_to_discord_command};
-pub use routing::{
-    produce_burst_commands, route_discord_to_irc, route_dm_to_irc, route_irc_to_discord,
-    route_irc_to_dm, update_guild_irc_channels,
-};
-pub use state::{DiscordState, IrcState, apply_discord_event, apply_irc_event};
+pub(crate) use orchestrator::BridgeState;
 
 // ---------------------------------------------------------------------------
 // Bridge loop

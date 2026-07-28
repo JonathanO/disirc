@@ -116,10 +116,10 @@ pub(crate) fn member_removal_event(user_id: u64, guild_id: u64) -> DiscordEvent 
 /// Intermediate representation of a guild member used by
 /// [`build_member_snapshot_event`] so it can be tested without serenity types.
 pub(crate) struct RawMemberData<'a> {
-    pub user_id: u64,
-    pub nick: Option<&'a str>,
-    pub global_name: Option<&'a str>,
-    pub username: &'a str,
+    pub(crate) user_id: u64,
+    pub(crate) nick: Option<&'a str>,
+    pub(crate) global_name: Option<&'a str>,
+    pub(crate) username: &'a str,
 }
 
 /// Build a [`DiscordEvent::MemberSnapshot`] from raw member data.

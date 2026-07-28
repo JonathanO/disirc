@@ -87,9 +87,9 @@ impl DiscordResolver for BridgeDiscordResolver<'_> {
 
 /// Commands produced by a handler invocation.
 #[derive(Debug, Default)]
-pub struct HandlerOutput {
-    pub irc_commands: Vec<S2SCommand>,
-    pub discord_commands: Vec<DiscordCommand>,
+pub(crate) struct HandlerOutput {
+    pub(crate) irc_commands: Vec<S2SCommand>,
+    pub(crate) discord_commands: Vec<DiscordCommand>,
 }
 
 // HandlerOutput uses derive(Default) — call HandlerOutput::default() directly.
@@ -99,7 +99,7 @@ pub struct HandlerOutput {
 // ---------------------------------------------------------------------------
 
 /// All mutable bridge state, with synchronous handler methods.
-pub struct BridgeState {
+pub(crate) struct BridgeState {
     pub(crate) config: Config,
     pub(crate) bridge_map: BridgeMap,
     pub(crate) pm: PseudoclientManager,
@@ -125,7 +125,7 @@ pub struct BridgeState {
 impl BridgeState {
     /// Create a new bridge state from config, optionally with persisted
     /// pseudoclient state to restore on first `MemberSnapshot`.
-    pub fn new(
+    pub(crate) fn new(
         config: &Config,
         seed_state: HashMap<u64, crate::persist::PersistedPseudoclient>,
     ) -> Self {
@@ -145,7 +145,7 @@ impl BridgeState {
     }
 
     /// Handle an IRC event.  Returns commands to send to IRC and Discord.
-    pub fn handle_irc_event(&mut self, event: &S2SEvent, now_ts: u64) -> HandlerOutput {
+    pub(crate) fn handle_irc_event(&mut self, event: &S2SEvent, now_ts: u64) -> HandlerOutput {
         let mut output = HandlerOutput::default();
 
         match event {
@@ -350,7 +350,11 @@ impl BridgeState {
     /// State is always updated immediately (so pseudoclients are tracked even
     /// while the IRC link is down).  IRC commands are only emitted when the
     /// link phase is `Ready`.
-    pub fn handle_discord_event(&mut self, event: &DiscordEvent, now_ts: u64) -> HandlerOutput {
+    pub(crate) fn handle_discord_event(
+        &mut self,
+        event: &DiscordEvent,
+        now_ts: u64,
+    ) -> HandlerOutput {
         self.process_discord_event(event, now_ts)
     }
 
@@ -504,7 +508,7 @@ impl BridgeState {
     /// seeds would still have to fall back to wall time after a restart.
     /// The extra complexity isn't justified for a bridge whose timeouts
     /// are days / weeks.
-    pub fn check_idle_timeouts(&mut self, now_ts: u64) -> HandlerOutput {
+    pub(crate) fn check_idle_timeouts(&mut self, now_ts: u64) -> HandlerOutput {
         let offline_timeout = self.config.pseudoclients.offline_timeout_secs;
 
         // Opportunistic GC: stale kill cooldowns are only pruned when a new
@@ -688,7 +692,7 @@ impl BridgeState {
     }
 
     /// Update config and return a `ReloadBridges` command if bridges changed.
-    pub fn reload_config(&mut self, new_config: Config) -> Option<DiscordCommand> {
+    pub(crate) fn reload_config(&mut self, new_config: Config) -> Option<DiscordCommand> {
         let diff = crate::config::diff_bridges(&self.config.bridges, &new_config.bridges);
         let cmd = if diff.is_empty() {
             None

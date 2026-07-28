@@ -56,6 +56,27 @@ lines shifts all later line numbers and makes a raw diff useless):
       `connect(&url).await` — a live WebSocket.
 - [x] `non_unix_signal_loop`, `main`, `config_path_from_args` — justified, unchanged.
 
+Dead-code sweep (2026-07-28) — every item in the crate was `pub`, and rustc exempts
+`pub` items from `dead_code` analysis, so the lint was effectively off crate-wide.
+Narrowing to `pub(crate)` (see the visibility convention in LAYOUT.md) turned it back
+on; these were removed as a result. Net -541 lines, 704 tests green:
+
+- [x] `MemberPrefix` enum + `parse_sjoin_member` prefix parsing + `ChannelBurst.members`
+      — parsed, carried through the event, then destructured away by every consumer
+- [x] `S2SCommand::SendNotice` — serialised but never constructed
+- [x] `IrcState.link_up` + `is_link_up()` — write-only; `LinkPhase` is the real tracker
+- [x] `non_reloadable_changes` — 37-line field differ `reload_config` never called
+- [x] `irc_to_discord_webhook` / `irc_to_discord_plain` — superseded by `relay.rs`;
+      `format_server_time` — duplicate of `translate_outbound`'s inline `@time=` format
+- [x] `PseudoclientManager::{join_channel, reset, count, is_empty}` + `.sid`,
+      `UidGenerator::{lookup, reset}` — `ensure_in_channel` superseded `join_channel`
+- [x] `#[cfg(not(unix))]` signal path + its `#[mutants::skip]` — never built or run.
+      **This drops Windows support**; revert that commit alone to restore it.
+
+Separately, `LineReader`'s hand-rolled `\r\n` strip became `slice::strip_suffix`,
+cutting framing.rs from 23 mutation targets to 8 and eliminating the two `> vs >=`
+mutants spec 02 had documented as equivalent.
+
 ## Spec status
 
 | Spec | Status | Detail |

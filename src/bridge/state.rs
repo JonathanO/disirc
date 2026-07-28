@@ -12,7 +12,7 @@ use crate::pseudoclients::{PseudoclientManager, PseudoclientState};
 /// timestamp of every channel we have seen in a `ChannelBurst`.  Both tables
 /// are cleared on `LinkDown` / `PseudoclientManager::reset`.
 #[derive(Debug, Default)]
-pub struct IrcState {
+pub(crate) struct IrcState {
     /// uid → current nick for every non-pseudoclient IRC user.
     nicks: std::collections::HashMap<String, String>,
     /// channel name (lowercased) → creation timestamp.
@@ -22,13 +22,13 @@ pub struct IrcState {
 impl IrcState {
     /// Look up the current nick for a UID.
     #[must_use]
-    pub fn nick_of(&self, uid: &str) -> Option<&str> {
+    pub(crate) fn nick_of(&self, uid: &str) -> Option<&str> {
         self.nicks.get(uid).map(String::as_str)
     }
 
     /// Look up the UID for a nick (case-insensitive).
     #[must_use]
-    pub fn uid_of_nick(&self, nick: &str) -> Option<&str> {
+    pub(crate) fn uid_of_nick(&self, nick: &str) -> Option<&str> {
         let lower = nick.to_ascii_lowercase();
         self.nicks
             .iter()
@@ -38,12 +38,12 @@ impl IrcState {
 
     /// Look up the stored creation timestamp for a channel.
     #[must_use]
-    pub fn ts_for_channel(&self, channel: &str) -> Option<u64> {
+    pub(crate) fn ts_for_channel(&self, channel: &str) -> Option<u64> {
         self.channel_ts.get(&channel.to_lowercase()).copied()
     }
 
     /// Reset all tracked state (call on link loss).
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.nicks.clear();
         self.channel_ts.clear();
     }
@@ -55,7 +55,11 @@ impl IrcState {
 /// meaningful state update (e.g. `BurstComplete`, message events)
 /// are accepted and silently ignored so the caller can forward every event
 /// here without filtering.
-pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event: &S2SEvent) {
+pub(crate) fn apply_irc_event(
+    state: &mut IrcState,
+    pm: &mut PseudoclientManager,
+    event: &S2SEvent,
+) {
     match event {
         S2SEvent::LinkDown { .. } => {
             // Reset IRC-side state: external nick map and channel timestamps are
@@ -176,15 +180,15 @@ pub fn apply_irc_event(state: &mut IrcState, pm: &mut PseudoclientManager, event
 ///   the Discord module's guild↔channel associations.  Maps a Discord guild ID
 ///   to the IRC channel names the bridge serves for that guild.
 #[derive(Debug, Default)]
-pub struct DiscordState {
+pub(crate) struct DiscordState {
     /// Discord user ID → current display name.
-    pub display_names: std::collections::HashMap<u64, String>,
+    pub(crate) display_names: std::collections::HashMap<u64, String>,
     /// Discord guild ID → IRC channel names served by this guild.
-    pub guild_irc_channels: std::collections::HashMap<u64, Vec<String>>,
+    pub(crate) guild_irc_channels: std::collections::HashMap<u64, Vec<String>>,
     /// Discord channel ID → channel name (for mention resolution).
-    pub channel_names: std::collections::HashMap<u64, String>,
+    pub(crate) channel_names: std::collections::HashMap<u64, String>,
     /// Discord role ID → role name (for mention resolution).
-    pub role_names: std::collections::HashMap<u64, String>,
+    pub(crate) role_names: std::collections::HashMap<u64, String>,
 }
 
 /// Apply one `DiscordEvent` to the bridge's Discord-side state.
@@ -192,7 +196,7 @@ pub struct DiscordState {
 /// Returns the `S2SCommand`s that must be forwarded to the IRC connection
 /// module.  Caller supplies `now_ts` (Unix seconds) for UID/SJOIN timestamps
 /// when no stored channel timestamp is available.
-pub fn apply_discord_event(
+pub(crate) fn apply_discord_event(
     discord_state: &mut DiscordState,
     pm: &mut PseudoclientManager,
     irc_state: &IrcState,

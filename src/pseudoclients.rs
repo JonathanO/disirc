@@ -650,6 +650,9 @@ pub(crate) enum PartResult {
 
 #[cfg(test)]
 mod tests {
+    /// Size of the base-36 6-character UID space (36^6).
+    const UID_SPACE: u64 = 36u64.pow(6);
+
     use super::*;
 
     // -------------------------------------------------------------------
@@ -1348,11 +1351,53 @@ mod tests {
             );
         }
 
+        /// Shape holds for ANY counter value, not just small ones — the old
+        /// range stopped at 2_000_000, under 0.1% of the 36^6 UID space.
         #[test]
-        fn encode_counter_always_6_chars(n in 0u64..2_000_000u64) {
+        fn encode_counter_always_6_chars(n in proptest::num::u64::ANY) {
             let result = UidGenerator::encode_counter(n);
-            assert_eq!(result.len(), 6);
-            assert!(result.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+            prop_assert_eq!(result.len(), 6);
+            prop_assert!(result.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
         }
+
+        /// Every counter in the UID space survives a base-36 decode.
+        ///
+        /// Injectivity is what actually makes UIDs unique, but it has to be
+        /// stated as a round-trip rather than "two random draws differ": two
+        /// values drawn from a 36^6 space collide with probability ~1e-8, so a
+        /// sampling formulation passes even for an encoder that discards a
+        /// character's worth of information.
+        #[test]
+        fn encode_counter_round_trips_within_uid_space(n in 0u64..UID_SPACE) {
+            let encoded = UidGenerator::encode_counter(n);
+            // Inverse of the base-36 ALPHABET: 'A'..='Z' => 0..=25, '0'..='9' => 26..=35.
+            let decoded = encoded.chars().try_fold(0u64, |acc, c| {
+                let digit = match c {
+                    'A'..='Z' => c as u64 - 'A' as u64,
+                    '0'..='9' => c as u64 - '0' as u64 + 26,
+                    _ => return None,
+                };
+                Some(acc * 36 + digit)
+            });
+            prop_assert_eq!(decoded, Some(n));
+        }
+    }
+
+    /// The encoder silently wraps past the 36^6 UID space rather than erroring.
+    ///
+    /// Documented, not guarded: reaching it needs 2,176,782,336 pseudoclient
+    /// introductions in one process lifetime.  Pinned so the limit is a stated
+    /// property rather than an unexamined edge.
+    #[test]
+    fn encode_counter_wraps_at_uid_space_ceiling() {
+        assert_eq!(
+            UidGenerator::encode_counter(0),
+            UidGenerator::encode_counter(UID_SPACE),
+            "counter 0 and 36^6 collide"
+        );
+        assert_eq!(
+            UidGenerator::encode_counter(1),
+            UidGenerator::encode_counter(UID_SPACE + 1)
+        );
     }
 }

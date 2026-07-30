@@ -1029,6 +1029,28 @@ mod tests {
             prop_assert!(cfg.validate().is_ok(), "sid {sid} should be valid");
         }
 
+        /// A lowercase letter anywhere in an otherwise-valid SID is rejected.
+        /// The length property below never varies the character class, so
+        /// without this the charset rule is only covered by examples.
+        #[test]
+        fn sid_with_lowercase_always_fails(
+            valid in "[0-9][A-Z0-9]{2}",
+            pos in 0usize..3,
+            lower in "[a-z]",
+        ) {
+            let mut chars: Vec<char> = valid.chars().collect();
+            chars[pos] = lower.chars().next().expect("non-empty");
+            let mutated: String = chars.into_iter().collect();
+            prop_assert!(validate_sid(&mutated).is_err(), "accepted {mutated:?}");
+        }
+
+        /// The first character must be a digit; a letter there is rejected
+        /// even though letters are valid in positions 2 and 3.
+        #[test]
+        fn sid_not_starting_with_digit_always_fails(s in "[A-Z][A-Z0-9]{2}") {
+            prop_assert!(validate_sid(&s).is_err(), "accepted {s:?}");
+        }
+
         #[test]
         fn wrong_length_sid_always_fails(s in "[0-9][A-Z0-9]{0,1}|[0-9][A-Z0-9]{3,10}") {
             let mut cfg = valid_config();

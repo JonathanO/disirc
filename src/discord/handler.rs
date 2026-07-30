@@ -557,7 +557,6 @@ impl EventHandler for DiscordHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
     use tokio::sync::mpsc;
 
     // ---------------------------------------------------------------------------
@@ -1217,24 +1216,6 @@ mod tests {
     #[test]
     fn not_relayed_when_neither_bridged_nor_self_passes() {
         assert!(!should_relay_message(99, 1, &ids(&[10]), &ids(&[1])));
-    }
-
-    proptest! {
-        #[test]
-        fn relay_matches_logical_conjunction(
-            channel_id in 1u64..100,
-            author_id in 1u64..100,
-            bridged in proptest::bool::ANY,
-            is_self in proptest::bool::ANY,
-        ) {
-            let bridged_ids: HashSet<u64> = if bridged { ids(&[channel_id]) } else { ids(&[]) };
-            let self_ids: HashSet<u64> = if is_self { ids(&[author_id]) } else { ids(&[]) };
-            let expected = bridged && !is_self;
-            prop_assert_eq!(
-                should_relay_message(channel_id, author_id, &bridged_ids, &self_ids),
-                expected
-            );
-        }
     }
 
     // ---------------------------------------------------------------------------

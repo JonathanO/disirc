@@ -461,11 +461,26 @@ mod tests {
 
     proptest! {
         #[test]
-        fn sanitize_always_produces_valid_length(nick in ".*") {
+        /// Output length is the input length clamped to [2, 32], the input's
+        /// leading characters survive, and any padding is underscores.
+        ///
+        /// The previous version asserted only the length bounds, which a
+        /// constant `"__"` also satisfies.
+        fn sanitize_clamps_length_and_keeps_prefix(nick in ".*") {
             let out = sanitize_webhook_username(&nick);
-            let len = out.chars().count();
-            prop_assert!(len >= 2, "output too short: {len}");
-            prop_assert!(len <= 32, "output too long: {len}");
+            let in_len = nick.chars().count();
+
+            prop_assert_eq!(out.chars().count(), in_len.clamp(2, 32));
+
+            let kept: String = nick.chars().take(32).collect();
+            prop_assert!(
+                out.starts_with(&kept),
+                "output {out:?} dropped input prefix {kept:?}"
+            );
+            prop_assert!(
+                out.chars().skip(in_len).all(|c| c == '_'),
+                "padding in {out:?} must be underscores only"
+            );
         }
     }
 

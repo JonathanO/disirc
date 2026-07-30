@@ -55,16 +55,22 @@ struct HandshakeResult {
 
 /// Compute the reconnect delay for the given attempt number (0-indexed).
 ///
-/// Uses full-jitter exponential backoff: delay = `rand(0, min(5 × 2^attempt, 300))` seconds.
-/// Keeping this `pub(crate)` allows unit-testing without exposing it as library API.
-pub(crate) fn backoff_delay(attempt: u32) -> Duration {
+/// Full-jitter exponential backoff: `jitter % min(5 × 2^attempt, 300)` seconds.
+///
+/// The random draw is a parameter so the arithmetic is deterministically
+/// testable; [`backoff_delay`] supplies it from the thread RNG.
+pub(crate) fn backoff_delay_from(attempt: u32, jitter: u64) -> Duration {
     const CAP_SECS: u64 = 300;
     const BASE_SECS: u64 = 5;
     let exp = BASE_SECS.saturating_mul(1u64.checked_shl(attempt).unwrap_or(u64::MAX));
     // BASE_SECS = 5, so capped is always >= 5; no zero-division guard needed.
     let capped = exp.min(CAP_SECS);
-    let secs = rand::random::<u64>() % capped;
-    Duration::from_secs(secs)
+    Duration::from_secs(jitter % capped)
+}
+
+/// [`backoff_delay_from`] with the jitter drawn from the thread RNG.
+pub(crate) fn backoff_delay(attempt: u32) -> Duration {
+    backoff_delay_from(attempt, rand::random::<u64>())
 }
 
 /// Run the IRC connection forever, reconnecting on failure.
@@ -468,23 +474,39 @@ mod tests {
 
     // ── backoff_delay ─────────────────────────────────────────────────────
 
+    /// The cap doubles per attempt and saturates at the 300s ceiling.
+    ///
+    /// Expected values are computed from the documented formula by hand rather
+    /// than recomputed in the test — a test that re-derives `min(5 << n, 300)`
+    /// agrees with a wrong implementation.
     #[test]
-    fn backoff_attempt_0_is_below_5s() {
-        for _ in 0..20 {
-            assert!(backoff_delay(0) < Duration::from_secs(5));
-        }
+    fn backoff_cap_doubles_then_saturates() {
+        assert_eq!(backoff_delay_from(0, 7).as_secs(), 2); // 7 % 5
+        assert_eq!(backoff_delay_from(1, 7).as_secs(), 7); // 7 % 10
+        assert_eq!(backoff_delay_from(2, 25).as_secs(), 5); // 25 % 20
+        assert_eq!(backoff_delay_from(6, 301).as_secs(), 1); // 301 % 300, saturated
+        // Shift overflow: checked_shl returns None past 63, so the cap must
+        // still land on the ceiling rather than wrapping to something small.
+        assert_eq!(backoff_delay_from(u32::MAX, 301).as_secs(), 1);
     }
 
     proptest! {
+        /// The ceiling holds for every attempt and every draw.  `attempt: u32`
+        /// sweeps the shift-overflow domain that the example test above cannot
+        /// exhaust.
         #[test]
-        fn backoff_always_below_300s(attempt: u32) {
-            let d = backoff_delay(attempt);
-            prop_assert!(d < Duration::from_mins(5));
+        fn backoff_never_exceeds_ceiling(attempt: u32, jitter in proptest::num::u64::ANY) {
+            prop_assert!(backoff_delay_from(attempt, jitter) < Duration::from_secs(300));
         }
     }
 
+    /// The thread-RNG wrapper actually draws a varying jitter.
+    ///
+    /// Statistical rather than exact, because the draw is not injectable at
+    /// this layer — that is the whole reason the arithmetic lives in
+    /// `backoff_delay_from`, where it is pinned exactly above.
     #[test]
-    fn backoff_delay_is_not_always_zero() {
+    fn backoff_delay_draws_varying_jitter() {
         // With cap=5s, rand(0,5) returns 0 with probability 1/5.
         // P(all 50 results are zero) ≈ (1/5)^50 ≈ 10^-35.
         let all_zero = (0..50).all(|_| backoff_delay(0) == Duration::ZERO);

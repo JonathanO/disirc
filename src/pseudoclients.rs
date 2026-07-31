@@ -98,6 +98,13 @@ pub(crate) fn uid_nick(uid: &str) -> String {
 // UID generation
 // ---------------------------------------------------------------------------
 
+/// Number of distinct UID suffixes: 6 base-36 characters.
+///
+/// The counter is per-process and resets on restart, so this bounds the number
+/// of *distinct assignments in a single process lifetime*, not the number of
+/// users the bridge can ever serve.
+pub(crate) const UID_SPACE: u64 = 36u64.pow(6);
+
 /// Generates unique UIDs under a given SID.
 ///
 /// UIDs are `<SID>` + 6 alphanumeric chars (`[A-Z0-9]`), stable per Discord
@@ -125,8 +132,34 @@ impl UidGenerator {
     /// Get or create a UID for a Discord user ID.
     ///
     /// Returns the same UID if called again with the same `discord_user_id`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`UID_SPACE`] is exhausted and a *new* assignment is
+    /// requested. Users that already hold a UID are unaffected.
+    ///
+    /// This is deliberate. [`Self::encode_counter`] wraps silently past
+    /// `36^6`, which would hand out a suffix already belonging to a live
+    /// pseudoclient — two Discord users sharing one IRC identity, with
+    /// messages attributed to the wrong person. There is no correct way to
+    /// continue from that state, and because the counter is per-process,
+    /// restarting clears it. Under a supervisor that restarts the daemon
+    /// (see the deployment note in README.md) the panic is self-healing;
+    /// returning an error instead would leave the process running while
+    /// silently failing to bridge every new user.
+    ///
+    /// Reaching it requires 2,176,782,336 distinct assignments in one process
+    /// lifetime. The counter advances once per new user and once per
+    /// [`PseudoclientManager::forget_uid`] (KILL reintroduction), which is
+    /// rate-limited by the reintroduce cooldown.
     pub(crate) fn get_or_create(&mut self, discord_user_id: u64) -> &str {
         self.assigned.entry(discord_user_id).or_insert_with(|| {
+            assert!(
+                self.counter < UID_SPACE,
+                "UID space exhausted: {UID_SPACE} suffixes allocated under SID {}; \
+                 continuing would reissue a live pseudoclient's UID",
+                self.sid
+            );
             let suffix = Self::encode_counter(self.counter);
             self.counter += 1;
             format!("{}{suffix}", self.sid)
@@ -141,8 +174,14 @@ impl UidGenerator {
 
     /// Encode a counter value as a 6-char `[A-Z0-9]` string.
     ///
-    /// Uses base-36 encoding (0-9, A-Z) to maximise the UID space.
-    /// 36^6 = 2,176,782,336 unique UIDs — more than sufficient.
+    /// Uses base-36 encoding (0-9, A-Z) to maximise the UID space:
+    /// [`UID_SPACE`] = 36^6 = 2,176,782,336 unique suffixes.
+    ///
+    /// Values at or above [`UID_SPACE`] **wrap silently** — the high digits are
+    /// discarded, so `encode_counter(0) == encode_counter(UID_SPACE)`. This is
+    /// not guarded here; [`Self::get_or_create`] asserts before calling, which
+    /// keeps this function total and lets the round-trip property test cover
+    /// the whole space.
     fn encode_counter(mut n: u64) -> String {
         const ALPHABET: &[u8; 36] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         let mut chars = [b'A'; 6];
@@ -650,9 +689,6 @@ pub(crate) enum PartResult {
 
 #[cfg(test)]
 mod tests {
-    /// Size of the base-36 6-character UID space (36^6).
-    const UID_SPACE: u64 = 36u64.pow(6);
-
     use super::*;
 
     // -------------------------------------------------------------------
@@ -1381,6 +1417,36 @@ mod tests {
             });
             prop_assert_eq!(decoded, Some(n));
         }
+    }
+
+    /// A new assignment past the UID space aborts rather than reissuing a live
+    /// pseudoclient's UID.  See `get_or_create` for why this is a panic.
+    #[test]
+    #[should_panic(expected = "UID space exhausted")]
+    fn get_or_create_panics_when_uid_space_exhausted() {
+        let mut uid_gen = UidGenerator::new("0D0");
+        uid_gen.counter = UID_SPACE;
+        let _ = uid_gen.get_or_create(1);
+    }
+
+    /// Exhaustion must only block *new* assignments — users that already hold a
+    /// UID keep working, so an exhausted generator degrades rather than
+    /// breaking every existing pseudoclient.
+    #[test]
+    fn exhausted_generator_still_serves_existing_assignments() {
+        let mut uid_gen = UidGenerator::new("0D0");
+        let existing = uid_gen.get_or_create(1).to_string();
+        uid_gen.counter = UID_SPACE;
+        assert_eq!(uid_gen.get_or_create(1), existing);
+    }
+
+    /// The last usable counter value still allocates; the assert is
+    /// exclusive-bound, not off by one.
+    #[test]
+    fn get_or_create_allocates_at_the_last_usable_counter() {
+        let mut uid_gen = UidGenerator::new("0D0");
+        uid_gen.counter = UID_SPACE - 1;
+        assert_eq!(uid_gen.get_or_create(1), "0D0999999");
     }
 
     /// The encoder silently wraps past the 36^6 UID space rather than erroring.

@@ -107,6 +107,24 @@ See [`config.example.toml`](config.example.toml) for all options with comments. 
 - **`[formatting]`** — nick-colon mention conversion
 - **`[[bridge]]`** — one entry per Discord↔IRC channel pair, with optional webhook URL
 
+## Running in production
+
+**Run disirc under a process supervisor that restarts it** — systemd with
+`Restart=always`, a Docker `--restart=unless-stopped` policy, or equivalent.
+
+disirc treats an unrecoverable internal state as a reason to exit rather than
+continue with corrupt data. The one such case today is UID space exhaustion:
+pseudoclient UIDs are allocated from a per-process counter of 36^6 suffixes, and
+rather than wrap and reissue a UID that belongs to a live pseudoclient — which
+would merge two Discord users into one IRC identity and misattribute their
+messages — the daemon aborts. Because the counter is per-process, a restart
+clears it.
+
+Reaching that limit takes 2,176,782,336 distinct pseudoclient allocations within
+a single process lifetime, so in practice this is a safety net rather than an
+expected event. Pseudoclient state (channel memberships, activity timestamps)
+survives restarts via the state file configured by `pseudoclients.state_file`.
+
 See [DEVELOPING.md](DEVELOPING.md) for development setup, testing, and local UnrealIRCd Docker instructions.
 
 ## License

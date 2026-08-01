@@ -33,3 +33,26 @@ pub(crate) fn adversarial_unicode_no_spaces(max_atoms: usize) -> impl Strategy<V
     ];
     prop::collection::vec(atom, 1..=max_atoms).prop_map(|atoms| atoms.concat())
 }
+
+/// Generate a string that contains one grapheme cluster larger than
+/// `min_cluster_bytes`.
+///
+/// [`adversarial_unicode_no_spaces`] joins many small clusters. It never builds
+/// a single cluster that is larger than a line budget. A splitter can therefore
+/// pass that strategy and still fail on one oversized cluster, because the
+/// "first grapheme does not fit" path is never reached.
+///
+/// A ZWJ sequence has no length limit. Any number of emoji that `U+200D` joins
+/// is one grapheme cluster.
+pub(crate) fn oversized_grapheme_cluster(
+    min_cluster_bytes: usize,
+) -> impl Strategy<Value = String> {
+    // "\u{1F468}\u{200D}" is 7 bytes, so this gives the requested size.
+    let joins = min_cluster_bytes / 7 + 2;
+    (1..=joins, 0usize..4).prop_map(|(n, pad)| {
+        let mut cluster: String = "\u{1F468}\u{200D}".repeat(n);
+        cluster.push('\u{1F468}');
+        // Pad with plain text so the cluster is not always at offset 0.
+        format!("{}{cluster}", "a".repeat(pad))
+    })
+}

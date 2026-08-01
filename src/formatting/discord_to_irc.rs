@@ -422,15 +422,37 @@ fn split_long_line(line: &str, max_bytes: usize) -> Vec<String> {
             .last()
             .map_or(0, |(i, _)| i);
         let boundary = if boundary == 0 {
-            // First grapheme is itself too long — advance past it to
-            // make progress rather than loop forever.
-            remaining
-                .grapheme_indices(true)
-                .nth(1)
-                .map_or(remaining.len(), |(i, _)| i)
+            // The first grapheme is larger than max_bytes. A ZWJ sequence has
+            // no length limit, so one cluster can exceed any budget.
+            //
+            // Split inside the cluster at the last char boundary that fits.
+            // This breaks the cluster, and the emoji does not render. Emitting
+            // the whole cluster is worse: the IRC server truncates the line at
+            // its own limit, and it can cut the line in the middle of a
+            // character.
+            let last_char_start = remaining
+                .char_indices()
+                .take_while(|(i, _)| *i <= max_bytes)
+                .last()
+                .map_or(0, |(i, _)| i);
+            if last_char_start == 0 {
+                // Even the first char is larger than max_bytes. Emit that char
+                // alone. This exceeds the budget, but it guarantees progress.
+                remaining
+                    .chars()
+                    .next()
+                    .map_or(remaining.len(), char::len_utf8)
+            } else {
+                last_char_start
+            }
         } else {
             boundary
         };
+
+        // Every branch above must move past at least one byte. A boundary of 0
+        // pushes an empty string and leaves `remaining` unchanged, so the loop
+        // never ends.
+        debug_assert!(boundary > 0, "split_long_line must make progress");
 
         // Find last space before the grapheme boundary.  ASCII space is
         // always its own grapheme, so a space position is already on a
@@ -927,6 +949,26 @@ mod tests {
             }
         }
 
+        /// Every line `split_for_irc` emits fits the IRC byte budget, for any
+        /// input.  This is the function's entire contract, and until now only
+        /// one example asserted it.  The adversarial strategy supplies no
+        /// spaces, so the word-boundary path cannot be used to satisfy it.
+        #[test]
+        fn split_for_irc_lines_never_exceed_limit(
+            text in prop_oneof![
+                crate::formatting::test_support::adversarial_unicode_no_spaces(600),
+                crate::formatting::test_support::oversized_grapheme_cluster(MAX_LINE_BYTES),
+            ]
+        ) {
+            for line in split_for_irc(&text) {
+                prop_assert!(
+                    line.len() <= MAX_LINE_BYTES,
+                    "emitted a {}-byte line, over the {MAX_LINE_BYTES}-byte budget: {line:?}",
+                    line.len()
+                );
+            }
+        }
+
         /// Content inside a code span is never markdown-converted: whatever
         /// the delimiter choice, no IRC control codes appear in the output for
         /// text that is entirely inside backticks.
@@ -1041,6 +1083,42 @@ mod tests {
         let line = "a".repeat(MAX_LINE_BYTES);
         let lines = split_for_irc(&line);
         assert_eq!(lines.len(), 1);
+    }
+
+    /// A single grapheme cluster larger than the budget must still be split.
+    ///
+    /// The splitter looks for a grapheme boundary at or before the budget. One
+    /// oversized cluster has no such boundary. The old code then emitted the
+    /// whole cluster on one line, which was over the budget.
+    #[test]
+    fn split_breaks_a_grapheme_cluster_larger_than_the_budget() {
+        // One ZWJ sequence of 58 joined emoji is one grapheme cluster.
+        let cluster: String = "\u{1F468}\u{200D}".repeat(57) + "\u{1F468}";
+        assert!(
+            cluster.len() > MAX_LINE_BYTES,
+            "test input must exceed the budget"
+        );
+
+        let lines = split_for_irc(&cluster);
+
+        for line in &lines {
+            assert!(
+                line.len() <= MAX_LINE_BYTES,
+                "emitted a {}-byte line, over the {MAX_LINE_BYTES}-byte budget",
+                line.len()
+            );
+        }
+
+        // The split must land on the last char boundary that fits, not on an
+        // arbitrary earlier one. Each emoji plus ZWJ pair is 7 bytes, so the
+        // last char that starts at or before byte 400 starts at byte 399
+        // (7 x 57). That leaves one 4-byte emoji on the second line.
+        assert_eq!(lines.len(), 2, "expected one split");
+        assert_eq!(lines[0].len(), 399, "split did not use the full budget");
+        assert_eq!(lines[1].len(), 4);
+
+        // A hard split must not lose or duplicate content.
+        assert_eq!(lines.concat(), cluster, "content changed across the split");
     }
 
     #[test]

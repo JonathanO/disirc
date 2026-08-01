@@ -496,7 +496,7 @@ mod tests {
         /// exhaust.
         #[test]
         fn backoff_never_exceeds_ceiling(attempt: u32, jitter in proptest::num::u64::ANY) {
-            prop_assert!(backoff_delay_from(attempt, jitter) < Duration::from_secs(300));
+            prop_assert!(backoff_delay_from(attempt, jitter) < Duration::from_mins(5));
         }
     }
 

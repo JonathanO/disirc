@@ -40,6 +40,39 @@ Do not batch `TODO.md` updates to the end of a session — update them in place 
 - If you intend to call multiple tools and there are no dependencies between the tool calls, make all of the independent tool calls in parallel. Prioritize calling tools simultaneously whenever the actions can be done in parallel rather than sequentially. Never use placeholders or guess missing parameters in tool calls.
 - **Tests are mandatory.** For new features: write unit tests for new functions/traits (before or after implementation, but always before considering the task done). For bug fixes: write a **property-based test** that captures the class of bug before writing a unit test for the specific instance. The property test should fail on the unfixed code. Then add a targeted unit test for the exact regression case. Only then fix the code and verify both tests pass. Run `cargo mutants` on changed modules before considering a task done.
 
+## Writing style — ASD-STE100 Simplified Technical English
+
+Write all English in ASD-STE100 Simplified Technical English. This applies to:
+
+- Chat replies
+- Commit messages
+- Code comments and doc comments
+- Pull request titles and descriptions
+- Specs, research notes, and Markdown files
+
+The rules are:
+
+- **Use short sentences.** Keep procedural sentences to 20 words or fewer. Keep
+  descriptive sentences to 25 words or fewer.
+- **Write one instruction in one sentence.** Do not join two instructions with
+  "and" or a semicolon.
+- **Use the active voice.** Write "the parser rejects the line", not "the line is
+  rejected by the parser".
+- **Use simple tenses.** Prefer the present tense.
+- **Use one word for one meaning.** If you call it a "pseudoclient", always call
+  it a "pseudoclient". Do not change to "fake user" or "bot".
+- **Keep noun clusters to three words or fewer.** Write "the timeout for the
+  channel", not "the channel idle timeout value".
+- **Keep the articles.** Write "the counter", not "counter".
+- **Do not use slang, idioms, or metaphors.** Write "this hides the problem",
+  not "this papers over the cracks".
+- **Keep paragraphs to six sentences or fewer.**
+- **Start a warning or a caution with the condition.** Write "If the link is
+  down, the bridge drops the message."
+
+Technical terms, protocol names, function names, and code are always permitted.
+Do not simplify them.
+
 ## Spec-driven development workflow
 
 1. **Specs live in `specs/<name>/spec.md`**. Before implementing any feature, read the relevant spec file(s). Each spec directory also contains a `TODO.md` tracking tasks for that spec.

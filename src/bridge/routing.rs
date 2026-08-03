@@ -347,7 +347,7 @@ mod tests {
     use crate::pseudoclients::PseudoclientManager;
 
     use super::super::state::apply_irc_event;
-    use super::super::test_util::{NullIrcResolver, NullResolver};
+    use crate::test_util::{NullIrcResolver, NullResolver};
 
     fn make_pm() -> PseudoclientManager {
         PseudoclientManager::new("001", "bridge")

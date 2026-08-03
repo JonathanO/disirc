@@ -8,3 +8,6 @@ pub mod irc;
 pub(crate) mod persist;
 pub(crate) mod pseudoclients;
 pub mod signal;
+
+#[cfg(test)]
+pub(crate) mod test_util;

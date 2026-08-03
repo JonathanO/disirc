@@ -148,7 +148,7 @@ mod tests {
     use crate::discord::DiscordCommand;
     use crate::irc::S2SCommand;
 
-    use super::super::test_util::{NullIrcResolver, NullResolver};
+    use crate::test_util::{NullIrcResolver, NullResolver};
 
     // --- discord_to_irc_commands ---
 

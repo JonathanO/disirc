@@ -751,7 +751,8 @@ mod tests {
     use crate::config::{
         BridgeEntry, Config, DiscordConfig, FormattingConfig, IrcConfig, PseudoclientConfig,
     };
-    use crate::discord::{DiscordPresence, MemberInfo};
+    use crate::discord::DiscordPresence;
+    use crate::test_util::{SnapshotOpts, member, snapshot, snapshot_with};
 
     fn test_config() -> Config {
         Config {
@@ -793,19 +794,12 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
         let out = state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 4001,
-                    username: "Alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                4001,
+                "Alice",
+                "Alice",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
 
@@ -826,19 +820,7 @@ mod tests {
 
         // Link is NotReady (no LinkUp yet).
         let out = state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 3001,
-                    username: "jono".into(),
-                    display_name: "jono".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(3001, "jono", "jono", DiscordPresence::Online)]),
             ts,
         );
 
@@ -864,19 +846,7 @@ mod tests {
 
         // Introduce a pseudoclient while link is not ready.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
 
@@ -909,19 +879,7 @@ mod tests {
 
         // Introduce a pseudoclient with Idle presence while link is not ready.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 5001,
-                    username: "idler".into(),
-                    display_name: "Idler".into(),
-                    presence: DiscordPresence::Idle,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(5001, "idler", "Idler", DiscordPresence::Idle)]),
             ts,
         );
 
@@ -952,19 +910,12 @@ mod tests {
 
         // Introduce online user while link is not ready.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 6001,
-                    username: "frank".into(),
-                    display_name: "Frank".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                6001,
+                "frank",
+                "Frank",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
 
@@ -1006,19 +957,7 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         let out = state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 5001,
-                    username: "Bob".into(),
-                    display_name: "Bob".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(5001, "Bob", "Bob", DiscordPresence::Online)]),
             ts,
         );
         let old_uid = out
@@ -1179,19 +1118,12 @@ mod tests {
 
         // Introduce a pseudoclient.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 4001,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                4001,
+                "alice",
+                "Alice",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
         let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -1308,19 +1240,12 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         let out = state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 8001,
-                    username: "Charlie".into(),
-                    display_name: "Charlie".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                8001,
+                "Charlie",
+                "Charlie",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
         let uid1 = out
@@ -1389,19 +1314,12 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 8001,
-                    username: "Charlie".into(),
-                    display_name: "Charlie".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                8001,
+                "Charlie",
+                "Charlie",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
         let uid1 = state
@@ -1457,19 +1375,12 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_irc_event(&S2SEvent::BurstComplete, ts);
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 8001,
-                    username: "Charlie".into(),
-                    display_name: "Charlie".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                8001,
+                "Charlie",
+                "Charlie",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
         let uid = state
@@ -1665,19 +1576,7 @@ mod tests {
         // Discord event while link is down — should not produce IRC commands
         // but should still update state.
         let out = state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 9001,
-                    username: "Dave".into(),
-                    display_name: "Dave".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(9001, "Dave", "Dave", DiscordPresence::Online)]),
             ts,
         );
         assert!(
@@ -1699,19 +1598,12 @@ mod tests {
 
         // Introduce a pseudoclient while link is not ready.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 7777,
-                    username: "Frank".into(),
-                    display_name: "Frank".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                7777,
+                "Frank",
+                "Frank",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
         let frank_uid = state.pm.get_by_discord_id(7777).unwrap().uid.clone();
@@ -1787,19 +1679,7 @@ mod tests {
 
         // Introduce user, link up.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -1859,19 +1739,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -1920,19 +1788,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -1979,19 +1835,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         // Go offline.
@@ -2045,19 +1889,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -2103,19 +1935,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -2163,19 +1983,18 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 99,
-                    username: "bridgebot".into(),
-                    display_name: "BridgeBot".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 99,
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    bot_user_id: 99,
+                    ..Default::default()
+                },
+                vec![member(
+                    99,
+                    "bridgebot",
+                    "BridgeBot",
+                    DiscordPresence::Online,
+                )],
+            ),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -2198,19 +2017,12 @@ mod tests {
 
         // Introduce pseudoclient while link is down, then link up.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 6001,
-                    username: "victim".into(),
-                    display_name: "Victim".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(
+                6001,
+                "victim",
+                "Victim",
+                DiscordPresence::Online,
+            )]),
             ts,
         );
         let out = state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -2303,19 +2115,7 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
         let out = state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
 
@@ -2386,19 +2186,7 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
 
@@ -2434,19 +2222,13 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 99,
-                    username: "botuser".into(),
-                    display_name: "Bot".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 99,
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    bot_user_id: 99,
+                    ..Default::default()
+                },
+                vec![member(99, "botuser", "Bot", DiscordPresence::Online)],
+            ),
             ts,
         );
 
@@ -2489,19 +2271,7 @@ mod tests {
         // Offline member WITH seed — should be introduced with persisted
         // channels and AWAY :Offline.
         let out = state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Offline,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Offline)]),
             ts,
         );
 
@@ -2545,19 +2315,7 @@ mod tests {
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Offline,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Offline)]),
             ts,
         );
 
@@ -2588,17 +2346,7 @@ mod tests {
         let ts = 1_000_000;
 
         // MemberSnapshot does NOT include user 42.
-        state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
-            ts,
-        );
+        state.handle_discord_event(&snapshot(vec![]), ts);
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
         assert!(state.pm.get_by_discord_id(42).is_none());
@@ -2661,17 +2409,7 @@ mod tests {
         let ts = 1_000_000;
 
         // MemberSnapshot without user 42 (large guild, offline not included).
-        state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
-            ts,
-        );
+        state.handle_discord_event(&snapshot(vec![]), ts);
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
 
         // User comes online via PresenceUpdated — seed should apply.
@@ -2730,19 +2468,7 @@ mod tests {
         state.state_dirty = false;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Offline,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Offline)]),
             ts,
         );
 
@@ -2760,19 +2486,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -2829,19 +2543,7 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -2864,19 +2566,7 @@ mod tests {
 
         // MemberSnapshot introduces a user — produces IRC commands.
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         assert!(
@@ -2895,19 +2585,13 @@ mod tests {
         let ts = 1_000_000;
 
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 42,
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    bot_user_id: 42,
+                    ..Default::default()
+                },
+                vec![member(42, "alice", "Alice", DiscordPresence::Online)],
+            ),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
@@ -2994,19 +2678,7 @@ mod tests {
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![MemberInfo {
-                    user_id: 42,
-                    username: "alice".into(),
-                    display_name: "Alice".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![member(42, "alice", "Alice", DiscordPresence::Online)]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::BurstComplete, ts);
@@ -3049,27 +2721,10 @@ mod tests {
 
         // Introduce alice + bob so the DM has a valid target (alice DMs bob).
         state.handle_discord_event(
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 999,
-                members: vec![
-                    MemberInfo {
-                        user_id: 42,
-                        username: "alice".into(),
-                        display_name: "Alice".into(),
-                        presence: DiscordPresence::Online,
-                    },
-                    MemberInfo {
-                        user_id: 43,
-                        username: "bob".into(),
-                        display_name: "Bob".into(),
-                        presence: DiscordPresence::Online,
-                    },
-                ],
-                channel_ids: vec![111],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot(vec![
+                member(42, "alice", "Alice", DiscordPresence::Online),
+                member(43, "bob", "Bob", DiscordPresence::Online),
+            ]),
             ts,
         );
         state.handle_irc_event(&S2SEvent::LinkUp, ts);

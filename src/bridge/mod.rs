@@ -12,8 +12,6 @@ pub(crate) mod orchestrator;
 mod relay;
 mod routing;
 mod state;
-#[cfg(test)]
-mod test_util;
 
 use tokio::sync::mpsc;
 
@@ -183,6 +181,7 @@ mod tests {
     use crate::config::{
         BridgeEntry, DiscordConfig, FormattingConfig, IrcConfig, PseudoclientConfig,
     };
+    use crate::test_util::{member, snapshot};
     use std::collections::HashMap;
     use std::fs;
 
@@ -405,7 +404,7 @@ mod tests {
     // hanging rather than asserting.
     // -----------------------------------------------------------------------
 
-    use crate::discord::{DiscordPresence, MemberInfo};
+    use crate::discord::DiscordPresence;
     use crate::irc::S2SCommand;
 
     /// Sending ends for one `run_bridge` invocation.
@@ -558,19 +557,12 @@ mod tests {
             let driver = async {
                 irc_event_tx.send(S2SEvent::LinkUp).await.unwrap();
                 discord_event_tx
-                    .send(DiscordEvent::MemberSnapshot {
-                        guild_id: 999,
-                        members: vec![MemberInfo {
-                            user_id: 4001,
-                            username: "Alice".into(),
-                            display_name: "Alice".into(),
-                            presence: DiscordPresence::Online,
-                        }],
-                        channel_ids: vec![111],
-                        channel_names: HashMap::new(),
-                        role_names: HashMap::new(),
-                        bot_user_id: 0,
-                    })
+                    .send(snapshot(vec![member(
+                        4001,
+                        "Alice",
+                        "Alice",
+                        DiscordPresence::Online,
+                    )]))
                     .await
                     .unwrap();
 

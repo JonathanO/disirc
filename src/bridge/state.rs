@@ -471,8 +471,9 @@ pub(crate) fn introduce_pseudoclient(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{SnapshotOpts, member, snapshot_with};
 
-    use crate::discord::{DiscordEvent, DiscordPresence, MemberInfo};
+    use crate::discord::{DiscordEvent, DiscordPresence};
     use crate::irc::{S2SCommand, S2SEvent};
     use crate::pseudoclients::PseudoclientManager;
 
@@ -501,15 +502,6 @@ mod tests {
                 .collect(),
         );
         ds
-    }
-
-    fn member(user_id: u64, name: &str, presence: DiscordPresence) -> MemberInfo {
-        MemberInfo {
-            user_id,
-            username: name.to_string(),
-            display_name: name.to_string(),
-            presence,
-        }
     }
 
     // --- IrcState / apply_irc_event ---
@@ -1006,17 +998,17 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-                members: vec![
-                    member(10, "alice", DiscordPresence::Online),
-                    member(20, "bob", DiscordPresence::Offline),
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![
+                    member(10, "alice", "alice", DiscordPresence::Online),
+                    member(20, "bob", "bob", DiscordPresence::Offline),
                 ],
-            },
+            ),
             1000,
         );
 
@@ -1046,14 +1038,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-                members: vec![member(20, "bob", DiscordPresence::Offline)],
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(20, "bob", "bob", DiscordPresence::Offline)],
+            ),
             1000,
         );
         assert!(pm.get_by_discord_id(20).is_none(), "bob is offline");
@@ -1208,14 +1200,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-                members: vec![member(10, "alice", DiscordPresence::Online)],
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(10, "alice", "alice", DiscordPresence::Online)],
+            ),
             1000,
         );
 
@@ -1239,14 +1231,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-                members: vec![member(10, "alice", DiscordPresence::Idle)],
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(10, "alice", "alice", DiscordPresence::Idle)],
+            ),
             1000,
         );
 
@@ -1267,14 +1259,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-                members: vec![member(10, "alice", DiscordPresence::DoNotDisturb)],
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(10, "alice", "alice", DiscordPresence::DoNotDisturb)],
+            ),
             1000,
         );
 
@@ -1296,14 +1288,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-                members: vec![member(10, "alice", DiscordPresence::Online)],
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(10, "alice", "alice", DiscordPresence::Online)],
+            ),
             1000,
         );
 
@@ -1350,14 +1342,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-                members: vec![member(10, "alice", DiscordPresence::Online)],
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(10, "alice", "alice", DiscordPresence::Online)],
+            ),
             1000,
         );
         assert!(pm.get_by_discord_id(10).is_some());
@@ -1670,19 +1662,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                members: vec![MemberInfo {
-                    user_id: 50,
-                    username: "olduser".into(),
-                    display_name: "Old".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(50, "olduser", "Old", DiscordPresence::Online)],
+            ),
             1000,
         );
 
@@ -1721,19 +1708,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                members: vec![MemberInfo {
-                    user_id: 50,
-                    username: "olduser".into(),
-                    display_name: "Old User".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(50, "olduser", "Old User", DiscordPresence::Online)],
+            ),
             1000,
         );
         assert_eq!(pm.get_by_discord_id(50).unwrap().nick, "olduser");
@@ -1777,19 +1759,14 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                members: vec![MemberInfo {
-                    user_id: 50,
-                    username: "sameuser".into(),
-                    display_name: "Same".into(),
-                    presence: DiscordPresence::Online,
-                }],
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 0,
-            },
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    ..Default::default()
+                },
+                vec![member(50, "sameuser", "Same", DiscordPresence::Online)],
+            ),
             1000,
         );
 
@@ -1828,17 +1805,18 @@ mod tests {
             &mut ds,
             &mut pm,
             &irc,
-            &DiscordEvent::MemberSnapshot {
-                guild_id: 1,
-                channel_ids: vec![],
-                channel_names: std::collections::HashMap::new(),
-                role_names: std::collections::HashMap::new(),
-                bot_user_id: 10,
-                members: vec![
-                    member(10, "bridgebot", DiscordPresence::Online),
-                    member(20, "bob", DiscordPresence::Online),
+            &snapshot_with(
+                SnapshotOpts {
+                    guild_id: 1,
+                    channel_ids: vec![],
+                    bot_user_id: 10,
+                    ..Default::default()
+                },
+                vec![
+                    member(10, "bridgebot", "bridgebot", DiscordPresence::Online),
+                    member(20, "bob", "bob", DiscordPresence::Online),
                 ],
-            },
+            ),
             1000,
         );
 

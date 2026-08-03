@@ -1424,74 +1424,40 @@ mod tests {
     // resolve_display_name / map_online_status (unchanged from before)
     // ---------------------------------------------------------------------------
 
+    /// The display name is the first non-empty of: guild nick, global name,
+    /// username.
     #[test]
-    fn nick_takes_priority_over_all() {
-        assert_eq!(
-            resolve_display_name(Some("Nick"), Some("GlobalName"), "username"),
-            "Nick"
-        );
+    fn resolve_display_name_picks_the_first_non_empty() {
+        let cases = [
+            (Some("Nick"), Some("GlobalName"), "username", "Nick"),
+            (None, Some("GlobalName"), "username", "GlobalName"),
+            (None, None, "username", "username"),
+            // An empty string counts as absent, not as a name.
+            (Some(""), Some("GlobalName"), "u", "GlobalName"),
+            (Some(""), Some(""), "user", "user"),
+        ];
+        for (nick, global, username, expected) in cases {
+            assert_eq!(
+                resolve_display_name(nick, global, username),
+                expected,
+                "nick={nick:?} global={global:?} username={username:?}"
+            );
+        }
     }
 
+    /// Every `OnlineStatus` maps to the matching `DiscordPresence`. Invisible
+    /// maps to Offline, because the bridge must not reveal an invisible user.
     #[test]
-    fn global_name_used_when_no_nick() {
-        assert_eq!(
-            resolve_display_name(None, Some("GlobalName"), "username"),
-            "GlobalName"
-        );
-    }
-
-    #[test]
-    fn username_used_when_no_nick_or_global_name() {
-        assert_eq!(resolve_display_name(None, None, "username"), "username");
-    }
-
-    #[test]
-    fn empty_nick_falls_through_to_global_name() {
-        assert_eq!(
-            resolve_display_name(Some(""), Some("GlobalName"), "u"),
-            "GlobalName"
-        );
-    }
-
-    #[test]
-    fn empty_nick_and_global_name_falls_through_to_username() {
-        assert_eq!(resolve_display_name(Some(""), Some(""), "user"), "user");
-    }
-
-    #[test]
-    fn online_maps_to_online() {
-        assert_eq!(
-            map_online_status(OnlineStatus::Online),
-            DiscordPresence::Online
-        );
-    }
-
-    #[test]
-    fn idle_maps_to_idle() {
-        assert_eq!(map_online_status(OnlineStatus::Idle), DiscordPresence::Idle);
-    }
-
-    #[test]
-    fn dnd_maps_to_dnd() {
-        assert_eq!(
-            map_online_status(OnlineStatus::DoNotDisturb),
-            DiscordPresence::DoNotDisturb
-        );
-    }
-
-    #[test]
-    fn offline_maps_to_offline() {
-        assert_eq!(
-            map_online_status(OnlineStatus::Offline),
-            DiscordPresence::Offline
-        );
-    }
-
-    #[test]
-    fn invisible_maps_to_offline() {
-        assert_eq!(
-            map_online_status(OnlineStatus::Invisible),
-            DiscordPresence::Offline
-        );
+    fn online_status_maps_to_presence() {
+        let cases = [
+            (OnlineStatus::Online, DiscordPresence::Online),
+            (OnlineStatus::Idle, DiscordPresence::Idle),
+            (OnlineStatus::DoNotDisturb, DiscordPresence::DoNotDisturb),
+            (OnlineStatus::Offline, DiscordPresence::Offline),
+            (OnlineStatus::Invisible, DiscordPresence::Offline),
+        ];
+        for (status, expected) in cases {
+            assert_eq!(map_online_status(status), expected, "status={status:?}");
+        }
     }
 }

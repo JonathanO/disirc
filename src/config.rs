@@ -1058,34 +1058,32 @@ mod tests {
             prop_assert!(cfg.validate().is_err(), "sid {s} of wrong length should fail");
         }
 
-        #[test]
-        fn nonempty_digit_string_is_valid_channel_id(s in "[0-9]{1,20}") {
-            let mut cfg = valid_config();
-            cfg.bridges[0].discord_channel_id = s.clone();
-            prop_assert!(cfg.validate().is_ok(), "channel id {s} should be valid");
-        }
-
-        #[test]
-        fn hash_prefixed_string_is_valid_irc_channel(rest in "[a-z][a-z0-9-]{0,29}") {
-            let channel = format!("#{rest}");
-            let mut cfg = valid_config();
-            cfg.bridges[0].irc_channel = channel.clone();
-            prop_assert!(cfg.validate().is_ok(), "irc channel {channel} should be valid");
-        }
-
-        #[test]
-        fn string_without_hash_prefix_is_invalid_irc_channel(
-            s in "[a-z][a-z0-9-]{0,29}",  // valid chars but no leading #
-        ) {
-            let mut cfg = valid_config();
-            cfg.bridges[0].irc_channel = s.clone();
-            prop_assert!(cfg.validate().is_err(), "irc channel {s} without # should be invalid");
-        }
     }
 
     // -----------------------------------------------------------------------
     // load_and_validate — ensures validation runs on initial load
     // -----------------------------------------------------------------------
+
+    /// `validate_irc_channel` requires a leading `#`. `validate_discord_channel_id`
+    /// requires a non-empty run of digits. Both are single conditions, so two
+    /// examples each cover them.
+    #[test]
+    fn channel_fields_accept_and_reject_by_shape() {
+        let mut cfg = valid_config();
+
+        cfg.bridges[0].irc_channel = "#lobby".to_string();
+        assert!(cfg.validate().is_ok(), "a leading # is valid");
+        cfg.bridges[0].irc_channel = "lobby".to_string();
+        assert!(cfg.validate().is_err(), "no leading # is invalid");
+        cfg.bridges[0].irc_channel = "#lobby".to_string();
+
+        cfg.bridges[0].discord_channel_id = "123456".to_string();
+        assert!(cfg.validate().is_ok(), "digits are valid");
+        cfg.bridges[0].discord_channel_id = "12a456".to_string();
+        assert!(cfg.validate().is_err(), "a non-digit is invalid");
+        cfg.bridges[0].discord_channel_id = String::new();
+        assert!(cfg.validate().is_err(), "empty is invalid");
+    }
 
     #[test]
     fn load_and_validate_rejects_bad_sid() {

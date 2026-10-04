@@ -1394,7 +1394,7 @@ mod tests {
             1000,
         );
 
-        assert!(cmds.is_empty());
+        assert_eq!(cmds, []);
     }
 
     #[test]
@@ -1479,7 +1479,7 @@ mod tests {
             pm.get_by_discord_id(50).is_none(),
             "must not introduce with no display name"
         );
-        assert!(cmds.is_empty());
+        assert_eq!(cmds, []);
     }
 
     #[test]
@@ -1508,7 +1508,7 @@ mod tests {
             pm.get_by_discord_id(50).is_none(),
             "must not introduce without a username"
         );
-        assert!(cmds.is_empty());
+        assert_eq!(cmds, []);
     }
 
     #[test]

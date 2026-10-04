@@ -638,7 +638,7 @@ mod tests {
             panic!("expected a MemberSnapshot");
         };
 
-        assert!(channel_ids.is_empty());
+        assert_eq!(channel_ids, Vec::<u64>::new());
         // Members are still reported so their names are cached for later
         // introduction via PRESENCE_UPDATE.
         assert_eq!(members.len(), 2);

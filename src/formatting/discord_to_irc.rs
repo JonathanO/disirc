@@ -916,7 +916,7 @@ mod tests {
     #[test]
     fn text_without_backticks_is_unchanged_and_extracts_nothing() {
         let (out, spans) = protect_code_spans("plain **text** here");
-        assert!(spans.is_empty());
+        assert_eq!(spans, Vec::<String>::new());
         assert_eq!(out, "plain **text** here");
     }
 

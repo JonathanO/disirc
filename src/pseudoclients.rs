@@ -961,7 +961,7 @@ mod tests {
         assert_eq!(state.display_name, "Alice Display");
         assert_eq!(state.discord_user_id, 100);
         assert_eq!(state.channels, vec!["#test".to_string()]);
-        assert!(!state.uid.is_empty());
+        assert_ne!(state.uid, "");
 
         // Internal maps are updated.
         assert!(mgr.iter_states().next().is_some());

@@ -155,13 +155,13 @@ mod tests {
     #[test]
     fn empty_content_no_attachments_returns_empty() {
         let cmds = discord_to_irc_commands("uid1", "#chan", "", &[], None, &NullResolver);
-        assert!(cmds.is_empty());
+        assert_eq!(cmds, []);
     }
 
     #[test]
     fn whitespace_only_content_no_attachments_returns_empty() {
         let cmds = discord_to_irc_commands("uid1", "#chan", "   \n  ", &[], None, &NullResolver);
-        assert!(cmds.is_empty());
+        assert_eq!(cmds, []);
     }
 
     #[test]

@@ -637,7 +637,7 @@ mod tests {
             0,
             &NullResolver,
         );
-        assert!(cmds.is_empty());
+        assert_eq!(cmds, []);
     }
 
     #[test]
@@ -667,7 +667,7 @@ mod tests {
             0,
             &NullResolver,
         );
-        assert!(!cmds.is_empty());
+        assert_ne!(cmds, []);
         assert!(matches!(
             &cmds[0],
             S2SCommand::SendMessage { target, text, .. }

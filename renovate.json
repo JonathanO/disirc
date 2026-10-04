@@ -9,10 +9,13 @@
     "automerge": true
   },
   "minimumReleaseAge": "3 days",
+  "platformAutomerge": false,
   "packageRules": [
     {
       "description": "Merge patch updates when all checks pass.",
-      "matchUpdateTypes": ["patch"],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "automerge": true
     }
   ]

@@ -9,13 +9,10 @@ env:
   CARGO_TERM_COLOR: always
 
 on:
+  # Run on every pull request. "Mutants (PR diff)" is a required check, so a
+  # paths filter blocks pull requests that do not change Rust code. If the diff
+  # changes no Rust source files, cargo mutants stops before it builds.
   pull_request:
-    paths:
-      - ".cargo/mutants.toml"
-      - ".github/workflows/mutants.yml"
-      - "Cargo.*"
-      - "src/**"
-      - "tests/**"
   workflow_dispatch:
 
 jobs:

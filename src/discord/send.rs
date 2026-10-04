@@ -722,7 +722,7 @@ mod tests {
         let members = vec![raw(1, "alice", None, None)];
         let out =
             non_offline_member_infos(&members, &presence_map(&[(1, DiscordPresence::Offline)]));
-        assert!(out.is_empty());
+        assert_eq!(out, []);
     }
 
     #[test]
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn empty_member_list_yields_empty_output() {
-        assert!(non_offline_member_infos(&[], &HashMap::new()).is_empty());
+        assert_eq!(non_offline_member_infos(&[], &HashMap::new()), []);
     }
 
     // --- filter_bridged_channels ---
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn empty_bridged_set_filters_everything_out() {
         let out = filter_bridged_channels([1, 2, 3].into_iter(), &hset(&[]));
-        assert!(out.is_empty());
+        assert_eq!(out, Vec::<u64>::new());
     }
 
     #[test]

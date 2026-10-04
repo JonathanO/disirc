@@ -886,8 +886,8 @@ mod tests {
         let diff = diff_bridges(&old, &new);
         assert_eq!(diff.added.len(), 1);
         assert_eq!(diff.added[0].discord_channel_id, "222");
-        assert!(diff.removed.is_empty());
-        assert!(diff.webhook_changed.is_empty());
+        assert_eq!(diff.removed, []);
+        assert_eq!(diff.webhook_changed, []);
     }
 
     #[test]
@@ -895,10 +895,10 @@ mod tests {
         let old = vec![bridge("111", "#a", None), bridge("222", "#b", None)];
         let new = vec![bridge("111", "#a", None)];
         let diff = diff_bridges(&old, &new);
-        assert!(diff.added.is_empty());
+        assert_eq!(diff.added, []);
         assert_eq!(diff.removed.len(), 1);
         assert_eq!(diff.removed[0].discord_channel_id, "222");
-        assert!(diff.webhook_changed.is_empty());
+        assert_eq!(diff.webhook_changed, []);
     }
 
     #[test]
@@ -910,8 +910,8 @@ mod tests {
             Some("https://discord.com/api/webhooks/1/x"),
         )];
         let diff = diff_bridges(&old, &new);
-        assert!(diff.added.is_empty());
-        assert!(diff.removed.is_empty());
+        assert_eq!(diff.added, []);
+        assert_eq!(diff.removed, []);
         assert_eq!(diff.webhook_changed.len(), 1);
         assert_eq!(
             diff.webhook_changed[0].webhook_url.as_deref(),
@@ -942,13 +942,13 @@ mod tests {
     fn diff_empty_to_entries() {
         let diff = diff_bridges(&[], &[bridge("111", "#a", None)]);
         assert_eq!(diff.added.len(), 1);
-        assert!(diff.removed.is_empty());
+        assert_eq!(diff.removed, []);
     }
 
     #[test]
     fn diff_entries_to_empty() {
         let diff = diff_bridges(&[bridge("111", "#a", None)], &[]);
-        assert!(diff.added.is_empty());
+        assert_eq!(diff.added, []);
         assert_eq!(diff.removed.len(), 1);
     }
 

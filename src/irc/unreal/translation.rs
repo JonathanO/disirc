@@ -927,7 +927,7 @@ mod tests {
             timestamp: None,
         };
         let msgs = translate_outbound(&cmd, SID, true, 0);
-        assert!(msgs[0].tags.is_empty());
+        assert_eq!(msgs[0].tags, []);
     }
 
     #[test]

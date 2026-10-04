@@ -1,0 +1,7 @@
+# The CI and local builds use this toolchain. Renovate opens a pull request
+# for each new Rust release, so new clippy lints fail in that pull request
+# and not on main.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

@@ -5,8 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Run weekly on main, so new advisories and toolchain changes fail
-  # without a push or a pull request.
+  # Run weekly on main, so new advisories fail without a push or a pull
+  # request. rust-toolchain.toml pins the toolchain, so a new Rust release
+  # cannot fail this run.
   schedule:
     - cron: "0 6 * * 1"
 
@@ -21,14 +22,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Install toolchain
+        run: rustup toolchain install
 
       - name: Format
         run: cargo fmt --check
 
       - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans licenses sources
+
+  # A new advisory can appear at any time, with no change in this repository.
+  # It fails only the weekly scheduled run, and it does not block pushes or
+  # pull requests.
+  advisories:
+    name: Advisories
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ github.event_name != 'schedule' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
 
   test:
     name: Test (clippy, unit, integration)
@@ -36,9 +52,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Install toolchain
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
 
@@ -55,7 +70,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install toolchain
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
 

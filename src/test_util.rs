@@ -99,3 +99,15 @@ pub(crate) fn snapshot_with(opts: SnapshotOpts, members: Vec<MemberInfo>) -> Dis
         bot_user_id: opts.bot_user_id,
     }
 }
+
+/// Run one async test with a time limit.
+///
+/// Tests that talk over an in-memory duplex pipe finish in milliseconds.  If
+/// the two ends wait for each other (for example, a mutant stops one side
+/// writing a line that the other side waits for), the test fails here
+/// instead of hanging until the test harness kills it.
+pub(crate) async fn within_deadline<F: std::future::Future>(test: F) -> F::Output {
+    tokio::time::timeout(std::time::Duration::from_secs(5), test)
+        .await
+        .expect("test did not finish within 5 s; both ends are waiting")
+}

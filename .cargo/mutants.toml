@@ -12,28 +12,15 @@ profile = "mutants"
 additional_cargo_test_args = ["--all-targets"]
 
 exclude_re = [
-    # next_line: the `n == 0` EOF check.  Replacing `==` with `!=` means EOF is
-    # never detected, so the `loop` re-reads a zero-byte result forever and the
-    # function never returns.  The test harness kills it, and cargo-mutants
-    # classifies the kill as TIMEOUT (exit 3), not CAUGHT.  No assertion-based
-    # test can catch it, because any test that calls `next_line` hangs with it.
-    #
-    # Note this mutant was previously CAUGHT rather than TIMEOUT, but only by
-    # accident: the old hand-rolled `\r\n` strip did `raw[raw.len() - 1]` on the
-    # now-empty buffer and panicked on the underflow.  `slice::strip_suffix`
-    # has no underflow to panic on, which is the point of using it.
-    "replace == with != in LineReader<R>::next_line",
-
     # next_line: replacing the whole body with a constant `Ok(Some(...))`.
-    # These two differ from the entries above — framing.rs *does* have tests that
-    # fail on them instantly (`reads_crlf_line` asserts the decoded line, and
-    # `eof_at_start_returns_none` asserts `is_none()`).  The kill is still
-    # reported as TIMEOUT because a mutated `next_line` that never yields `None`
-    # makes the connection-loop tests in connection.rs spin forever, so the test
-    # *process* never exits to report the failure the framing tests already
-    # produced.  Nothing about next_line itself can fix that; the read loops are
-    # correct to run until EOF.  Pre-dates the strip_suffix change (verified by
-    # running `cargo mutants --file src/irc/unreal/framing.rs` on both sides) —
-    # they only surface in CI now because the file appears in the PR diff.
+    # The framing.rs tests fail on these at once (`reads_crlf_line` asserts the
+    # decoded line, and `eof_at_start_returns_none` asserts `is_none()`).  The
+    # kill is still reported as TIMEOUT, because `do_handshake` and
+    # `run_session` call `next_line` in a loop.  The mutated `next_line`
+    # returns without awaiting anything, so those loops never yield.  The
+    # test's `within_deadline` timer then cannot fire, and the test process
+    # never exits to report the failure that the framing tests already found.
+    # Nothing about next_line itself can fix that; the read loops are correct
+    # to run until EOF.
     'replace LineReader<R>::next_line -> io::Result<Option<String>> with Ok\(Some',
 ]

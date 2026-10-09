@@ -36,14 +36,12 @@ fn bridged_channel_ids(bridges: &[BridgeEntry]) -> HashSet<u64> {
         .collect()
 }
 
-const INTENTS: GatewayIntents = GatewayIntents::from_bits_truncate(
-    GatewayIntents::GUILDS.bits()
-        | GatewayIntents::GUILD_MEMBERS.bits()
-        | GatewayIntents::GUILD_MESSAGES.bits()
-        | GatewayIntents::GUILD_PRESENCES.bits()
-        | GatewayIntents::MESSAGE_CONTENT.bits()
-        | GatewayIntents::DIRECT_MESSAGES.bits(),
-);
+const INTENTS: GatewayIntents = GatewayIntents::GUILDS
+    .union(GatewayIntents::GUILD_MEMBERS)
+    .union(GatewayIntents::GUILD_MESSAGES)
+    .union(GatewayIntents::GUILD_PRESENCES)
+    .union(GatewayIntents::MESSAGE_CONTENT)
+    .union(GatewayIntents::DIRECT_MESSAGES);
 
 /// Connect to the Discord Gateway and run the event loop.
 ///
@@ -55,8 +53,8 @@ const INTENTS: GatewayIntents = GatewayIntents::from_bits_truncate(
 /// Spawns a separate task to drain `cmd_rx` and send outgoing messages.
 // mutants::skip — defensive only: this function returns `!`, so cargo-mutants
 // cannot synthesise a return value and currently generates no mutants for it
-// (the `INTENTS` const below is outside the function and *is* mutated and
-// tested).  The attribute is retained so that if the signature ever stops being
+// (the `INTENTS` const above is outside the function and has its own
+// test).  The attribute is retained so that if the signature ever stops being
 // `-> !`, the resulting body-replacement mutant does not appear as a surprise
 // MISSED — exercising this function needs a live Gateway and bot token.
 #[mutants::skip]

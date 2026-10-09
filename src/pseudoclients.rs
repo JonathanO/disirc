@@ -1347,112 +1347,121 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Proptest
+    // Property tests
     // -------------------------------------------------------------------
 
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
-    proptest! {
-        /// For ANY input — arbitrary Unicode included — the sanitized nick
-        /// upholds every IRC nick invariant: non-empty, at most 30 bytes,
-        /// no leading digit, and only valid nick characters.
-        #[test]
-        fn sanitize_result_is_valid_irc_nick(s in ".{0,100}") {
-            let nick = sanitize_nick(&s);
-            prop_assert!(!nick.is_empty());
-            prop_assert!(nick.len() <= 30);
-            prop_assert!(!nick.starts_with(|c: char| c.is_ascii_digit()));
-            prop_assert!(nick.chars().all(is_valid_nick_char));
+    /// For ANY input — arbitrary Unicode included — the sanitized nick
+    /// upholds every IRC nick invariant: non-empty, at most 30 bytes,
+    /// no leading digit, and only valid nick characters.
+    #[hegel::test]
+    fn sanitize_result_is_valid_irc_nick(tc: TestCase) {
+        let s = tc.draw(gs::from_regex(".{0,100}"));
+        let nick = sanitize_nick(&s);
+        assert_ne!(nick, "");
+        assert!(nick.len() <= 30);
+        assert!(!nick.starts_with(|c: char| c.is_ascii_digit()));
+        assert!(nick.chars().all(is_valid_nick_char));
+    }
+
+    #[hegel::test]
+    fn uid_generator_always_unique(tc: TestCase) {
+        let ids = tc.draw(
+            gs::vecs(gs::integers::<u64>().max_value(999_999))
+                .min_size(1)
+                .max_size(99),
+        );
+        let mut uid_gen = UidGenerator::new("0D0");
+        let mut seen = std::collections::HashSet::new();
+        for &id in &ids {
+            let uid = uid_gen.get_or_create(id).to_string();
+            // Same ID always gets same UID
+            let uid2 = uid_gen.get_or_create(id).to_string();
+            assert_eq!(uid, uid2);
+            seen.insert(uid);
         }
+        // Unique IDs → unique UIDs
+        let unique_ids: std::collections::HashSet<_> = ids.iter().copied().collect();
+        assert_eq!(seen.len(), unique_ids.len());
+    }
 
-        #[test]
-        fn uid_generator_always_unique(ids in proptest::collection::vec(0u64..1_000_000, 1..100)) {
-            let mut uid_gen = UidGenerator::new("0D0");
-            let mut seen = std::collections::HashSet::new();
-            for &id in &ids {
-                let uid = uid_gen.get_or_create(id).to_string();
-                // Same ID always gets same UID
-                let uid2 = uid_gen.get_or_create(id).to_string();
-                assert_eq!(uid, uid2);
-                seen.insert(uid);
+    /// The core collision invariant: the resolved nick is either absent
+    /// from the existing set, or it is the guaranteed-unique UID
+    /// fallback (which is not checked against the set by design).  The
+    /// result always stays within nick length limits.  `take_chain`
+    /// pre-occupies the entire fallback chain so the resolver is forced
+    /// through every stage.
+    #[hegel::test]
+    fn resolve_nick_avoids_collisions_or_uses_uid_fallback(tc: TestCase) {
+        let base = tc.draw(gs::from_regex("[a-zA-Z][a-zA-Z0-9_]{0,29}"));
+        let discord_id = tc.draw(gs::integers::<u64>());
+        let taken = tc.draw(gs::vecs(gs::from_regex("[a-zA-Z][a-zA-Z0-9_]{0,29}")).max_size(7));
+        let take_chain = tc.draw(gs::booleans());
+        let mut nicks = NickSet::new();
+        for t in &taken {
+            nicks.insert(t);
+        }
+        if take_chain {
+            // Occupy base, base_, base__, base___, and the hex
+            // candidate, mirroring the resolver's fallback chain.
+            nicks.insert(&base);
+            let mut underscored = base.clone();
+            for _ in 0..3 {
+                underscored.push('_');
+                nicks.insert(&underscored);
             }
-            // Unique IDs → unique UIDs
-            let unique_ids: std::collections::HashSet<_> = ids.iter().copied().collect();
-            assert_eq!(seen.len(), unique_ids.len());
+            let hex_suffix = format!("{:08x}", discord_id & 0xFFFF_FFFF);
+            let mut hex_candidate = base.clone();
+            hex_candidate.truncate(22);
+            hex_candidate.push_str(&hex_suffix);
+            nicks.insert(&hex_candidate);
         }
+        let uid = format!("0D0{:06}", discord_id % 1_000_000);
+        let resolved = resolve_nick(&base, discord_id, &uid, &nicks);
+        assert_ne!(resolved, "");
+        assert!(resolved.len() <= 30, "too long: {resolved:?}");
+        assert!(
+            !nicks.contains(&resolved) || resolved == uid_nick(&uid),
+            "resolved nick {resolved:?} collides and is not the UID fallback"
+        );
+    }
 
-        /// The core collision invariant: the resolved nick is either absent
-        /// from the existing set, or it is the guaranteed-unique UID
-        /// fallback (which is not checked against the set by design).  The
-        /// result always stays within nick length limits.  `take_chain`
-        /// pre-occupies the entire fallback chain so the resolver is forced
-        /// through every stage.
-        #[test]
-        fn resolve_nick_avoids_collisions_or_uses_uid_fallback(
-            base in "[a-zA-Z][a-zA-Z0-9_]{0,29}",
-            discord_id in proptest::num::u64::ANY,
-            taken in prop::collection::vec("[a-zA-Z][a-zA-Z0-9_]{0,29}", 0..8),
-            take_chain in proptest::bool::ANY,
-        ) {
-            let mut nicks = NickSet::new();
-            for t in &taken {
-                nicks.insert(t);
-            }
-            if take_chain {
-                // Occupy base, base_, base__, base___, and the hex
-                // candidate, mirroring the resolver's fallback chain.
-                nicks.insert(&base);
-                let mut underscored = base.clone();
-                for _ in 0..3 {
-                    underscored.push('_');
-                    nicks.insert(&underscored);
-                }
-                let hex_suffix = format!("{:08x}", discord_id & 0xFFFF_FFFF);
-                let mut hex_candidate = base.clone();
-                hex_candidate.truncate(22);
-                hex_candidate.push_str(&hex_suffix);
-                nicks.insert(&hex_candidate);
-            }
-            let uid = format!("0D0{:06}", discord_id % 1_000_000);
-            let resolved = resolve_nick(&base, discord_id, &uid, &nicks);
-            prop_assert!(!resolved.is_empty());
-            prop_assert!(resolved.len() <= 30, "too long: {resolved:?}");
-            prop_assert!(
-                !nicks.contains(&resolved) || resolved == uid_nick(&uid),
-                "resolved nick {resolved:?} collides and is not the UID fallback"
-            );
-        }
+    /// Shape holds for ANY counter value, not just small ones — the old
+    /// range stopped at `2_000_000`, under 0.1% of the 36^6 UID space.
+    #[hegel::test]
+    fn encode_counter_always_6_chars(tc: TestCase) {
+        let n = tc.draw(gs::integers::<u64>());
+        let result = UidGenerator::encode_counter(n);
+        assert_eq!(result.len(), 6);
+        assert!(
+            result
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        );
+    }
 
-        /// Shape holds for ANY counter value, not just small ones — the old
-        /// range stopped at 2_000_000, under 0.1% of the 36^6 UID space.
-        #[test]
-        fn encode_counter_always_6_chars(n in proptest::num::u64::ANY) {
-            let result = UidGenerator::encode_counter(n);
-            prop_assert_eq!(result.len(), 6);
-            prop_assert!(result.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
-        }
-
-        /// Every counter in the UID space survives a base-36 decode.
-        ///
-        /// Injectivity is what actually makes UIDs unique, but it has to be
-        /// stated as a round-trip rather than "two random draws differ": two
-        /// values drawn from a 36^6 space collide with probability ~1e-8, so a
-        /// sampling formulation passes even for an encoder that discards a
-        /// character's worth of information.
-        #[test]
-        fn encode_counter_round_trips_within_uid_space(n in 0u64..UID_SPACE) {
-            let encoded = UidGenerator::encode_counter(n);
-            // Inverse of the base-36 ALPHABET: 'A'..='Z' => 0..=25, '0'..='9' => 26..=35.
-            let decoded = encoded.chars().try_fold(0u64, |acc, c| {
-                let digit = match c {
-                    'A'..='Z' => c as u64 - 'A' as u64,
-                    '0'..='9' => c as u64 - '0' as u64 + 26,
-                    _ => return None,
-                };
-                Some(acc * 36 + digit)
-            });
-            prop_assert_eq!(decoded, Some(n));
-        }
+    /// Every counter in the UID space survives a base-36 decode.
+    ///
+    /// Injectivity is what actually makes UIDs unique, but it has to be
+    /// stated as a round-trip rather than "two random draws differ": two
+    /// values drawn from a 36^6 space collide with probability ~1e-8, so a
+    /// sampling formulation passes even for an encoder that discards a
+    /// character's worth of information.
+    #[hegel::test]
+    fn encode_counter_round_trips_within_uid_space(tc: TestCase) {
+        let n = tc.draw(gs::integers::<u64>().max_value(UID_SPACE - 1));
+        let encoded = UidGenerator::encode_counter(n);
+        // Inverse of the base-36 ALPHABET: 'A'..='Z' => 0..=25, '0'..='9' => 26..=35.
+        let decoded = encoded.chars().try_fold(0u64, |acc, c| {
+            let digit = match c {
+                'A'..='Z' => c as u64 - 'A' as u64,
+                '0'..='9' => c as u64 - '0' as u64 + 26,
+                _ => return None,
+            };
+            Some(acc * 36 + digit)
+        });
+        assert_eq!(decoded, Some(n));
     }
 
     /// The encoder silently wraps past the 36^6 UID space rather than erroring.

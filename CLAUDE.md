@@ -92,7 +92,7 @@ Do not simplify them.
 | `thiserror` | Derive macros for typed error enums in each module |
 | `anyhow` | Error propagation with context chains in the application/connection layer |
 | `rand` | Random jitter for reconnect backoff |
-| `proptest` | Property-based testing (dev) |
+| `hegeltest` | Property-based testing with Hegel (dev). Uses the `static-engine` feature, so the engine is in `Cargo.lock` and `cargo deny` checks it |
 | `tracing-test` | Test harness for tracing assertions (dev) |
 | `cargo-deny` | Dependency audit — CVEs, licences, duplicates (CI) |
 
@@ -119,6 +119,7 @@ config.example.toml     — example config with dummy values (copy to config.tom
 SPECS.md                — spec implementation status tracker (links to per-spec dirs)
 TODO.md                 — high-level status index (links to per-spec TODOs)
 deny.toml               — cargo-deny configuration
+hegel.toml              — Hegel property-test settings (case counts per profile)
 ```
 
 ## Code style
@@ -126,7 +127,7 @@ deny.toml               — cargo-deny configuration
 - Unit tests go inline with `#[cfg(test)]` modules.
 - Integration tests that require real network connections or credentials must be annotated `#[ignore]` until a mock harness exists.
 - Integration tests that don't require external connections go in `tests/` (e.g., `tests/config.rs`, `tests/formatting.rs`).
-- Use **property-based tests** (`proptest`) wherever a function has edge-case-prone input domains — formatting transforms, string validation, message splitting, and routing logic are all good candidates. Prefer `proptest!` macros over hand-picked example inputs for these cases. When fixing a bug, write the property test **before** the fix — a good property (e.g., "no-`@`-input is identity", "underscore-delimited word mid-sentence always converts") would have caught the class of bug, not just the specific instance. The property test should fail on the unfixed code, confirming it captures the defect.
+- Use **property-based tests** (Hegel, crate `hegeltest`) wherever a function has edge-case-prone input domains — formatting transforms, string validation, message splitting, and routing logic are all good candidates. Prefer `#[hegel::test]` functions over hand-picked example inputs for these cases. Import `hegel::prelude::*`. Hegel regexes use Python `re` syntax, which has no Unicode classes such as `\PC`; use `gs::text()` with `exclude_categories` instead. To keep a known failing input, add `#[hegel::explicit_test_case(...)]`. `hegel.toml` sets the case count for each profile. When fixing a bug, write the property test **before** the fix — a good property (e.g., "no-`@`-input is identity", "underscore-delimited word mid-sentence always converts") would have caught the class of bug, not just the specific instance. The property test should fail on the unfixed code, confirming it captures the defect.
 - **Async event serialization**: IRC and Discord events must be funnelled through `tokio::sync::mpsc` channels to a single processing task per direction. Do not `tokio::spawn` a new task per incoming event — concurrent handlers will race on shared state.
 - `#![deny(unsafe_code)]` must appear at the crate root, and `unsafe_code = "forbid"` is set in `[lints.rust]` in `Cargo.toml`. There is no justified use of `unsafe` in this project.
 

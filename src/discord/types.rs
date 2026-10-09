@@ -179,7 +179,7 @@ pub(crate) fn webhook_id_from_url(url: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
     #[test]
     fn is_non_offline_covers_all_variants() {
@@ -265,11 +265,10 @@ mod tests {
         );
     }
 
-    proptest! {
-        #[test]
-        fn webhook_id_roundtrips(id in 0u64..=u64::MAX) {
-            let url = format!("https://discord.com/api/webhooks/{id}/sometoken");
-            prop_assert_eq!(webhook_id_from_url(&url), Some(id));
-        }
+    #[hegel::test]
+    fn webhook_id_roundtrips(tc: TestCase) {
+        let id = tc.draw(gs::integers::<u64>());
+        let url = format!("https://discord.com/api/webhooks/{id}/sometoken");
+        assert_eq!(webhook_id_from_url(&url), Some(id));
     }
 }

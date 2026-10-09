@@ -1057,47 +1057,48 @@ mod tests {
     // Robustness: translate_inbound must never panic on remote input
     // -----------------------------------------------------------------------
 
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
     /// Prefixes an uplink could send: well-formed SIDs/UIDs, arbitrary
     /// non-control Unicode (multibyte chars can straddle any byte offset),
     /// and a fixed worst case whose third byte falls inside a multibyte
     /// character.
-    fn arb_prefix() -> impl Strategy<Value = String> {
-        prop_oneof![
-            "[A-Za-z0-9]{1,9}",
-            "\\PC{1,6}",
-            Just("a\u{20AC}b".to_string()),
-        ]
+    fn arb_prefix() -> impl PrintableGenerator<String> {
+        hegel::one_of!(
+            gs::from_regex("[A-Za-z0-9]{1,9}"),
+            crate::formatting::test_support::non_control_text(1, 6),
+            gs::just("a\u{20AC}b".to_string()),
+        )
     }
 
-    proptest! {
-        /// Any prefix combined with any prefix-consuming command must pass
-        /// through parse → translate_inbound without panicking.
-        #[test]
-        fn translate_inbound_never_panics_on_any_prefix(
-            prefix in arb_prefix(),
-            tail in prop::sample::select(vec![
-                "UID Alice 1 1700000000 alice discord.invalid 001AAAAAA 0 +i * * * :Alice Smith",
-                "NICK Bob 1700000001",
-                "QUIT :bye",
-                "PART #general :out",
-                "KILL 002AAAAAA :reason",
-                "KICK #general 002AAAAAA :spam",
-                "PRIVMSG #general :hello",
-                "NOTICE #general :notice",
-                "AWAY :brb",
-                "SVSNICK 001AAAAAA newnick",
-                "EOS",
-                "SQUIT DEF :netsplit",
-                "SID irc.example.net 1 DEF :desc",
-                "SJOIN 1700000000 #general + :@001AAAAAA",
-            ]),
-        ) {
-            let line = format!(":{prefix} {tail}");
-            if let Ok(msg) = IrcMessage::parse(&line) {
-                let _ = translate_inbound(&msg);
-            }
+    /// Any prefix combined with any prefix-consuming command must pass
+    /// through parse → `translate_inbound` without panicking.
+    #[hegel::test]
+    #[hegel::explicit_test_case(
+        prefix = "a\u{20AC}b".to_string(),
+        tail = "UID Alice 1 1700000000 alice discord.invalid 001AAAAAA 0 +i * * * :Alice Smith",
+    )]
+    fn translate_inbound_never_panics_on_any_prefix(tc: TestCase) {
+        let prefix = tc.draw(arb_prefix());
+        let tail = tc.draw(gs::sampled_from(vec![
+            "UID Alice 1 1700000000 alice discord.invalid 001AAAAAA 0 +i * * * :Alice Smith",
+            "NICK Bob 1700000001",
+            "QUIT :bye",
+            "PART #general :out",
+            "KILL 002AAAAAA :reason",
+            "KICK #general 002AAAAAA :spam",
+            "PRIVMSG #general :hello",
+            "NOTICE #general :notice",
+            "AWAY :brb",
+            "SVSNICK 001AAAAAA newnick",
+            "EOS",
+            "SQUIT DEF :netsplit",
+            "SID irc.example.net 1 DEF :desc",
+            "SJOIN 1700000000 #general + :@001AAAAAA",
+        ]));
+        let line = format!(":{prefix} {tail}");
+        if let Ok(msg) = IrcMessage::parse(&line) {
+            let _ = translate_inbound(&msg);
         }
     }
 

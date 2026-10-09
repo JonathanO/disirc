@@ -6,7 +6,16 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-None.
+Move property tests from proptest to Hegel (branch `test/hegel`, started 2026-10-08):
+
+- [x] Add `hegeltest` with the `static-engine` feature; remove `proptest`
+- [x] Convert all `proptest!` tests to `#[hegel::test]`; keep the short saved
+      proptest failures as `#[hegel::explicit_test_case]`
+- [x] Add `hegel.toml` (1000 cases for the `development` and `ci` profiles)
+- [x] Update CLAUDE.md, CONTRIBUTING.md, and add `research/hegel-property-testing.md`
+- [ ] Mutation testing on the changed modules (partial local run, 212 of 442
+      mutants: 0 missed, 3 timeouts in `discord/send.rs`; stopped for low memory)
+- [ ] Find new Hegel test candidates (analysis first, then agree the list)
 
 ## Completed work
 

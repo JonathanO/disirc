@@ -1692,104 +1692,123 @@ mod tests {
 
     // ---- Property-based round-trips ----------------------------------------
 
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
-    proptest! {
-        #[test]
-        fn proptest_privmsg_roundtrip(
-            target in "#[a-zA-Z0-9]{1,30}",
-            text in "[a-zA-Z0-9 ,.!?]{0,200}",
-        ) {
-            let original = msg(IrcCommand::Privmsg { target, text });
-            let wire = original.to_wire().expect("valid privmsg should serialize");
-            let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
-            prop_assert_eq!(parsed, original);
-        }
+    #[hegel::test]
+    fn privmsg_roundtrip(tc: TestCase) {
+        let target = tc.draw(gs::from_regex("#[a-zA-Z0-9]{1,30}"));
+        let text = tc.draw(gs::from_regex("[a-zA-Z0-9 ,.!?]{0,200}"));
+        let original = msg(IrcCommand::Privmsg { target, text });
+        let wire = original.to_wire().expect("valid privmsg should serialize");
+        let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
+        assert_eq!(parsed, original);
+    }
 
-        #[test]
-        fn proptest_uid_roundtrip(
-            nick in "[a-zA-Z][a-zA-Z0-9]{0,15}",
-            realname in "[a-zA-Z0-9 ,.!?]{1,50}",
-            ts in 0u64..=u64::MAX,
-        ) {
-            let mut p = uid();
-            p.nick = nick;
-            p.realname = realname;
-            p.timestamp = ts;
-            let original = msg(IrcCommand::Uid(p));
-            let wire = original.to_wire().expect("valid uid should serialize");
-            let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
-            prop_assert_eq!(parsed, original);
-        }
+    #[hegel::test]
+    fn uid_roundtrip(tc: TestCase) {
+        let nick = tc.draw(gs::from_regex("[a-zA-Z][a-zA-Z0-9]{0,15}"));
+        let realname = tc.draw(gs::from_regex("[a-zA-Z0-9 ,.!?]{1,50}"));
+        let ts = tc.draw(gs::integers::<u64>());
+        let mut p = uid();
+        p.nick = nick;
+        p.realname = realname;
+        p.timestamp = ts;
+        let original = msg(IrcCommand::Uid(p));
+        let wire = original.to_wire().expect("valid uid should serialize");
+        let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
+        assert_eq!(parsed, original);
+    }
 
-        #[test]
-        fn proptest_tag_value_roundtrip(
-            // Characters that need escaping and printable ASCII
-            val in "[a-zA-Z0-9 ;\\\\]{0,50}",
-        ) {
-            let original = IrcMessage {
-                tags: vec![("key".to_string(), Some(val))],
-                prefix: None,
-                command: IrcCommand::Eos,
-            };
-            let wire = original.to_wire().expect("should serialize");
-            let parsed = IrcMessage::parse(&wire).expect("should parse back");
-            prop_assert_eq!(parsed, original);
-        }
+    #[hegel::test]
+    fn tag_value_roundtrip(tc: TestCase) {
+        // Characters that need escaping and printable ASCII
+        let val = tc.draw(gs::from_regex("[a-zA-Z0-9 ;\\\\]{0,50}"));
+        let original = IrcMessage {
+            tags: vec![("key".to_string(), Some(val))],
+            prefix: None,
+            command: IrcCommand::Eos,
+        };
+        let wire = original.to_wire().expect("should serialize");
+        let parsed = IrcMessage::parse(&wire).expect("should parse back");
+        assert_eq!(parsed, original);
+    }
 
-        /// SJOIN must roundtrip regardless of whether modes are present.
-        /// Empty modes means no modes parameter on the wire.
-        #[test]
-        fn proptest_sjoin_roundtrip(
-            ts in 0u64..=4_000_000_000u64,
-            channel in "#[a-zA-Z0-9]{1,20}",
-            modes in prop::option::of("\\+[ntsipmklr]{0,5}"),
-            member_count in 1usize..=5,
-        ) {
-            let members: Vec<String> = (0..member_count)
-                .map(|i| format!("ABC{i:06}"))
-                .collect();
-            let original = IrcMessage {
-                tags: vec![],
-                prefix: Some("001".to_string()),
-                command: IrcCommand::Sjoin(SjoinParams {
-                    timestamp: ts,
-                    channel,
-                    modes: modes.unwrap_or_default(),
-                    members,
-                }),
-            };
-            let wire = original.to_wire().expect("valid sjoin should serialize");
-            let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
-            prop_assert_eq!(parsed, original);
-        }
+    /// SJOIN must roundtrip regardless of whether modes are present.
+    /// Empty modes means no modes parameter on the wire.
+    #[hegel::test]
+    fn sjoin_roundtrip(tc: TestCase) {
+        let ts = tc.draw(gs::integers::<u64>().max_value(4_000_000_000u64));
+        let channel = tc.draw(gs::from_regex("#[a-zA-Z0-9]{1,20}"));
+        let modes = tc.draw(gs::optional(gs::from_regex("\\+[ntsipmklr]{0,5}")));
+        let member_count = tc.draw(gs::integers::<usize>().min_value(1usize).max_value(5));
+        let members: Vec<String> = (0..member_count).map(|i| format!("ABC{i:06}")).collect();
+        let original = IrcMessage {
+            tags: vec![],
+            prefix: Some("001".to_string()),
+            command: IrcCommand::Sjoin(SjoinParams {
+                timestamp: ts,
+                channel,
+                modes: modes.unwrap_or_default(),
+                members,
+            }),
+        };
+        let wire = original.to_wire().expect("valid sjoin should serialize");
+        let parsed = IrcMessage::parse(&wire).expect("serialized wire should parse");
+        assert_eq!(parsed, original);
+    }
 
-        /// The parser consumes remote input: any string must parse or
-        /// error, never panic.
-        #[test]
-        fn parse_never_panics_on_arbitrary_input(line in "\\PC{0,300}") {
-            let _ = IrcMessage::parse(&line);
-        }
+    /// The parser consumes remote input: any string must parse or
+    /// error, never panic. Control characters are included, because a
+    /// remote server can send any of them.
+    #[hegel::test]
+    fn parse_never_panics_on_arbitrary_input(tc: TestCase) {
+        let line = tc.draw(gs::text().max_size(300));
+        let _ = IrcMessage::parse(&line);
+    }
 
-        /// Adversarial lines composed from protocol fragments — tag/prefix
-        /// sigils, escapes, multibyte text, stray CR/LF, and raw control
-        /// bytes — must never panic the parser.
-        #[test]
-        fn parse_never_panics_on_composed_fragments(
-            parts in prop::collection::vec(
-                prop::sample::select(vec![
-                    "@", "@time=", "@a=b;c", ";", "=", ":", " ", "  ",
-                    ":prefix", ":a\u{20AC}b", "\u{FFFD}", "\\s", "\\\\", "\\:",
-                    "UID", "SJOIN", "PRIVMSG", "PING", "EOS", "SERVER",
-                    "#chan", "1700000000", "+i", "*", "trailing text",
-                    "\r", "\n", "\r\n", "\t", "\x01", "\x00",
-                ]),
-                0..12,
-            )
-        ) {
-            let line = parts.concat();
-            let _ = IrcMessage::parse(&line);
-        }
+    /// Adversarial lines composed from protocol fragments — tag/prefix
+    /// sigils, escapes, multibyte text, stray CR/LF, and raw control
+    /// bytes — must never panic the parser.
+    #[hegel::test]
+    fn parse_never_panics_on_composed_fragments(tc: TestCase) {
+        let parts = tc.draw(
+            gs::vecs(gs::sampled_from(vec![
+                "@",
+                "@time=",
+                "@a=b;c",
+                ";",
+                "=",
+                ":",
+                " ",
+                "  ",
+                ":prefix",
+                ":a\u{20AC}b",
+                "\u{FFFD}",
+                "\\s",
+                "\\\\",
+                "\\:",
+                "UID",
+                "SJOIN",
+                "PRIVMSG",
+                "PING",
+                "EOS",
+                "SERVER",
+                "#chan",
+                "1700000000",
+                "+i",
+                "*",
+                "trailing text",
+                "\r",
+                "\n",
+                "\r\n",
+                "\t",
+                "\x01",
+                "\x00",
+            ]))
+            .max_size(11),
+        );
+        let line = parts.concat();
+        let _ = IrcMessage::parse(&line);
     }
 
     // ---- Boundary: 4096-byte line limit ------------------------------------

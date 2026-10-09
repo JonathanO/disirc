@@ -1,0 +1,10 @@
+# Settings for the Hegel property tests. Each section merges over the shipped
+# profile of the same name. The `ci` profile stays derandomized and does not
+# use the failure database, so CI runs are repeatable.
+# Reference: https://docs.rs/hegeltest/latest/hegel/docs/settings/index.html
+
+[profiles.development]
+test_cases = 1000
+
+[profiles.ci]
+test_cases = 1000

@@ -367,7 +367,7 @@ pub(crate) async fn process_discord_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
     // --- apply_reload ---
 
@@ -459,29 +459,28 @@ mod tests {
         assert_eq!(out, "é".repeat(32));
     }
 
-    proptest! {
-        #[test]
-        /// Output length is the input length clamped to [2, 32], the input's
-        /// leading characters survive, and any padding is underscores.
-        ///
-        /// The previous version asserted only the length bounds, which a
-        /// constant `"__"` also satisfies.
-        fn sanitize_clamps_length_and_keeps_prefix(nick in ".*") {
-            let out = sanitize_webhook_username(&nick);
-            let in_len = nick.chars().count();
+    #[hegel::test]
+    /// Output length is the input length clamped to [2, 32], the input's
+    /// leading characters survive, and any padding is underscores.
+    ///
+    /// The previous version asserted only the length bounds, which a
+    /// constant `"__"` also satisfies.
+    fn sanitize_clamps_length_and_keeps_prefix(tc: TestCase) {
+        let nick = tc.draw(gs::from_regex(".*"));
+        let out = sanitize_webhook_username(&nick);
+        let in_len = nick.chars().count();
 
-            prop_assert_eq!(out.chars().count(), in_len.clamp(2, 32));
+        assert_eq!(out.chars().count(), in_len.clamp(2, 32));
 
-            let kept: String = nick.chars().take(32).collect();
-            prop_assert!(
-                out.starts_with(&kept),
-                "output {out:?} dropped input prefix {kept:?}"
-            );
-            prop_assert!(
-                out.chars().skip(in_len).all(|c| c == '_'),
-                "padding in {out:?} must be underscores only"
-            );
-        }
+        let kept: String = nick.chars().take(32).collect();
+        assert!(
+            out.starts_with(&kept),
+            "output {out:?} dropped input prefix {kept:?}"
+        );
+        assert!(
+            out.chars().skip(in_len).all(|c| c == '_'),
+            "padding in {out:?} must be underscores only"
+        );
     }
 
     // --- suppress_mentions ---
@@ -534,47 +533,41 @@ mod tests {
 
     /// Text stitched from mention trigger words (in mixed case), bare `@`s,
     /// and plain fragments — the shapes most likely to defeat suppression.
-    fn mentionish_text() -> impl Strategy<Value = String> {
-        prop::collection::vec(
-            prop_oneof![
-                3 => Just("@everyone".to_string()),
-                2 => Just("@here".to_string()),
-                1 => Just("@EvErYoNe".to_string()),
-                1 => Just("@HeRe".to_string()),
-                2 => Just("@".to_string()),
-                3 => "[a-zA-Z0-9 .!]{0,10}",
-            ],
-            0..8,
-        )
-        .prop_map(|parts| parts.concat())
+    fn mentionish_text() -> impl PrintableGenerator<String> {
+        gs::vecs(hegel::one_of!(
+            gs::sampled_from(vec!["@everyone", "@here", "@EvErYoNe", "@HeRe", "@"])
+                .map(str::to_string),
+            gs::from_regex("[a-zA-Z0-9 .!]{0,10}"),
+        ))
+        .max_size(7)
+        .map(|parts: Vec<String>| parts.concat())
     }
 
-    proptest! {
-        /// Text with no @everyone or @here must pass through unchanged.
-        #[test]
-        fn suppress_is_noop_without_trigger_words(
-            s in "[^@]*" // no '@' at all
-        ) {
-            prop_assert_eq!(suppress_mentions(&s), s);
-        }
+    /// Text with no @everyone or @here must pass through unchanged.
+    #[hegel::test]
+    fn suppress_is_noop_without_trigger_words(tc: TestCase) {
+        let s = tc.draw(gs::from_regex("[^@]*"));
+        assert_eq!(suppress_mentions(&s), s);
+    }
 
-        /// No case variant of `@everyone` / `@here` survives suppression —
-        /// this is the mandatory IRC→Discord safety rule, so it must hold
-        /// for every composition of trigger words and surrounding text.
-        #[test]
-        fn suppress_leaves_no_pingable_mention(text in mentionish_text()) {
-            let out = suppress_mentions(&text).to_lowercase();
-            prop_assert!(!out.contains("@everyone"), "output still pings: {out:?}");
-            prop_assert!(!out.contains("@here"), "output still pings: {out:?}");
-        }
+    /// No case variant of `@everyone` / `@here` survives suppression —
+    /// this is the mandatory IRC→Discord safety rule, so it must hold
+    /// for every composition of trigger words and surrounding text.
+    #[hegel::test]
+    fn suppress_leaves_no_pingable_mention(tc: TestCase) {
+        let text = tc.draw(mentionish_text());
+        let out = suppress_mentions(&text).to_lowercase();
+        assert!(!out.contains("@everyone"), "output still pings: {out:?}");
+        assert!(!out.contains("@here"), "output still pings: {out:?}");
+    }
 
-        /// Suppression is idempotent: a second pass never inserts another
-        /// zero-width space.
-        #[test]
-        fn suppress_is_idempotent(text in mentionish_text()) {
-            let once = suppress_mentions(&text);
-            prop_assert_eq!(suppress_mentions(&once), once.clone());
-        }
+    /// Suppression is idempotent: a second pass never inserts another
+    /// zero-width space.
+    #[hegel::test]
+    fn suppress_is_idempotent(tc: TestCase) {
+        let text = tc.draw(mentionish_text());
+        let once = suppress_mentions(&text);
+        assert_eq!(suppress_mentions(&once), once.clone());
     }
 
     // --- snapshot_from_cache ---

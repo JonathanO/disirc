@@ -594,13 +594,13 @@ mod tests {
         assert!(result.chars().count() <= DISCORD_MAX_CHARS);
     }
 
-    // -- Proptest ------------------------------------------------------------
+    // -- Property tests ------------------------------------------------------
 
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
-    /// Strategy that generates strings rich in IRC control codes.
-    fn irc_control_strategy() -> impl Strategy<Value = String> {
-        let atoms = prop::sample::select(vec![
+    /// Generator for strings rich in IRC control codes.
+    fn irc_control_strategy() -> impl PrintableGenerator<String> {
+        let atoms = gs::sampled_from(vec![
             "\x02",
             "\x1d",
             "\x1f",
@@ -618,203 +618,211 @@ mod tests {
             "\x7f",
             "\x01",
         ]);
-        prop::collection::vec(atoms, 0..20).prop_map(|parts| parts.join(""))
+        gs::vecs(atoms)
+            .max_size(19)
+            .map(|parts: Vec<&str>| parts.join(""))
     }
 
-    proptest! {
-        /// Arbitrary Unicode text without `@` must pass through `convert_irc_mentions`
-        /// completely unchanged.
-        #[test]
-        fn irc_mentions_no_at_sign_is_identity(text in "[^@]{0,200}") {
-            let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
-            prop_assert_eq!(
-                &result, &text,
-                "text without @ must survive unchanged"
-            );
-        }
+    /// Arbitrary Unicode text without `@` must pass through `convert_irc_mentions`
+    /// completely unchanged.
+    #[hegel::test]
+    fn irc_mentions_no_at_sign_is_identity(tc: TestCase) {
+        let text = tc.draw(gs::from_regex("[^@]{0,200}"));
+        let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
+        assert_eq!(&result, &text, "text without @ must survive unchanged");
+    }
 
-        /// Text with frequent `@` signs must never corrupt surrounding Unicode.
-        #[test]
-        fn irc_mentions_at_heavy_unicode_never_corrupts(
-            parts in proptest::collection::vec(
-                proptest::prop_oneof![
-                    3 => Just("@".to_string()),
-                    2 => "[a-zA-Z_]{1,8}".prop_map(|s| format!("@{s}")),
-                    3 => "\\PC{1,20}",  // arbitrary non-control Unicode
-                ],
-                1..=10,
-            )
-        ) {
-            let text = parts.join("");
-            let result = convert_irc_mentions(&text, &StubIrcResolver);
-            for ch in text.chars() {
-                if !ch.is_ascii_alphanumeric() && ch != '@' {
-                    prop_assert!(
-                        result.contains(ch),
-                        "character {ch:?} (U+{:04X}) was lost from output.\n  input:  {text:?}\n  output: {result:?}",
-                        ch as u32
-                    );
-                }
-            }
-        }
-
-        /// With a resolve-all resolver, `@nick` at word boundaries must be
-        /// converted to `<@42>`.  Mid-word `@` must pass through unchanged.
-        #[test]
-        fn irc_mentions_boundary_resolved_when_resolver_matches(
-            parts in proptest::collection::vec(
-                proptest::prop_oneof![
-                    // Space-separated @mention (word boundary)
-                    2 => "[a-zA-Z0-9]{1,10}".prop_map(|s| format!(" @{s}")),
-                    // Plain text without @ or angle brackets
-                    3 => "[^@<>]{1,15}",
-                    // Bare @ that won't start a mention
-                    1 => Just(" @ ".to_string()),
-                ],
-                1..=8,
-            )
-        ) {
-            let text = parts.join("").trim().to_string();
-            if text.is_empty() { return Ok(()); }
-            let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
-            // The output must be valid — no unclosed <@ tokens.
-            let open_count = result.matches("<@").count();
-            let close_after_mention = result.matches("<@42>").count();
-            prop_assert!(
-                open_count == close_after_mention,
-                "mismatched <@...> tokens in output: {:?}\n  input: {:?}",
-                result, text
-            );
-        }
-
-        #[test]
-        fn irc_control_roundtrip_never_panics(text in irc_control_strategy()) {
-            let result = irc_to_discord_formatting(&text);
-            assert!(!result.chars().any(|c|
-                matches!(c, '\x02' | '\x1d' | '\x1f' | '\x1e' | '\x16' | '\x03' | '\x0f')
-            ));
-            assert!(!result.chars().any(char::is_control));
-        }
-
-        /// `irc_to_discord_formatting` on full Unicode input: control chars
-        /// must be stripped, all other text must survive intact.
-        #[test]
-        fn irc_to_discord_preserves_unicode_text(text in "\\PC{0,200}") {
-            let result = irc_to_discord_formatting(&text);
-            prop_assert_eq!(
-                &result, &text,
-                "text without control characters must pass through unchanged"
-            );
-        }
-
-        /// `irc_to_discord_formatting` must strip all control characters and
-        /// preserve all non-control, non-digit-after-color characters.
-        #[test]
-        fn irc_to_discord_strips_controls_keeps_text(
-            parts in proptest::collection::vec(
-                proptest::prop_oneof![
-                    3 => "[a-zA-Z\u{00C0}-\u{024F}\u{4E00}-\u{4E10} ,.!?]{1,20}",
-                    2 => proptest::strategy::Just("\x02".to_string()),
-                    1 => proptest::strategy::Just("\x1d".to_string()),
-                    1 => proptest::strategy::Just("\x1f".to_string()),
-                    1 => proptest::strategy::Just("\x03 ".to_string()),
-                    1 => proptest::strategy::Just("\x0f".to_string()),
-                ],
-                1..=10,
-            )
-        ) {
-            let text = parts.join("");
-            let result = irc_to_discord_formatting(&text);
-            prop_assert!(
-                !result.chars().any(char::is_control),
-                "control characters must be stripped.\n  input:  {text:?}\n  output: {result:?}"
-            );
-            for ch in text.chars() {
-                if !ch.is_control() {
-                    prop_assert!(
-                        result.contains(ch),
-                        "non-control char {ch:?} was lost.\n  input:  {text:?}\n  output: {result:?}"
-                    );
-                }
-            }
-        }
-
-        #[test]
-        fn truncate_respects_limit(text in ".{0,5000}") {
-            let result = truncate_for_discord(&text);
-            assert!(result.chars().count() <= DISCORD_MAX_CHARS);
-        }
-
-        /// An input of N ASCII chars with no spaces and no emoji must always
-        /// be truncated to exactly `DISCORD_MAX_CHARS` chars (body +
-        /// truncation suffix) when N > DISCORD_MAX_CHARS.  Catches
-        /// off-by-one mutations of the grapheme loop's break condition.
-        #[test]
-        fn truncate_ascii_no_spaces_fills_the_limit(
-            n in (DISCORD_MAX_CHARS + 1)..5000usize
-        ) {
-            let text = "a".repeat(n);
-            let result = truncate_for_discord(&text);
-            prop_assert!(
-                result.chars().count() == DISCORD_MAX_CHARS,
-                "input of {} ASCII chars with no spaces must truncate to \
-                 exactly {} chars, got {}",
-                n, DISCORD_MAX_CHARS, result.chars().count()
-            );
-        }
-
-        /// Truncation must not split an extended grapheme cluster.  Use
-        /// a no-spaces adversarial strategy so truncation can't fall back
-        /// to a word boundary — the cut must actually land in the
-        /// grapheme-heavy region.
-        #[test]
-        fn truncate_preserves_grapheme_clusters(
-            text in crate::formatting::test_support::adversarial_unicode_no_spaces(600)
-        ) {
-            use unicode_segmentation::UnicodeSegmentation;
-            let result = truncate_for_discord(&text);
-            // Every grapheme cluster in the output must be a complete
-            // grapheme cluster in the original input.  In practice we
-            // check that the set of graphemes in the output is a prefix-
-            // subset of the input's graphemes (ignoring the trailing
-            // truncation suffix, which we strip if present).
-            let input_graphemes: Vec<&str> = text.graphemes(true).collect();
-            let output = result.as_ref();
-            // Strip the truncation suffix before comparison, if present.
-            let body = output
-                .strip_suffix("\u{2026} [truncated]")
-                .unwrap_or(output);
-            let output_graphemes: Vec<&str> = body.graphemes(true).collect();
-            for (i, g) in output_graphemes.iter().enumerate() {
-                prop_assert_eq!(
-                    *g, input_graphemes[i],
-                    "grapheme cluster at output position {} was split; \
-                     input: {:?}, output: {:?}",
-                    i, text, body
+    /// Text with frequent `@` signs must never corrupt surrounding Unicode.
+    #[hegel::test]
+    #[hegel::explicit_test_case(parts = vec!["<".to_string(), "@".to_string()])]
+    fn irc_mentions_at_heavy_unicode_never_corrupts(tc: TestCase) {
+        let parts = tc.draw(
+            gs::vecs(hegel::one_of!(
+                gs::just("@".to_string()),
+                gs::from_regex("[a-zA-Z_]{1,8}").map(|s| format!("@{s}")),
+                // arbitrary non-control Unicode
+                crate::formatting::test_support::non_control_text(1, 20),
+            ))
+            .min_size(1)
+            .max_size(10),
+        );
+        let text = parts.join("");
+        let result = convert_irc_mentions(&text, &StubIrcResolver);
+        for ch in text.chars() {
+            if !ch.is_ascii_alphanumeric() && ch != '@' {
+                assert!(
+                    result.contains(ch),
+                    "character {ch:?} (U+{:04X}) was lost from output.\n  input:  {text:?}\n  output: {result:?}",
+                    ch as u32
                 );
             }
         }
+    }
 
-        #[test]
-        fn ping_fix_preserves_content(nick in "[a-zA-Z0-9_]{1,30}") {
-            let fixed = ping_fix_nick(&nick);
-            let without_zwsp: String = fixed.replace('\u{200B}', "");
-            assert_eq!(without_zwsp, nick);
+    /// With a resolve-all resolver, `@nick` at word boundaries must be
+    /// converted to `<@42>`.  Mid-word `@` must pass through unchanged.
+    #[hegel::test]
+    fn irc_mentions_boundary_resolved_when_resolver_matches(tc: TestCase) {
+        let parts = tc.draw(
+            gs::vecs(hegel::one_of!(
+                // Space-separated @mention (word boundary)
+                gs::from_regex("[a-zA-Z0-9]{1,10}").map(|s| format!(" @{s}")),
+                // Plain text without @ or angle brackets
+                gs::from_regex("[^@<>]{1,15}"),
+                // Bare @ that won't start a mention
+                gs::just(" @ ".to_string()),
+            ))
+            .min_size(1)
+            .max_size(8),
+        );
+        let text = parts.join("").trim().to_string();
+        if text.is_empty() {
+            return;
         }
+        let result = convert_irc_mentions(&text, &MatchAllIrcResolver);
+        // The output must be valid — no unclosed <@ tokens.
+        let open_count = result.matches("<@").count();
+        let close_after_mention = result.matches("<@42>").count();
+        assert!(
+            open_count == close_after_mention,
+            "mismatched <@...> tokens in output: {result:?}\n  input: {text:?}"
+        );
+    }
 
-        /// `@` followed by ANY nick built from valid IRC nick characters
-        /// (leading char alphanumeric, as the boundary check requires)
-        /// resolves as a mention consuming the entire nick — every special
-        /// character `_ - [ ] \ ^ { } | `` included.
-        #[test]
-        fn irc_mention_any_valid_nick_resolves(
-            first in "[a-zA-Z0-9]",
-            rest in "[a-zA-Z0-9_\\-\\[\\]\\\\^{}|`]{0,15}",
-        ) {
-            let input = format!("@{first}{rest} end");
-            let result = convert_irc_mentions(&input, &MatchAllIrcResolver);
-            prop_assert_eq!(result, "<@42> end");
+    #[hegel::test]
+    fn irc_control_roundtrip_never_panics(tc: TestCase) {
+        let text = tc.draw(irc_control_strategy());
+        let result = irc_to_discord_formatting(&text);
+        assert!(!result.chars().any(|c| matches!(
+            c,
+            '\x02' | '\x1d' | '\x1f' | '\x1e' | '\x16' | '\x03' | '\x0f'
+        )));
+        assert!(!result.chars().any(char::is_control));
+    }
+
+    /// `irc_to_discord_formatting` on full Unicode input: control chars
+    /// must be stripped, all other text must survive intact.
+    #[hegel::test]
+    fn irc_to_discord_preserves_unicode_text(tc: TestCase) {
+        let text = tc.draw(crate::formatting::test_support::non_control_text(0, 200));
+        let result = irc_to_discord_formatting(&text);
+        assert_eq!(
+            &result, &text,
+            "text without control characters must pass through unchanged"
+        );
+    }
+
+    /// `irc_to_discord_formatting` must strip all control characters and
+    /// preserve all non-control, non-digit-after-color characters.
+    #[hegel::test]
+    fn irc_to_discord_strips_controls_keeps_text(tc: TestCase) {
+        let parts = tc.draw(
+            gs::vecs(hegel::one_of!(
+                gs::from_regex("[a-zA-Z\u{00C0}-\u{024F}\u{4E00}-\u{4E10} ,.!?]{1,20}"),
+                gs::just("\x02".to_string()),
+                gs::just("\x1d".to_string()),
+                gs::just("\x1f".to_string()),
+                gs::just("\x03 ".to_string()),
+                gs::just("\x0f".to_string()),
+            ))
+            .min_size(1)
+            .max_size(10),
+        );
+        let text = parts.join("");
+        let result = irc_to_discord_formatting(&text);
+        assert!(
+            !result.chars().any(char::is_control),
+            "control characters must be stripped.\n  input:  {text:?}\n  output: {result:?}"
+        );
+        for ch in text.chars() {
+            if !ch.is_control() {
+                assert!(
+                    result.contains(ch),
+                    "non-control char {ch:?} was lost.\n  input:  {text:?}\n  output: {result:?}"
+                );
+            }
         }
+    }
+
+    #[hegel::test]
+    fn truncate_respects_limit(tc: TestCase) {
+        let text = tc.draw(gs::from_regex(".{0,5000}"));
+        let result = truncate_for_discord(&text);
+        assert!(result.chars().count() <= DISCORD_MAX_CHARS);
+    }
+
+    /// An input of N ASCII chars with no spaces and no emoji must always
+    /// be truncated to exactly `DISCORD_MAX_CHARS` chars (body +
+    /// truncation suffix) when N > `DISCORD_MAX_CHARS`.  Catches
+    /// off-by-one mutations of the grapheme loop's break condition.
+    #[hegel::test]
+    fn truncate_ascii_no_spaces_fills_the_limit(tc: TestCase) {
+        let n = tc.draw(
+            gs::integers::<usize>()
+                .min_value(DISCORD_MAX_CHARS + 1)
+                .max_value(4999),
+        );
+        let text = "a".repeat(n);
+        let result = truncate_for_discord(&text);
+        assert!(
+            result.chars().count() == DISCORD_MAX_CHARS,
+            "input of {} ASCII chars with no spaces must truncate to \
+             exactly {} chars, got {}",
+            n,
+            DISCORD_MAX_CHARS,
+            result.chars().count()
+        );
+    }
+
+    /// Truncation must not split an extended grapheme cluster.  Use
+    /// a no-spaces adversarial strategy so truncation can't fall back
+    /// to a word boundary — the cut must actually land in the
+    /// grapheme-heavy region.
+    #[hegel::test]
+    fn truncate_preserves_grapheme_clusters(tc: TestCase) {
+        let text = tc.draw(crate::formatting::test_support::adversarial_unicode_no_spaces(600));
+        use unicode_segmentation::UnicodeSegmentation;
+        let result = truncate_for_discord(&text);
+        // Every grapheme cluster in the output must be a complete
+        // grapheme cluster in the original input.  In practice we
+        // check that the set of graphemes in the output is a prefix-
+        // subset of the input's graphemes (ignoring the trailing
+        // truncation suffix, which we strip if present).
+        let input_graphemes: Vec<&str> = text.graphemes(true).collect();
+        let output = result.as_ref();
+        // Strip the truncation suffix before comparison, if present.
+        let body = output
+            .strip_suffix("\u{2026} [truncated]")
+            .unwrap_or(output);
+        let output_graphemes: Vec<&str> = body.graphemes(true).collect();
+        for (i, g) in output_graphemes.iter().enumerate() {
+            assert_eq!(
+                *g, input_graphemes[i],
+                "grapheme cluster at output position {i} was split; \
+                 input: {text:?}, output: {body:?}"
+            );
+        }
+    }
+
+    #[hegel::test]
+    fn ping_fix_preserves_content(tc: TestCase) {
+        let nick = tc.draw(gs::from_regex("[a-zA-Z0-9_]{1,30}"));
+        let fixed = ping_fix_nick(&nick);
+        let without_zwsp: String = fixed.replace('\u{200B}', "");
+        assert_eq!(without_zwsp, nick);
+    }
+
+    /// `@` followed by ANY nick built from valid IRC nick characters
+    /// (leading char alphanumeric, as the boundary check requires)
+    /// resolves as a mention consuming the entire nick — every special
+    /// character (`_ - [ ] \ ^ { } |` and the backtick) included.
+    #[hegel::test]
+    fn irc_mention_any_valid_nick_resolves(tc: TestCase) {
+        let first = tc.draw(gs::from_regex("[a-zA-Z0-9]"));
+        let rest = tc.draw(gs::from_regex("[a-zA-Z0-9_\\-\\[\\]\\\\^{}|`]{0,15}"));
+        let input = format!("@{first}{rest} end");
+        let result = convert_irc_mentions(&input, &MatchAllIrcResolver);
+        assert_eq!(result, "<@42> end");
     }
 
     // --- convert_nick_colon_mention ---

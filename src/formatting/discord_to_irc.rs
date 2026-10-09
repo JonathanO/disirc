@@ -920,70 +920,72 @@ mod tests {
         assert_eq!(out, "plain **text** here");
     }
 
-    proptest! {
-        /// Protect-then-restore is the identity for arbitrary text.  This is
-        /// the core equivalence property: no matter which delimiter the
-        /// selection logic picks, no content is lost or duplicated.  It also
-        /// pins the span-boundary arithmetic — an off-by-one in `after_open`
-        /// or `full_span_end` breaks the round-trip.
-        #[test]
-        fn protect_restore_round_trip_is_identity(
-            s in r"[a-z *_~`\n]{0,60}"
-        ) {
-            let (out, spans) = protect_code_spans(&s);
-            prop_assert_eq!(restore_code_spans(&out, &spans), s);
-        }
+    /// Protect-then-restore is the identity for arbitrary text.  This is
+    /// the core equivalence property: no matter which delimiter the
+    /// selection logic picks, no content is lost or duplicated.  It also
+    /// pins the span-boundary arithmetic — an off-by-one in `after_open`
+    /// or `full_span_end` breaks the round-trip.
+    #[hegel::test]
+    fn protect_restore_round_trip_is_identity(tc: TestCase) {
+        let s = tc.draw(gs::from_regex(r"[a-z *_~`\n]{0,60}"));
+        let (out, spans) = protect_code_spans(&s);
+        assert_eq!(restore_code_spans(&out, &spans), s);
+    }
 
-        /// Every extracted span must be a substring of the input that both
-        /// starts and ends with a backtick — i.e. the boundaries are real
-        /// delimiter positions, not arbitrary offsets.
-        #[test]
-        fn extracted_spans_are_well_formed(
-            s in r"[a-z ]{0,10}(`{1,3}[a-z ]{0,10}`{1,3}[a-z ]{0,10}){0,3}"
-        ) {
-            let (_out, spans) = protect_code_spans(&s);
-            for span in &spans {
-                prop_assert!(s.contains(span.as_str()), "span not a substring: {:?}", span);
-                prop_assert!(span.starts_with('`'), "span must open with a backtick: {:?}", span);
-                prop_assert!(span.ends_with('`'), "span must close with a backtick: {:?}", span);
-            }
-        }
-
-        /// Every line `split_for_irc` emits fits the IRC byte budget, for any
-        /// input.  This is the function's entire contract, and until now only
-        /// one example asserted it.  The adversarial strategy supplies no
-        /// spaces, so the word-boundary path cannot be used to satisfy it.
-        #[test]
-        fn split_for_irc_lines_never_exceed_limit(
-            text in prop_oneof![
-                crate::formatting::test_support::adversarial_unicode_no_spaces(600),
-                crate::formatting::test_support::oversized_grapheme_cluster(MAX_LINE_BYTES),
-            ]
-        ) {
-            for line in split_for_irc(&text) {
-                prop_assert!(
-                    line.len() <= MAX_LINE_BYTES,
-                    "emitted a {}-byte line, over the {MAX_LINE_BYTES}-byte budget: {line:?}",
-                    line.len()
-                );
-            }
-        }
-
-        /// Content inside a code span is never markdown-converted: whatever
-        /// the delimiter choice, no IRC control codes appear in the output for
-        /// text that is entirely inside backticks.
-        #[test]
-        fn code_content_is_never_markdown_converted(
-            inner in r"[a-z]{0,8}(\*\*|__|~~|\*)[a-z]{0,8}",
-            fence in r"`{1,3}"
-        ) {
-            let input = format!("{fence}{inner}{fence}");
-            let out = markdown_to_irc(&input);
-            prop_assert!(
-                !out.contains(IRC_BOLD) && !out.contains(IRC_ITALIC),
-                "markdown inside code was converted: {:?} -> {:?}", input, out
+    /// Every extracted span must be a substring of the input that both
+    /// starts and ends with a backtick — i.e. the boundaries are real
+    /// delimiter positions, not arbitrary offsets.
+    #[hegel::test]
+    fn extracted_spans_are_well_formed(tc: TestCase) {
+        let s = tc.draw(gs::from_regex(
+            r"[a-z ]{0,10}(`{1,3}[a-z ]{0,10}`{1,3}[a-z ]{0,10}){0,3}",
+        ));
+        let (_out, spans) = protect_code_spans(&s);
+        for span in &spans {
+            assert!(s.contains(span.as_str()), "span not a substring: {span:?}");
+            assert!(
+                span.starts_with('`'),
+                "span must open with a backtick: {span:?}"
+            );
+            assert!(
+                span.ends_with('`'),
+                "span must close with a backtick: {span:?}"
             );
         }
+    }
+
+    /// Every line `split_for_irc` emits fits the IRC byte budget, for any
+    /// input.  This is the function's entire contract, and until now only
+    /// one example asserted it.  The adversarial strategy supplies no
+    /// spaces, so the word-boundary path cannot be used to satisfy it.
+    #[hegel::test]
+    fn split_for_irc_lines_never_exceed_limit(tc: TestCase) {
+        let text = tc.draw(hegel::one_of!(
+            crate::formatting::test_support::adversarial_unicode_no_spaces(600),
+            crate::formatting::test_support::oversized_grapheme_cluster(MAX_LINE_BYTES),
+        ));
+        for line in split_for_irc(&text) {
+            assert!(
+                line.len() <= MAX_LINE_BYTES,
+                "emitted a {}-byte line, over the {MAX_LINE_BYTES}-byte budget: {line:?}",
+                line.len()
+            );
+        }
+    }
+
+    /// Content inside a code span is never markdown-converted: whatever
+    /// the delimiter choice, no IRC control codes appear in the output for
+    /// text that is entirely inside backticks.
+    #[hegel::test]
+    fn code_content_is_never_markdown_converted(tc: TestCase) {
+        let inner = tc.draw(gs::from_regex(r"[a-z]{0,8}(\*\*|__|~~|\*)[a-z]{0,8}"));
+        let fence = tc.draw(gs::from_regex(r"`{1,3}"));
+        let input = format!("{fence}{inner}{fence}");
+        let out = markdown_to_irc(&input);
+        assert!(
+            !out.contains(IRC_BOLD) && !out.contains(IRC_ITALIC),
+            "markdown inside code was converted: {input:?} -> {out:?}"
+        );
     }
 
     #[test]
@@ -1237,138 +1239,139 @@ mod tests {
         assert_eq!(lines, vec!["\x02Hello\x02 @Alice!"]);
     }
 
-    // -- Proptest ------------------------------------------------------------
+    // -- Property tests ------------------------------------------------------
 
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
-    /// Strategy that generates strings rich in Discord markdown syntax.
-    fn discord_markdown_strategy() -> impl Strategy<Value = String> {
-        let atoms = prop::sample::select(vec![
+    /// Generator for strings rich in Discord markdown syntax.
+    fn discord_markdown_strategy() -> impl PrintableGenerator<String> {
+        let atoms = gs::sampled_from(vec![
             "**", "*", "__", "_", "~~", "`", "```", "\n", "\r\n", "<@", "<@!", "<@&", "<#", "<:",
             "<a:", ">", "<", ":", "hello", "world", "nick", "12345", ":emoji:", " ", "  ", "",
         ]);
-        prop::collection::vec(atoms, 0..20).prop_map(|parts| parts.join(""))
+        gs::vecs(atoms)
+            .max_size(19)
+            .map(|parts: Vec<&str>| parts.join(""))
     }
 
-    proptest! {
-        #[test]
-        fn resolve_mentions_never_panics(text in ".*") {
-            let _ = resolve_mentions(&text, &StubResolver);
-        }
+    #[hegel::test]
+    fn resolve_mentions_never_panics(tc: TestCase) {
+        let text = tc.draw(gs::from_regex(".*"));
+        let _ = resolve_mentions(&text, &StubResolver);
+    }
 
-        #[test]
-        fn markdown_to_irc_never_panics(text in ".*") {
-            let _ = markdown_to_irc(&text);
-        }
+    #[hegel::test]
+    fn markdown_to_irc_never_panics(tc: TestCase) {
+        let text = tc.draw(gs::from_regex(".*"));
+        let _ = markdown_to_irc(&text);
+    }
 
-        /// Plain text (no markdown markers or backslashes) must pass through
-        /// `markdown_to_irc` completely unchanged.
-        #[test]
-        fn markdown_to_irc_plain_text_is_identity(
-            text in "[a-zA-Z0-9 ,.!?;:]{0,200}"
-        ) {
-            let result = markdown_to_irc(&text);
-            prop_assert_eq!(
-                &result, &text,
-                "plain text must survive markdown_to_irc unchanged"
+    /// Plain text (no markdown markers or backslashes) must pass through
+    /// `markdown_to_irc` completely unchanged.
+    #[hegel::test]
+    fn markdown_to_irc_plain_text_is_identity(tc: TestCase) {
+        let text = tc.draw(gs::from_regex("[a-zA-Z0-9 ,.!?;:]{0,200}"));
+        let result = markdown_to_irc(&text);
+        assert_eq!(
+            &result, &text,
+            "plain text must survive markdown_to_irc unchanged"
+        );
+    }
+
+    #[hegel::test]
+    fn discord_markdown_roundtrip_never_panics(tc: TestCase) {
+        let text = tc.draw(discord_markdown_strategy());
+        let lines = discord_to_irc(&text, &StubResolver);
+        for line in &lines {
+            assert!(line.len() <= MAX_LINE_BYTES || !line.contains(' '));
+        }
+    }
+
+    #[hegel::test]
+    fn split_for_irc_never_panics(tc: TestCase) {
+        let text = tc.draw(gs::from_regex(".{0,2000}"));
+        let lines = split_for_irc(&text);
+        assert!(!lines.is_empty() || text.trim().is_empty());
+    }
+
+    /// Every line from `split_for_irc` must respect `MAX_LINE_BYTES`,
+    /// unless the line has no spaces (unsplittable word).
+    #[hegel::test]
+    fn split_for_irc_respects_line_length(tc: TestCase) {
+        let text = tc.draw(gs::from_regex(".{0,2000}"));
+        let lines = split_for_irc(&text);
+        for line in &lines {
+            assert!(
+                line.len() <= MAX_LINE_BYTES || !line.contains(' '),
+                "line exceeds {MAX_LINE_BYTES} bytes and has spaces (should have been split): {:?} ({} bytes)",
+                line,
+                line.len()
             );
         }
+    }
 
-        #[test]
-        fn discord_markdown_roundtrip_never_panics(text in discord_markdown_strategy()) {
-            let lines = discord_to_irc(&text, &StubResolver);
-            for line in &lines {
-                assert!(line.len() <= MAX_LINE_BYTES || !line.contains(' '));
-            }
-        }
-
-        #[test]
-        fn split_for_irc_never_panics(text in ".{0,2000}") {
-            let lines = split_for_irc(&text);
-            assert!(!lines.is_empty() || text.trim().is_empty());
-        }
-
-        /// Every line from `split_for_irc` must respect `MAX_LINE_BYTES`,
-        /// unless the line has no spaces (unsplittable word).
-        #[test]
-        fn split_for_irc_respects_line_length(text in ".{0,2000}") {
-            let lines = split_for_irc(&text);
-            for line in &lines {
-                prop_assert!(
-                    line.len() <= MAX_LINE_BYTES || !line.contains(' '),
-                    "line exceeds {MAX_LINE_BYTES} bytes and has spaces (should have been split): {:?} ({} bytes)",
-                    line, line.len()
-                );
-            }
-        }
-
-        /// `split_for_irc` must preserve all non-whitespace content from the
-        /// input (up to the line truncation limit).
-        #[test]
-        fn split_for_irc_preserves_words(text in "[a-zA-Z0-9 ]{0,500}") {
-            let lines = split_for_irc(&text);
-            let joined = lines.join(" ");
-            for word in text.split_whitespace().take(50) {
-                prop_assert!(
-                    joined.contains(word),
-                    "word {word:?} lost in split.\n  input: {text:?}\n  output: {joined:?}"
-                );
-            }
-        }
-
-        /// `split_long_line` must never split an extended grapheme cluster.
-        /// Use a no-spaces adversarial strategy so the word-boundary fallback
-        /// can't avoid the grapheme-rich region.
-        #[test]
-        fn split_long_line_preserves_grapheme_clusters(
-            text in crate::formatting::test_support::adversarial_unicode_no_spaces(200)
-        ) {
-            use unicode_segmentation::UnicodeSegmentation;
-            let parts = split_long_line(&text, MAX_LINE_BYTES);
-            // Rejoining the parts must yield the original text (catches
-            // byte-level loss, but not grapheme splitting on its own).
-            let rejoined: String = parts.join("");
-            prop_assert_eq!(&rejoined, &text);
-            // If splits landed inside a grapheme cluster, the total
-            // grapheme count of the parts would be greater than the
-            // grapheme count of the input — one cluster "became" two.
-            let input_graphemes = text.graphemes(true).count();
-            let part_graphemes: usize =
-                parts.iter().map(|p| p.graphemes(true).count()).sum();
-            prop_assert_eq!(
-                input_graphemes, part_graphemes,
-                "split increased grapheme count (split inside a cluster); \
-                 input: {:?}, parts: {:?}",
-                text, parts
+    /// `split_for_irc` must preserve all non-whitespace content from the
+    /// input (up to the line truncation limit).
+    #[hegel::test]
+    fn split_for_irc_preserves_words(tc: TestCase) {
+        let text = tc.draw(gs::from_regex("[a-zA-Z0-9 ]{0,500}"));
+        let lines = split_for_irc(&text);
+        let joined = lines.join(" ");
+        for word in text.split_whitespace().take(50) {
+            assert!(
+                joined.contains(word),
+                "word {word:?} lost in split.\n  input: {text:?}\n  output: {joined:?}"
             );
         }
+    }
 
-        /// `_word_` followed by space must always produce italic markers.
-        #[test]
-        fn underscore_word_boundary_mid_sentence_converts(
-            word in "[a-zA-Z0-9]{1,20}",
-            suffix in "[a-zA-Z0-9 ,.!?]{1,20}",
-        ) {
-            let input = format!("_{word}_ {suffix}");
-            let result = markdown_to_irc(&input);
-            let expected = format!("\x1d{word}\x1d {suffix}");
-            prop_assert_eq!(
-                &result, &expected,
-                "_word_ followed by space must become italic"
-            );
-        }
+    /// `split_long_line` must never split an extended grapheme cluster.
+    /// Use a no-spaces adversarial strategy so the word-boundary fallback
+    /// can't avoid the grapheme-rich region.
+    #[hegel::test]
+    fn split_long_line_preserves_grapheme_clusters(tc: TestCase) {
+        let text = tc.draw(crate::formatting::test_support::adversarial_unicode_no_spaces(200));
+        use unicode_segmentation::UnicodeSegmentation;
+        let parts = split_long_line(&text, MAX_LINE_BYTES);
+        // Rejoining the parts must yield the original text (catches
+        // byte-level loss, but not grapheme splitting on its own).
+        let rejoined: String = parts.join("");
+        assert_eq!(&rejoined, &text);
+        // If splits landed inside a grapheme cluster, the total
+        // grapheme count of the parts would be greater than the
+        // grapheme count of the input — one cluster "became" two.
+        let input_graphemes = text.graphemes(true).count();
+        let part_graphemes: usize = parts.iter().map(|p| p.graphemes(true).count()).sum();
+        assert_eq!(
+            input_graphemes, part_graphemes,
+            "split increased grapheme count (split inside a cluster); \
+             input: {text:?}, parts: {parts:?}"
+        );
+    }
 
-        /// `resolve_mentions` must pass through text that contains no `<...>`
-        /// patterns completely unchanged.
-        #[test]
-        fn resolve_mentions_no_angle_brackets_is_identity(
-            text in "[^<>]{0,200}"
-        ) {
-            let result = resolve_mentions(&text, &StubResolver);
-            prop_assert_eq!(
-                &result, &text,
-                "text without angle brackets must survive unchanged"
-            );
-        }
+    /// `_word_` followed by space must always produce italic markers.
+    #[hegel::test]
+    fn underscore_word_boundary_mid_sentence_converts(tc: TestCase) {
+        let word = tc.draw(gs::from_regex("[a-zA-Z0-9]{1,20}"));
+        let suffix = tc.draw(gs::from_regex("[a-zA-Z0-9 ,.!?]{1,20}"));
+        let input = format!("_{word}_ {suffix}");
+        let result = markdown_to_irc(&input);
+        let expected = format!("\x1d{word}\x1d {suffix}");
+        assert_eq!(
+            &result, &expected,
+            "_word_ followed by space must become italic"
+        );
+    }
+
+    /// `resolve_mentions` must pass through text that contains no `<...>`
+    /// patterns completely unchanged.
+    #[hegel::test]
+    fn resolve_mentions_no_angle_brackets_is_identity(tc: TestCase) {
+        let text = tc.draw(gs::from_regex("[^<>]{0,200}"));
+        let result = resolve_mentions(&text, &StubResolver);
+        assert_eq!(
+            &result, &text,
+            "text without angle brackets must survive unchanged"
+        );
     }
 }

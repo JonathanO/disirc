@@ -41,7 +41,7 @@ mod tests {
     use super::discord_to_irc::markdown_to_irc;
     use super::*;
 
-    use proptest::prelude::*;
+    use hegel::prelude::*;
 
     // -- Cross-direction roundtrip tests -------------------------------------
 
@@ -54,26 +54,23 @@ mod tests {
         Underline(String),
     }
 
-    /// Strategy for plain text that won't be misinterpreted by either
+    /// Generator for plain text that won't be misinterpreted by either
     /// conversion direction: no markdown markers, no IRC control chars.
-    fn safe_plain_text() -> impl Strategy<Value = String> {
-        prop::string::string_regex("[a-zA-Z0-9 ,.!?;:()+=&%-]{1,20}").expect("valid regex")
+    fn safe_plain_text() -> impl PrintableGenerator<String> {
+        gs::from_regex("[a-zA-Z0-9 ,.!?;:()+=&%-]{1,20}")
     }
 
-    /// Strategy generating Discord markdown text that losslessly round-trips
+    /// Generator for Discord markdown text that losslessly round-trips
     /// through `markdown_to_irc` → `irc_to_discord_formatting`.
-    fn roundtrip_discord_segments() -> impl Strategy<Value = Vec<FormattedSegment>> {
-        prop::collection::vec(
-            prop::strategy::Union::new(vec![
-                safe_plain_text().prop_map(FormattedSegment::Plain).boxed(),
-                safe_plain_text().prop_map(FormattedSegment::Bold).boxed(),
-                safe_plain_text().prop_map(FormattedSegment::Italic).boxed(),
-                safe_plain_text()
-                    .prop_map(FormattedSegment::Underline)
-                    .boxed(),
-            ]),
-            1..8,
-        )
+    fn roundtrip_discord_segments() -> impl PrintableGenerator<Vec<FormattedSegment>> {
+        gs::vecs(hegel::one_of!(
+            safe_plain_text().map(FormattedSegment::Plain),
+            safe_plain_text().map(FormattedSegment::Bold),
+            safe_plain_text().map(FormattedSegment::Italic),
+            safe_plain_text().map(FormattedSegment::Underline),
+        ))
+        .min_size(1)
+        .max_size(7)
     }
 
     fn segments_to_discord(segments: &[FormattedSegment]) -> String {
@@ -108,31 +105,31 @@ mod tests {
         parts.join(" ")
     }
 
-    proptest! {
-        /// Discord → IRC → Discord round-trip: formatting should survive
-        /// losslessly when using only bijective markers (**, *, __).
-        #[test]
-        fn discord_irc_discord_roundtrip(segments in roundtrip_discord_segments()) {
-            let discord_text = segments_to_discord(&segments);
-            let irc_text = markdown_to_irc(&discord_text);
-            let back_to_discord = irc_to_discord_formatting(&irc_text);
-            assert_eq!(
-                back_to_discord, discord_text,
-                "Round-trip failed:\n  discord: {discord_text:?}\n  irc:     {irc_text:?}\n  back:    {back_to_discord:?}"
-            );
-        }
+    /// Discord → IRC → Discord round-trip: formatting should survive
+    /// losslessly when using only bijective markers (**, *, __).
+    #[hegel::test]
+    fn discord_irc_discord_roundtrip(tc: TestCase) {
+        let segments = tc.draw(roundtrip_discord_segments());
+        let discord_text = segments_to_discord(&segments);
+        let irc_text = markdown_to_irc(&discord_text);
+        let back_to_discord = irc_to_discord_formatting(&irc_text);
+        assert_eq!(
+            back_to_discord, discord_text,
+            "Round-trip failed:\n  discord: {discord_text:?}\n  irc:     {irc_text:?}\n  back:    {back_to_discord:?}"
+        );
+    }
 
-        /// IRC → Discord → IRC round-trip: formatting should survive
-        /// losslessly when using only bijective control codes (\x02, \x1d, \x1f).
-        #[test]
-        fn irc_discord_irc_roundtrip(segments in roundtrip_discord_segments()) {
-            let irc_text = segments_to_irc(&segments);
-            let discord_text = irc_to_discord_formatting(&irc_text);
-            let back_to_irc = markdown_to_irc(&discord_text);
-            assert_eq!(
-                back_to_irc, irc_text,
-                "Round-trip failed:\n  irc:     {irc_text:?}\n  discord: {discord_text:?}\n  back:    {back_to_irc:?}"
-            );
-        }
+    /// IRC → Discord → IRC round-trip: formatting should survive
+    /// losslessly when using only bijective control codes (\x02, \x1d, \x1f).
+    #[hegel::test]
+    fn irc_discord_irc_roundtrip(tc: TestCase) {
+        let segments = tc.draw(roundtrip_discord_segments());
+        let irc_text = segments_to_irc(&segments);
+        let discord_text = irc_to_discord_formatting(&irc_text);
+        let back_to_irc = markdown_to_irc(&discord_text);
+        assert_eq!(
+            back_to_irc, irc_text,
+            "Round-trip failed:\n  irc:     {irc_text:?}\n  discord: {discord_text:?}\n  back:    {back_to_irc:?}"
+        );
     }
 }

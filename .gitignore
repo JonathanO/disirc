@@ -13,7 +13,8 @@ config.toml
 # Generated test/mutation artifacts
 mutants.out/
 mutants.out.old/
-proptest-regressions/
+# Hegel failure database (local runs only; CI disables it).
+.hegel/
 .claude/
 
 # OS

@@ -40,7 +40,7 @@ Or use the task runner: `just check`
 
 - See `CLAUDE.md` for detailed coding guidelines
 - Unit tests go inline with `#[cfg(test)]` modules
-- Use property-based tests (`proptest`) for edge-case-prone functions
+- Use property-based tests (Hegel, crate `hegeltest`) for edge-case-prone functions
 - No `unsafe` code
 - Error handling: `thiserror` for library errors, `anyhow` for application-layer errors
 

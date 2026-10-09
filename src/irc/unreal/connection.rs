@@ -434,7 +434,7 @@ async fn run_session(
 mod tests {
     use super::*;
     use crate::irc::unreal::framing::{LineReader, LineWriter};
-    use proptest::prelude::*;
+    use hegel::prelude::*;
     use tokio::io::AsyncWriteExt;
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -490,14 +490,14 @@ mod tests {
         assert_eq!(backoff_delay_from(u32::MAX, 301).as_secs(), 1);
     }
 
-    proptest! {
-        /// The ceiling holds for every attempt and every draw.  `attempt: u32`
-        /// sweeps the shift-overflow domain that the example test above cannot
-        /// exhaust.
-        #[test]
-        fn backoff_never_exceeds_ceiling(attempt: u32, jitter in proptest::num::u64::ANY) {
-            prop_assert!(backoff_delay_from(attempt, jitter) < Duration::from_mins(5));
-        }
+    /// The ceiling holds for every attempt and every draw.  `attempt: u32`
+    /// sweeps the shift-overflow domain that the example test above cannot
+    /// exhaust.
+    #[hegel::test]
+    fn backoff_never_exceeds_ceiling(tc: TestCase) {
+        let attempt: u32 = tc.draw(gs::integers::<u32>());
+        let jitter = tc.draw(gs::integers::<u64>());
+        assert!(backoff_delay_from(attempt, jitter) < Duration::from_mins(5));
     }
 
     /// The thread-RNG wrapper actually draws a varying jitter.

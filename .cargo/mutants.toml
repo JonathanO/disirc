@@ -16,7 +16,7 @@ exclude_re = [
     # Replacing `>` with `<` produces an infinite loop for any input shorter
     # than max_bytes (we keep splitting `remaining` while the condition stays
     # true).  The mutation *is* caught — the test harness kills it after 20s —
-    # but cargo-mutants classifies the kill as TIMEOUT (exit 2), not CAUGHT
+    # but cargo-mutants classifies the kill as TIMEOUT (exit 3), not CAUGHT
     # (exit 0).  No assertion-based test can catch it faster because the
     # mutated function never returns.  Restructuring the loop moves the
     # mutation target but doesn't eliminate it.  See mutants.rs exit codes.

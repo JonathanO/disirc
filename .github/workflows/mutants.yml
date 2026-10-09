@@ -59,9 +59,15 @@ jobs:
           path: mutants.out
 
   full-mutants:
-    name: Mutants (full)
+    name: Mutants (full, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+    # A single runner took 102 minutes for 655 mutants. Four shards run in
+    # parallel, and each one has its own time and memory limits.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
 
@@ -86,11 +92,11 @@ jobs:
           echo 'rustflags = ["-C", "link-arg=--ld-path=wild"]' >> .cargo/config.toml
 
       - name: Run all mutants
-        run: cargo mutants -vV --in-place
+        run: cargo mutants -vV --in-place --shard ${{ matrix.shard }}/4
 
       - name: Archive mutants.out
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mutants-full.out
+          name: mutants-full-${{ matrix.shard }}.out
           path: mutants.out

@@ -198,28 +198,28 @@ fn protect_code_spans(text: &str) -> (String, Vec<String>) {
             result.push_str(remaining);
             break;
         };
-        let is_block = remaining[pos..].starts_with("```");
+        let (before, from_open) = remaining.split_at(pos);
+        let delimiter = if from_open.starts_with("```") {
+            "```"
+        } else {
+            "`"
+        };
 
-        let delimiter = if is_block { "```" } else { "`" };
-        let after_open = pos + delimiter.len();
-
-        // Look for closing delimiter
-        let Some(close) = remaining[after_open..].find(delimiter) else {
+        // Look for the closing delimiter.  `rest` starts after it, so every
+        // pass makes `remaining` shorter and the loop always ends.
+        let Some((code, rest)) = from_open[delimiter.len()..].split_once(delimiter) else {
             result.push_str(remaining);
             break;
         };
 
-        let full_span_end = after_open + close + delimiter.len();
-        let span = &remaining[pos..full_span_end];
-
-        result.push_str(&remaining[..pos]);
+        result.push_str(before);
         result.push(CODE_SENTINEL);
         let idx = spans.len();
         result.push_str(&idx.to_string());
         result.push(CODE_SENTINEL);
-        spans.push(span.to_string());
+        spans.push(format!("{delimiter}{code}{delimiter}"));
 
-        remaining = &remaining[full_span_end..];
+        remaining = rest;
     }
 
     (result, spans)

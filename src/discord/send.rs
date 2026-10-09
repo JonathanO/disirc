@@ -18,9 +18,8 @@ use crate::discord::types::{DiscordCommand, DiscordEvent, DiscordPresence, Membe
 /// - If the result is shorter than 2 characters it is padded with `_`.
 pub(crate) fn sanitize_webhook_username(nick: &str) -> String {
     let mut result: String = nick.chars().take(32).collect();
-    while result.chars().count() < 2 {
-        result.push('_');
-    }
+    let missing = 2usize.saturating_sub(result.chars().count());
+    result.extend(std::iter::repeat_n('_', missing));
     result
 }
 
@@ -31,18 +30,21 @@ pub(crate) fn sanitize_webhook_username(nick: &str) -> String {
 /// function is only needed for the `channel.send()` fallback.
 pub(crate) fn suppress_mentions(text: &str) -> String {
     let mut result = String::with_capacity(text.len() + 4);
-    let mut remaining = text;
-    while let Some(at_pos) = remaining.find('@') {
-        // Push up to and including the '@'
-        result.push_str(&remaining[..=at_pos]);
-        let after = &remaining[at_pos + 1..];
-        let after_lower = after.to_ascii_lowercase();
-        if after_lower.starts_with("everyone") || after_lower.starts_with("here") {
-            result.push('\u{200B}');
+    // Each part ends at an '@' (except possibly the last), so a part that
+    // follows an '@' is the text right after that '@'.  The trigger words
+    // contain no '@', so checking the part is the same as checking the rest
+    // of the text.
+    let mut after_at = false;
+    for part in text.split_inclusive('@') {
+        if after_at {
+            let lower = part.to_ascii_lowercase();
+            if lower.starts_with("everyone") || lower.starts_with("here") {
+                result.push('\u{200B}');
+            }
         }
-        remaining = after;
+        result.push_str(part);
+        after_at = part.ends_with('@');
     }
-    result.push_str(remaining);
     result
 }
 

@@ -8,3 +8,12 @@ test_cases = 1000
 
 [profiles.ci]
 test_cases = 1000
+
+# Mutation testing (`HEGEL_DEFAULT_PROFILE=mutants cargo mutants ...`).
+# A mutant only needs to fail a test, so Hegel stops at the first
+# counterexample and does not shrink it. Shrinking can run for minutes and
+# make cargo mutants report a caught mutant as a timeout. Extending `ci`
+# keeps runs derandomized, so each mutant gets the same result every run.
+[profiles.mutants]
+extends = "ci"
+phases = ["explicit", "generate"]

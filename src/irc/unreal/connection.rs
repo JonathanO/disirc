@@ -434,6 +434,7 @@ async fn run_session(
 mod tests {
     use super::*;
     use crate::irc::unreal::framing::{LineReader, LineWriter};
+    use crate::test_util::within_deadline;
     use hegel::prelude::*;
     use tokio::io::AsyncWriteExt;
 
@@ -518,19 +519,22 @@ mod tests {
     /// `run_once` returns Err when the TCP connection is refused.
     #[tokio::test]
     async fn run_once_returns_error_on_refused_connection() {
-        // Bind to get a free port, then drop the listener so nothing is listening.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        within_deadline(async {
+            // Bind to get a free port, then drop the listener so nothing is listening.
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
 
-        let cfg = IrcConfig {
-            port,
-            ..test_config()
-        };
-        let (_cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(1);
-        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(1);
-        let result = run_once(&cfg, &mut cmd_rx, &event_tx).await;
-        assert!(result.is_err(), "expected connection error, got Ok");
+            let cfg = IrcConfig {
+                port,
+                ..test_config()
+            };
+            let (_cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(1);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(1);
+            let result = run_once(&cfg, &mut cmd_rx, &event_tx).await;
+            assert!(result.is_err(), "expected connection error, got Ok");
+        })
+        .await;
     }
 
     // ── do_handshake ─────────────────────────────────────────────────────
@@ -539,161 +543,176 @@ mod tests {
     /// credentials.
     #[tokio::test]
     async fn handshake_correct_outbound_sequence_and_parses_uplink_state() {
-        let (mut client_r, mut client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (mut client_r, mut client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
-        // Server task: collect the 5 credential lines; reply with uplink creds.
-        let server_task = tokio::spawn(async move {
-            let mut lines = Vec::new();
-            let mut reader = LineReader::new(uplink_r);
-            for _ in 0..5 {
-                lines.push(reader.next_line().await.unwrap().unwrap());
-            }
-            uplink_w
-                .write_all(
-                    b"PASS :hunter2\r\n\
+            // Server task: collect the 5 credential lines; reply with uplink creds.
+            let server_task = tokio::spawn(async move {
+                let mut lines = Vec::new();
+                let mut reader = LineReader::new(uplink_r);
+                for _ in 0..5 {
+                    lines.push(reader.next_line().await.unwrap().unwrap());
+                }
+                uplink_w
+                    .write_all(
+                        b"PASS :hunter2\r\n\
                       PROTOCTL SID=001 MTAGS\r\n\
                       SERVER irc.server.org 1 :IRC Server\r\n",
-                )
+                    )
+                    .await
+                    .unwrap();
+                lines
+            });
+
+            let config = test_config();
+            let result = do_handshake(&mut client_r, &mut client_w, &config)
                 .await
                 .unwrap();
-            lines
-        });
 
-        let config = test_config();
-        let result = do_handshake(&mut client_r, &mut client_w, &config)
-            .await
-            .unwrap();
+            let sent = server_task.await.unwrap();
+            assert_eq!(sent[0], "PASS :hunter2", "line 1: PASS");
+            assert_eq!(
+                sent[1], "PROTOCTL EAUTH=discord.test.org",
+                "line 2: PROTOCTL EAUTH"
+            );
+            assert!(
+                sent[2].starts_with("PROTOCTL NOQUIT"),
+                "line 3: PROTOCTL caps; got {:?}",
+                sent[2]
+            );
+            assert_eq!(sent[3], "PROTOCTL SID=002", "line 4: PROTOCTL SID");
+            assert_eq!(
+                sent[4], "SERVER discord.test.org 1 :Test Bridge",
+                "line 5: SERVER"
+            );
 
-        let sent = server_task.await.unwrap();
-        assert_eq!(sent[0], "PASS :hunter2", "line 1: PASS");
-        assert_eq!(
-            sent[1], "PROTOCTL EAUTH=discord.test.org",
-            "line 2: PROTOCTL EAUTH"
-        );
-        assert!(
-            sent[2].starts_with("PROTOCTL NOQUIT"),
-            "line 3: PROTOCTL caps; got {:?}",
-            sent[2]
-        );
-        assert_eq!(sent[3], "PROTOCTL SID=002", "line 4: PROTOCTL SID");
-        assert_eq!(
-            sent[4], "SERVER discord.test.org 1 :Test Bridge",
-            "line 5: SERVER"
-        );
-
-        assert!(result.mtags_active);
+            assert!(result.mtags_active);
+        })
+        .await;
     }
 
     /// Uplink sends PROTOCTL without MTAGS → `mtags_active` is false.
     #[tokio::test]
     async fn handshake_no_mtags_if_not_advertised() {
-        let (mut client_r, mut client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (mut client_r, mut client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
-        tokio::spawn(async move {
-            // Read and discard the 5 outbound lines.
-            let mut reader = LineReader::new(uplink_r);
-            for _ in 0..5 {
-                reader.next_line().await.unwrap();
-            }
-            uplink_w
-                .write_all(
-                    b"PASS :hunter2\r\n\
+            tokio::spawn(async move {
+                // Read and discard the 5 outbound lines.
+                let mut reader = LineReader::new(uplink_r);
+                for _ in 0..5 {
+                    reader.next_line().await.unwrap();
+                }
+                uplink_w
+                    .write_all(
+                        b"PASS :hunter2\r\n\
                       PROTOCTL SID=001\r\n\
                       SERVER irc.server.org 1 :IRC Server\r\n",
-                )
+                    )
+                    .await
+                    .unwrap();
+            });
+
+            let config = test_config();
+            let result = do_handshake(&mut client_r, &mut client_w, &config)
                 .await
                 .unwrap();
-        });
 
-        let config = test_config();
-        let result = do_handshake(&mut client_r, &mut client_w, &config)
-            .await
-            .unwrap();
-
-        assert!(!result.mtags_active);
+            assert!(!result.mtags_active);
+        })
+        .await;
     }
 
     /// A PING during the handshake is answered with a PONG immediately.
     #[tokio::test]
     async fn handshake_responds_to_ping() {
-        let (mut client_r, mut client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (mut client_r, mut client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
-        let server_task = tokio::spawn(async move {
-            let mut reader = LineReader::new(uplink_r);
-            // Read the 5 credential lines.
-            for _ in 0..5 {
-                reader.next_line().await.unwrap();
-            }
-            // Send a PING before SERVER.
-            uplink_w.write_all(b"PING :testtoken\r\n").await.unwrap();
-            // Read the PONG response.
-            let pong_line = reader.next_line().await.unwrap().unwrap();
-            // Then finish the handshake.
-            uplink_w
-                .write_all(b"PASS :hunter2\r\nSERVER irc.server.org 1 :S\r\n")
+            let server_task = tokio::spawn(async move {
+                let mut reader = LineReader::new(uplink_r);
+                // Read the 5 credential lines.
+                for _ in 0..5 {
+                    reader.next_line().await.unwrap();
+                }
+                // Send a PING before SERVER.
+                uplink_w.write_all(b"PING :testtoken\r\n").await.unwrap();
+                // Read the PONG response.
+                let pong_line = reader.next_line().await.unwrap().unwrap();
+                // Then finish the handshake.
+                uplink_w
+                    .write_all(b"PASS :hunter2\r\nSERVER irc.server.org 1 :S\r\n")
+                    .await
+                    .unwrap();
+                pong_line
+            });
+
+            let config = test_config();
+            let _result = do_handshake(&mut client_r, &mut client_w, &config)
                 .await
                 .unwrap();
-            pong_line
-        });
 
-        let config = test_config();
-        let _result = do_handshake(&mut client_r, &mut client_w, &config)
-            .await
-            .unwrap();
-
-        let pong_line = server_task.await.unwrap();
-        assert_eq!(pong_line, ":002 PONG 002 :testtoken");
+            let pong_line = server_task.await.unwrap();
+            assert_eq!(pong_line, ":002 PONG 002 :testtoken");
+        })
+        .await;
     }
 
     /// `do_handshake` returns Err when the uplink sends ERROR.
     #[tokio::test]
     async fn handshake_error_message_returns_err() {
-        let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
-        let cfg = test_config();
+        within_deadline(async {
+            let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
+            let cfg = test_config();
 
-        // Write ERROR immediately; our 5 outbound credential lines fit in the
-        // 65536-byte buffer so send_credentials won't block.
-        let server_task = tokio::spawn(async move {
-            uplink_w
-                .write_all(b"ERROR :Server closed connection\r\n")
-                .await
-                .unwrap();
-        });
+            // Write ERROR immediately; our 5 outbound credential lines fit in the
+            // 65536-byte buffer so send_credentials won't block.
+            let server_task = tokio::spawn(async move {
+                uplink_w
+                    .write_all(b"ERROR :Server closed connection\r\n")
+                    .await
+                    .unwrap();
+            });
 
-        let result = do_handshake(&mut client_r, &mut client_w, &cfg).await;
-        server_task.await.unwrap();
-        assert!(result.is_err(), "expected Err from do_handshake on ERROR");
-        let err_msg = result.err().unwrap().to_string();
-        assert!(
-            err_msg.contains("ERROR"),
-            "error message should mention ERROR, got: {err_msg}"
-        );
+            let result = do_handshake(&mut client_r, &mut client_w, &cfg).await;
+            server_task.await.unwrap();
+            assert!(result.is_err(), "expected Err from do_handshake on ERROR");
+            let err_msg = result.err().unwrap().to_string();
+            assert!(
+                err_msg.contains("ERROR"),
+                "error message should mention ERROR, got: {err_msg}"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn handshake_bad_password_returns_err() {
-        let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
-        let cfg = test_config();
+        within_deadline(async {
+            let (mut client_r, mut client_w, _uplink_r, mut uplink_w) = make_pair(65_536);
+            let cfg = test_config();
 
-        // Send a PASS with the wrong password.
-        let server_task = tokio::spawn(async move {
-            uplink_w
-                .write_all(b"PASS :wrong_password\r\n")
-                .await
-                .unwrap();
-        });
+            // Send a PASS with the wrong password.
+            let server_task = tokio::spawn(async move {
+                uplink_w
+                    .write_all(b"PASS :wrong_password\r\n")
+                    .await
+                    .unwrap();
+            });
 
-        let result = do_handshake(&mut client_r, &mut client_w, &cfg).await;
-        server_task.await.unwrap();
-        assert!(
-            result.is_err(),
-            "bad password must return Err, not exit the process"
-        );
-        let err_msg = result.err().unwrap().to_string();
-        assert!(
-            err_msg.contains("password"),
-            "error should mention password, got: {err_msg}"
-        );
+            let result = do_handshake(&mut client_r, &mut client_w, &cfg).await;
+            server_task.await.unwrap();
+            assert!(
+                result.is_err(),
+                "bad password must return Err, not exit the process"
+            );
+            let err_msg = result.err().unwrap().to_string();
+            assert!(
+                err_msg.contains("password"),
+                "error should mention password, got: {err_msg}"
+            );
+        })
+        .await;
     }
 
     // ── run_session ───────────────────────────────────────────────────────
@@ -707,228 +726,243 @@ mod tests {
     /// Inbound PRIVMSG is translated and emitted as `S2SEvent::MessageReceived`.
     #[tokio::test]
     async fn session_inbound_privmsg_emits_event() {
-        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
-        // Write a PRIVMSG then close BOTH halves of the uplink DuplexStream.
-        // tokio::io::split shares the stream via Arc — we must drop both halves
-        // to drop the DuplexStream, which signals EOF on client_r.
-        tokio::spawn(async move {
-            uplink_w
-                .write_all(b":ABC001 PRIVMSG #test :hello\r\n")
-                .await
-                .unwrap();
-            drop(uplink_w);
-            drop(uplink_r); // completes the Arc → DuplexStream dropped → EOF on client_r
-        });
+            // Write a PRIVMSG then close BOTH halves of the uplink DuplexStream.
+            // tokio::io::split shares the stream via Arc — we must drop both halves
+            // to drop the DuplexStream, which signals EOF on client_r.
+            tokio::spawn(async move {
+                uplink_w
+                    .write_all(b":ABC001 PRIVMSG #test :hello\r\n")
+                    .await
+                    .unwrap();
+                drop(uplink_w);
+                drop(uplink_r); // completes the Arc → DuplexStream dropped → EOF on client_r
+            });
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
-        let (event_tx, mut event_rx) = mpsc::channel::<S2SEvent>(16);
-        let _keep_cmd_tx = cmd_tx; // keep alive so cmd_rx doesn't return None
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, mut event_rx) = mpsc::channel::<S2SEvent>(16);
+            let _keep_cmd_tx = cmd_tx; // keep alive so cmd_rx doesn't return None
 
-        let _ = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            "bridge.test",
-            SessionTimings::production(),
-        )
-        .await;
+            let _ = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings::production(),
+            )
+            .await;
 
-        let event = event_rx.try_recv().expect("expected an event");
-        match event {
-            S2SEvent::MessageReceived {
-                from_uid,
-                target,
-                text,
-                ..
-            } => {
-                assert_eq!(from_uid, "ABC001");
-                assert_eq!(target, "#test");
-                assert_eq!(text, "hello");
+            let event = event_rx.try_recv().expect("expected an event");
+            match event {
+                S2SEvent::MessageReceived {
+                    from_uid,
+                    target,
+                    text,
+                    ..
+                } => {
+                    assert_eq!(from_uid, "ABC001");
+                    assert_eq!(target, "#test");
+                    assert_eq!(text, "hello");
+                }
+                other => panic!("expected MessageReceived, got {other:?}"),
             }
-            other => panic!("expected MessageReceived, got {other:?}"),
-        }
+        })
+        .await;
     }
 
     /// An outbound `S2SCommand` is translated to an IRC wire line.
     #[tokio::test]
     async fn session_outbound_command_written_to_wire() {
-        let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
-        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
 
-        // Send command then close uplink to terminate the session.
-        let cmd_task = tokio::spawn(async move {
-            cmd_tx
-                .send(S2SCommand::SendMessage {
-                    from_uid: "002AAAAAA".into(),
-                    target: "#test".into(),
-                    text: "hi".into(),
-                    timestamp: None,
-                })
-                .await
-                .unwrap();
-            drop(cmd_tx); // cmd_rx will return None → session exits cleanly
-            // Brief pause so the message is written before we check.
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            drop(uplink_w);
-        });
+            // Send command then close uplink to terminate the session.
+            let cmd_task = tokio::spawn(async move {
+                cmd_tx
+                    .send(S2SCommand::SendMessage {
+                        from_uid: "002AAAAAA".into(),
+                        target: "#test".into(),
+                        text: "hi".into(),
+                        timestamp: None,
+                    })
+                    .await
+                    .unwrap();
+                drop(cmd_tx); // cmd_rx will return None → session exits cleanly
+                // Brief pause so the message is written before we check.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                drop(uplink_w);
+            });
 
-        // Read what the session writes to the wire.
-        let read_task = tokio::spawn(async move {
-            let mut reader = LineReader::new(uplink_r);
-            let mut found: Option<String> = None;
-            while let Ok(Some(line)) = reader.next_line().await {
-                if line.contains("PRIVMSG") {
-                    found = Some(line);
-                    break;
+            // Read what the session writes to the wire.
+            let read_task = tokio::spawn(async move {
+                let mut reader = LineReader::new(uplink_r);
+                let mut found: Option<String> = None;
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if line.contains("PRIVMSG") {
+                        found = Some(line);
+                        break;
+                    }
                 }
-            }
-            found
-        });
+                found
+            });
 
-        let _ = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            "bridge.test",
-            SessionTimings::production(),
-        )
+            let _ = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings::production(),
+            )
+            .await;
+
+            cmd_task.await.unwrap();
+            let wire_line = read_task.await.unwrap();
+            let line = wire_line.expect("expected PRIVMSG on the wire");
+            assert!(
+                line.contains(":002AAAAAA PRIVMSG #test :hi"),
+                "unexpected wire line: {line:?}"
+            );
+        })
         .await;
-
-        cmd_task.await.unwrap();
-        let wire_line = read_task.await.unwrap();
-        let line = wire_line.expect("expected PRIVMSG on the wire");
-        assert!(
-            line.contains(":002AAAAAA PRIVMSG #test :hi"),
-            "unexpected wire line: {line:?}"
-        );
     }
 
     /// Inbound PING from the uplink is answered with PONG immediately.
     #[tokio::test]
     async fn session_ping_gets_immediate_pong() {
-        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
-        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
-        let _keep = cmd_tx;
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+            let _keep = cmd_tx;
 
-        // Write PING then close.
-        let write_task = tokio::spawn(async move {
-            uplink_w.write_all(b"PING :pingtoken\r\n").await.unwrap();
-            // Read PONG before closing.
-            let mut reader = LineReader::new(uplink_r);
-            let pong = reader.next_line().await.unwrap().unwrap();
-            drop(uplink_w);
-            pong
-        });
+            // Write PING then close.
+            let write_task = tokio::spawn(async move {
+                uplink_w.write_all(b"PING :pingtoken\r\n").await.unwrap();
+                // Read PONG before closing.
+                let mut reader = LineReader::new(uplink_r);
+                let pong = reader.next_line().await.unwrap().unwrap();
+                drop(uplink_w);
+                pong
+            });
 
-        let _ = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            "bridge.test",
-            SessionTimings::production(),
-        )
+            let _ = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings::production(),
+            )
+            .await;
+
+            let pong_line = write_task.await.unwrap();
+            assert_eq!(pong_line, ":002 PONG 002 :pingtoken");
+        })
         .await;
-
-        let pong_line = write_task.await.unwrap();
-        assert_eq!(pong_line, ":002 PONG 002 :pingtoken");
     }
 
     /// After `ping_interval`, the session sends a PING to the uplink.
     #[tokio::test]
     async fn session_sends_keepalive_ping() {
-        let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
-        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
-        let _keep = cmd_tx;
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+            let _keep = cmd_tx;
 
-        // Read whatever the session sends.
-        let read_task = tokio::spawn(async move {
-            let mut reader = LineReader::new(uplink_r);
-            let mut found = false;
-            while let Ok(Some(line)) = reader.next_line().await {
-                if line.starts_with("PING :") {
-                    found = true;
-                    break;
+            // Read whatever the session sends.
+            let read_task = tokio::spawn(async move {
+                let mut reader = LineReader::new(uplink_r);
+                let mut found = false;
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if line.starts_with("PING :") {
+                        found = true;
+                        break;
+                    }
                 }
-            }
-            found
-        });
+                found
+            });
 
-        // Close the uplink after 120ms (enough for a 50ms ping_interval).
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(120)).await;
-            drop(uplink_w);
-        });
+            // Close the uplink after 120ms (enough for a 50ms ping_interval).
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+                drop(uplink_w);
+            });
 
-        let _ = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            "bridge.test",
-            SessionTimings {
-                ping_interval: Duration::from_millis(50),
-                pong_timeout: Duration::from_mins(1),
-            },
-        )
+            let _ = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings {
+                    ping_interval: Duration::from_millis(50),
+                    pong_timeout: Duration::from_mins(1),
+                },
+            )
+            .await;
+
+            let saw_ping = read_task.await.unwrap();
+            assert!(
+                saw_ping,
+                "expected a PING to be sent after the ping interval"
+            );
+        })
         .await;
-
-        let saw_ping = read_task.await.unwrap();
-        assert!(
-            saw_ping,
-            "expected a PING to be sent after the ping interval"
-        );
     }
 
     /// If no PONG is received within `pong_timeout`, the session returns Err.
     #[tokio::test]
     async fn session_ping_timeout_returns_error() {
-        let (client_r, client_w, _uplink_r, _uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (client_r, client_w, _uplink_r, _uplink_w) = make_pair(65_536);
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
-        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
-        let _keep = cmd_tx;
-        // _uplink_r/_uplink_w stay bound (underscore-prefixed, not `_`), so the
-        // connection is held open; the uplink just never sends a PONG.
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+            let _keep = cmd_tx;
+            // _uplink_r/_uplink_w stay bound (underscore-prefixed, not `_`), so the
+            // connection is held open; the uplink just never sends a PONG.
 
-        let result = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            "bridge.test",
-            SessionTimings {
-                ping_interval: Duration::from_millis(50),
-                pong_timeout: Duration::from_millis(30),
-            },
-        )
+            let result = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings {
+                    ping_interval: Duration::from_millis(50),
+                    pong_timeout: Duration::from_millis(30),
+                },
+            )
+            .await;
+
+            assert!(result.is_err(), "expected ping timeout error");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("timeout") || msg.contains("Ping"),
+                "unexpected error message: {msg}"
+            );
+        })
         .await;
-
-        assert!(result.is_err(), "expected ping timeout error");
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("timeout") || msg.contains("Ping"),
-            "unexpected error message: {msg}"
-        );
     }
 
     // ── Additional integration tests ─────────────────────────────────────
@@ -936,113 +970,122 @@ mod tests {
     /// Uplink drops the connection (EOF) before completing the handshake.
     #[tokio::test]
     async fn handshake_eof_before_completion_returns_err() {
-        let (mut client_r, mut client_w, uplink_r, uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (mut client_r, mut client_w, uplink_r, uplink_w) = make_pair(65_536);
 
-        // Read the 5 credential lines then close without sending SERVER.
-        tokio::spawn(async move {
-            let mut reader = LineReader::new(uplink_r);
-            for _ in 0..5 {
-                reader.next_line().await.unwrap();
-            }
-            drop(reader);
-            drop(uplink_w);
-        });
+            // Read the 5 credential lines then close without sending SERVER.
+            tokio::spawn(async move {
+                let mut reader = LineReader::new(uplink_r);
+                for _ in 0..5 {
+                    reader.next_line().await.unwrap();
+                }
+                drop(reader);
+                drop(uplink_w);
+            });
 
-        let result = do_handshake(&mut client_r, &mut client_w, &test_config()).await;
-        assert!(
-            result.is_err(),
-            "expected Err from do_handshake on EOF, got Ok"
-        );
+            let result = do_handshake(&mut client_r, &mut client_w, &test_config()).await;
+            assert!(
+                result.is_err(),
+                "expected Err from do_handshake on EOF, got Ok"
+            );
+        })
+        .await;
     }
 
     /// Uplink sends ERROR during the session — `run_session` returns Err.
     #[tokio::test]
     async fn session_uplink_sends_error_returns_err() {
-        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
-        tokio::spawn(async move {
-            uplink_w.write_all(b"ERROR :Link closed\r\n").await.unwrap();
-            drop(uplink_w);
-            drop(uplink_r);
-        });
+            tokio::spawn(async move {
+                uplink_w.write_all(b"ERROR :Link closed\r\n").await.unwrap();
+                drop(uplink_w);
+                drop(uplink_r);
+            });
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
-        let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
-        let _keep = cmd_tx;
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+            let _keep = cmd_tx;
 
-        let result = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            "bridge.test",
-            SessionTimings::production(),
-        )
+            let result = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings::production(),
+            )
+            .await;
+
+            assert!(result.is_err(), "expected Err on ERROR command");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("ERROR") || msg.contains("Link closed"),
+                "error should mention ERROR or reason, got: {msg}"
+            );
+        })
         .await;
-
-        assert!(result.is_err(), "expected Err on ERROR command");
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("ERROR") || msg.contains("Link closed"),
-            "error should mention ERROR or reason, got: {msg}"
-        );
     }
 
     /// Inbound UID command emits `S2SEvent::UserIntroduced` with correct fields.
     #[tokio::test]
     async fn session_inbound_uid_emits_user_introduced() {
-        let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, mut uplink_w) = make_pair(65_536);
 
-        tokio::spawn(async move {
-            uplink_w
-                .write_all(
-                    b":001 UID Alice 1 1700000000 alice discord.invalid \
+            tokio::spawn(async move {
+                uplink_w
+                    .write_all(
+                        b":001 UID Alice 1 1700000000 alice discord.invalid \
                       001AAAAAA 0 +i * * * :Alice Smith\r\n",
-                )
-                .await
-                .unwrap();
-            drop(uplink_w);
-            drop(uplink_r);
-        });
+                    )
+                    .await
+                    .unwrap();
+                drop(uplink_w);
+                drop(uplink_r);
+            });
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
-        let (event_tx, mut event_rx) = mpsc::channel::<S2SEvent>(16);
-        let _keep = cmd_tx;
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, mut event_rx) = mpsc::channel::<S2SEvent>(16);
+            let _keep = cmd_tx;
 
-        let _ = run_session(
-            client_r,
-            client_w,
-            default_hs(),
-            &mut cmd_rx,
-            &event_tx,
-            "002",
-            "bridge.test",
-            SessionTimings::production(),
-        )
-        .await;
+            let _ = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings::production(),
+            )
+            .await;
 
-        let event = event_rx
-            .try_recv()
-            .expect("expected a UserIntroduced event");
-        match event {
-            S2SEvent::UserIntroduced {
-                uid,
-                nick,
-                ident,
-                host,
-                server_sid,
-                realname,
-            } => {
-                assert_eq!(uid, "001AAAAAA");
-                assert_eq!(nick, "Alice");
-                assert_eq!(ident, "alice");
-                assert_eq!(host, "discord.invalid");
-                assert_eq!(server_sid, "001");
-                assert_eq!(realname, "Alice Smith");
+            let event = event_rx
+                .try_recv()
+                .expect("expected a UserIntroduced event");
+            match event {
+                S2SEvent::UserIntroduced {
+                    uid,
+                    nick,
+                    ident,
+                    host,
+                    server_sid,
+                    realname,
+                } => {
+                    assert_eq!(uid, "001AAAAAA");
+                    assert_eq!(nick, "Alice");
+                    assert_eq!(ident, "alice");
+                    assert_eq!(host, "discord.invalid");
+                    assert_eq!(server_sid, "001");
+                    assert_eq!(realname, "Alice Smith");
+                }
+                other => panic!("expected UserIntroduced, got {other:?}"),
             }
-            other => panic!("expected UserIntroduced, got {other:?}"),
-        }
+        })
+        .await;
     }
 }

@@ -242,30 +242,33 @@ fn restore_code_spans(text: &str, spans: &[String]) -> String {
 fn replace_word_boundary_underscores(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
+    // Characters before this index were already emitted inside an italic span.
+    // A `for` loop visits each index once, so the loop always ends.
+    let mut skip_to = 0;
 
-    while i < len {
-        if chars[i] == '_' {
+    for (i, &ch) in chars.iter().enumerate() {
+        if i < skip_to {
+            continue;
+        }
+        if ch == '_' {
             // Check if this _ is at a word boundary (start of string or preceded by whitespace)
             let at_word_start = i == 0 || chars[i - 1].is_whitespace();
 
             if at_word_start {
                 // Look for closing _ at a word boundary
                 if let Some(close) = find_word_boundary_close(&chars, i + 1) {
-                    let inner: String = chars[i + 1..close].iter().collect();
+                    let inner = &chars[i + 1..close];
                     if !inner.is_empty() {
                         result.push(IRC_ITALIC);
-                        result.push_str(&inner);
+                        result.extend(inner);
                         result.push(IRC_ITALIC);
-                        i = close + 1;
+                        skip_to = close + 1;
                         continue;
                     }
                 }
             }
         }
-        result.push(chars[i]);
-        i += 1;
+        result.push(ch);
     }
 
     result
@@ -290,33 +293,34 @@ fn replace_paired_marker(text: &str, marker: &str, code: char) -> String {
     let mut result = String::with_capacity(text.len());
     let mut remaining = text;
 
+    // Every pass continues after at least one whole marker, and markers are
+    // non-empty, so `remaining` always gets shorter and the loop always ends.
     loop {
-        let Some(start) = remaining.find(marker) else {
+        let Some((before, after_open)) = remaining.split_once(marker) else {
             result.push_str(remaining);
             break;
         };
 
         // Look for closing marker
-        let after_open = start + marker.len();
-        let Some(end) = remaining[after_open..].find(marker) else {
+        let Some((inner, rest)) = after_open.split_once(marker) else {
             // No closing marker — push rest and break
             result.push_str(remaining);
             break;
         };
 
-        let inner = &remaining[after_open..after_open + end];
         if inner.is_empty() {
-            // Empty content between markers — leave markers as-is
-            result.push_str(&remaining[..after_open]);
-            remaining = &remaining[after_open..];
+            // Empty content between markers — leave the opening marker as-is
+            result.push_str(before);
+            result.push_str(marker);
+            remaining = after_open;
             continue;
         }
 
-        result.push_str(&remaining[..start]);
+        result.push_str(before);
         result.push(code);
         result.push_str(inner);
         result.push(code);
-        remaining = &remaining[after_open + end + marker.len()..];
+        remaining = rest;
     }
 
     result
@@ -464,8 +468,11 @@ fn split_long_line(line: &str, max_bytes: usize) -> Vec<String> {
                 remaining = &remaining[boundary..];
             }
             Some(space_pos) => {
-                parts.push(remaining[..space_pos].to_string());
-                remaining = &remaining[space_pos + 1..]; // skip the ASCII space
+                // `rest` starts with the space, and `space_pos` is not 0, so
+                // `line` is not empty and `remaining` always gets shorter.
+                let (line, rest) = remaining.split_at(space_pos);
+                parts.push(line.to_string());
+                remaining = &rest[1..]; // skip the ASCII space
             }
         }
     }

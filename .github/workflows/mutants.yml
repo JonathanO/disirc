@@ -7,6 +7,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Derandomized Hegel runs with no shrinking (see hegel.toml).
+  HEGEL_DEFAULT_PROFILE: mutants
 
 on:
   # Run on every pull request. "Mutants (PR diff)" is a required check, so a

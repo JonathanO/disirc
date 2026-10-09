@@ -176,8 +176,10 @@ cargo = "warn"
 Before marking a spec as Implemented in `SPECS.md`, run mutation testing scoped to the relevant module and address any surviving mutants:
 
 ```
-cargo mutants -p disirc -- <module-path>
+HEGEL_DEFAULT_PROFILE=mutants cargo mutants -p disirc -- <module-path>
 ```
+
+The `mutants` profile in `hegel.toml` makes the Hegel tests derandomized and turns off shrinking, so each mutant gets a stable result and a failing property stops at the first counterexample.
 
 Zero surviving mutants that represent real test gaps. Equivalent mutants and integration-only survivors (e.g., thin shims that require live network context, non-deterministic clock functions, async event loops) must be documented in the spec's `TODO.md` with a brief justification for each category. If a mutant survives and is not equivalent, either fix the test gap or update the spec to explicitly exclude that case.
 

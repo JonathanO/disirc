@@ -181,6 +181,16 @@ HEGEL_DEFAULT_PROFILE=mutants cargo mutants -p disirc -- <module-path>
 
 The `mutants` profile in `hegel.toml` makes the Hegel tests derandomized and turns off shrinking, so each mutant gets a stable result and a failing property stops at the first counterexample.
 
+On a local machine, limit the memory of each process. A mutant can make a loop run for ever and allocate without limit; one such mutant used 12 GB in two minutes. Run the command in a subshell, so that the limit does not stay on your shell:
+
+```
+(ulimit -v 4000000; MALLOC_ARENA_MAX=2 HEGEL_DEFAULT_PROFILE=mutants cargo mutants -j 4 -p disirc -- <module-path>)
+```
+
+- `ulimit -v 4000000` limits each process to 4 GB of address space. A runaway test then fails to allocate and aborts. The limit applies to each process. The build and the tests need about 1.3 GB, so with `-j 4`, one runaway test and three normal ones use about 8 GB.
+- `MALLOC_ARENA_MAX=2` is required. Without it, glibc reserves 64 MB of address space for each thread, and the tests fail with "failed to spawn thread".
+- CI does not use this limit. If a CI runner "lost communication with the server" during a mutation run, look for a new runaway loop.
+
 Zero surviving mutants that represent real test gaps. Equivalent mutants and integration-only survivors (e.g., thin shims that require live network context, non-deterministic clock functions, async event loops) must be documented in the spec's `TODO.md` with a brief justification for each category. If a mutant survives and is not equivalent, either fix the test gap or update the spec to explicitly exclude that case.
 
 ### Excluding equivalent mutants

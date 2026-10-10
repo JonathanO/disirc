@@ -61,15 +61,16 @@ jobs:
           path: mutants.out
 
   full-mutants:
-    name: Mutants (full, shard ${{ matrix.shard }}/4)
+    name: Mutants (full, shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
-    # A single runner took 102 minutes for 655 mutants. Four shards run in
-    # parallel, and each one has its own time and memory limits.
+    # A single runner took 102 minutes for 655 mutants. Eight shards run in
+    # parallel, and each one has its own time and memory limits. Round-robin
+    # spreads slow mutants (for example, timeouts in one file) over the shards.
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v7
 
@@ -94,7 +95,7 @@ jobs:
           echo 'rustflags = ["-C", "link-arg=--ld-path=wild"]' >> .cargo/config.toml
 
       - name: Run all mutants
-        run: cargo mutants -vV --in-place --shard ${{ matrix.shard }}/4
+        run: cargo mutants -vV --in-place --shard ${{ matrix.shard }}/8 --sharding round-robin
 
       - name: Archive mutants.out
         uses: actions/upload-artifact@v7

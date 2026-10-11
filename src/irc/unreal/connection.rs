@@ -403,20 +403,20 @@ async fn run_session(
                             .as_secs();
                         for msg in translate_outbound(&cmd, our_sid, hs.mtags_active, ts) {
                             tracing::trace!(line = %msg, "IRC → outbound");
-                            if let Err(e) = writer.write_message(&msg).await {
-                                // write_message reports a message that it cannot
-                                // serialize as InvalidInput.  Drop only that
-                                // message: one bad message must not end the
-                                // session.  Any other error is a real write
-                                // failure.
-                                if e.kind() != std::io::ErrorKind::InvalidInput {
-                                    return Err(e).context("Write error");
+                            // Every field of an outbound message is validated
+                            // or generated before it gets here, so a serialize
+                            // error (InvalidInput) is a bug in disirc.  Ending
+                            // the session is loud, and the reconnect burst
+                            // rebuilds the IRC state from the bridge's state.
+                            // Dropping the message would leave the two out of
+                            // step without anyone noticing.
+                            writer.write_message(&msg).await.with_context(|| {
+                                if msg.to_wire().is_err() {
+                                    "cannot serialize an outbound IRC message; this is a bug in disirc"
+                                } else {
+                                    "Write error"
                                 }
-                                tracing::warn!(
-                                    error = %e,
-                                    "Dropping an outbound IRC message that cannot be serialized"
-                                );
-                            }
+                            })?;
                         }
                     }
                 }
@@ -850,11 +850,11 @@ mod tests {
         .await;
     }
 
-    /// A command that cannot be serialized is dropped, and the session goes
-    /// on.  Before this, any serialize error ended the session, so a single
-    /// Discord message with a NUL in it dropped the IRC link.
+    /// Every outbound field is validated or generated before the session, so
+    /// a message that cannot be serialized is a bug.  The session ends with
+    /// an error that says so, and it writes nothing after the bad message.
     #[tokio::test]
-    async fn session_drops_unserializable_command_and_continues() {
+    async fn session_ends_on_unserializable_command() {
         within_deadline(async {
             let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
 
@@ -869,7 +869,7 @@ mod tests {
             };
             cmd_tx.send(message("bad\0text")).await.unwrap();
             cmd_tx.send(message("after")).await.unwrap();
-            drop(cmd_tx); // cmd_rx returns None after both → session exits
+            drop(cmd_tx);
 
             let read_task = tokio::spawn(async move {
                 let mut reader = LineReader::new(uplink_r);
@@ -895,9 +895,12 @@ mod tests {
             .await;
             drop(uplink_w);
 
-            assert!(result.is_ok(), "session ended with {result:?}");
-            let privmsgs = read_task.await.unwrap();
-            assert_eq!(privmsgs, [":002AAAAAA PRIVMSG #test :after"]);
+            let err = result.expect_err("a bad message must end the session");
+            assert!(
+                format!("{err:#}").contains("this is a bug in disirc"),
+                "unexpected error: {err:#}"
+            );
+            assert_eq!(read_task.await.unwrap(), Vec::<String>::new());
         })
         .await;
     }

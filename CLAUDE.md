@@ -246,13 +246,13 @@ Do **not** commit:
 
 ## Before raising a PR
 
-1. After the "Done means" checks pass, run `pr-reviewer` and `pr-simplifier` (`.claude/agents/`) on the branch, in parallel. Give `pr-reviewer` the draft PR description.
+1. After the "Done means" checks pass, run the `pr-reviewer` agent (`.claude/agents/pr-reviewer.md`) on the branch. Give it the draft PR description. It reports correctness findings and reductions in two lists.
 2. Fix each finding, or decide not to. Fix every `bug` finding.
 3. Put each fix in a commit. The commit message says which finding it fixes.
 4. If anything changed, run the "Done means" checks again.
 5. In the PR description, list only the findings that you did not fix, with the reason. If you fixed all of them, write nothing about the review.
 
-The agents are told not to change files, but they have `Bash`, so this is not enforced.
+The agent is told not to change files, but it has `Bash`, so this is not enforced. It preloads the `hegel-review` and `ponytail-review` skills. These come from plugins that each user installs. Without them, the agent runs without those checklists.
 
 ### PR descriptions
 

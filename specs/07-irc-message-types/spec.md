@@ -135,8 +135,15 @@ significant machinery for limited benefit at this stage.
 The 4096-byte line-length constraint cannot be checked at construction time
 regardless: it depends on the fully assembled line, not any individual field.
 Field-level constraints (no spaces in non-trailing params, no NUL/CR/LF)
-could in principle be pushed earlier, but the serializer already catches them
-via `SerializeError::InvalidParam`.
+could in principle be pushed earlier, but the serializer already catches them:
+`SerializeError::InvalidParam` for an empty non-trailing parameter or one with
+a space, and `SerializeError::ForbiddenCharacter` for CR, LF, or NUL in any
+field (tags, prefix, command, or parameters). Tag values escape CR and LF, so
+only NUL is forbidden there. A CR or LF in a field would otherwise end the
+line early and inject a second protocol line.
+
+The session drops an outbound message that cannot be serialized and logs a
+warning. One bad message must not end the session and drop the link.
 
 If construction-time validation becomes valuable (e.g., if these types are
 ever exposed as a public API), add private fields and `try_new()` constructors

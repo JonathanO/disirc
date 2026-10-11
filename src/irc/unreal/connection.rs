@@ -403,7 +403,20 @@ async fn run_session(
                             .as_secs();
                         for msg in translate_outbound(&cmd, our_sid, hs.mtags_active, ts) {
                             tracing::trace!(line = %msg, "IRC → outbound");
-                            writer.write_message(&msg).await.context("Write error")?;
+                            if let Err(e) = writer.write_message(&msg).await {
+                                // write_message reports a message that it cannot
+                                // serialize as InvalidInput.  Drop only that
+                                // message: one bad message must not end the
+                                // session.  Any other error is a real write
+                                // failure.
+                                if e.kind() != std::io::ErrorKind::InvalidInput {
+                                    return Err(e).context("Write error");
+                                }
+                                tracing::warn!(
+                                    error = %e,
+                                    "Dropping an outbound IRC message that cannot be serialized"
+                                );
+                            }
                         }
                     }
                 }
@@ -833,6 +846,58 @@ mod tests {
                 line.contains(":002AAAAAA PRIVMSG #test :hi"),
                 "unexpected wire line: {line:?}"
             );
+        })
+        .await;
+    }
+
+    /// A command that cannot be serialized is dropped, and the session goes
+    /// on.  Before this, any serialize error ended the session, so a single
+    /// Discord message with a NUL in it dropped the IRC link.
+    #[tokio::test]
+    async fn session_drops_unserializable_command_and_continues() {
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
+
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+
+            let message = |text: &str| S2SCommand::SendMessage {
+                from_uid: "002AAAAAA".into(),
+                target: "#test".into(),
+                text: text.into(),
+                timestamp: None,
+            };
+            cmd_tx.send(message("bad\0text")).await.unwrap();
+            cmd_tx.send(message("after")).await.unwrap();
+            drop(cmd_tx); // cmd_rx returns None after both → session exits
+
+            let read_task = tokio::spawn(async move {
+                let mut reader = LineReader::new(uplink_r);
+                let mut privmsgs = Vec::new();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if line.contains("PRIVMSG") {
+                        privmsgs.push(line);
+                    }
+                }
+                privmsgs
+            });
+
+            let result = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings::production(),
+            )
+            .await;
+            drop(uplink_w);
+
+            assert!(result.is_ok(), "session ended with {result:?}");
+            let privmsgs = read_task.await.unwrap();
+            assert_eq!(privmsgs, [":002AAAAAA PRIVMSG #test :after"]);
         })
         .await;
     }

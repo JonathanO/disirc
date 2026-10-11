@@ -4,9 +4,9 @@
 //! handler methods that consume events and produce commands.  The async
 //! `run_bridge` loop is a thin dispatcher that calls these methods.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::config::Config;
+use crate::config::{BridgeEntry, Config};
 use crate::discord::{DiscordCommand, DiscordEvent, DiscordPresence};
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
 use crate::irc::{S2SCommand, S2SEvent};
@@ -697,37 +697,31 @@ impl BridgeState {
         let cmd = if diff.is_empty() {
             None
         } else {
+            // A new or changed bridge entry needs a member snapshot, so that the
+            // pseudoclients join its IRC channel.  A changed webhook alone needs
+            // no IRC action.
             let added_ids: Vec<u64> = diff
                 .added
                 .iter()
-                .chain(diff.webhook_changed.iter())
                 .filter_map(|e| e.discord_channel_id.parse().ok())
                 .collect();
-            let removed_ids: Vec<u64> = diff
-                .removed
-                .iter()
-                .filter_map(|e| e.discord_channel_id.parse().ok())
-                .collect();
-            let added_webhook_ids: Vec<u64> = diff
-                .added
-                .iter()
-                .chain(diff.webhook_changed.iter())
-                .filter_map(|e| {
-                    e.webhook_url
-                        .as_deref()
-                        .and_then(crate::discord::webhook_id_from_url)
-                })
-                .collect();
-            let removed_webhook_ids: Vec<u64> = diff
-                .removed
-                .iter()
-                .chain(diff.webhook_changed.iter())
-                .filter_map(|e| {
-                    e.webhook_url
-                        .as_deref()
-                        .and_then(crate::discord::webhook_id_from_url)
-                })
-                .collect();
+            // Removals and webhook changes compare the whole old and new
+            // configs, not diff entries.  An ID can be in both an added and a
+            // removed entry (a renamed IRC channel, a webhook that another
+            // bridge still uses), and the Discord task applies removals last.
+            let (old_ids, new_ids) = (
+                channel_ids(&self.config.bridges),
+                channel_ids(&new_config.bridges),
+            );
+            let (old_webhooks, new_webhooks) = (
+                webhook_ids(&self.config.bridges),
+                webhook_ids(&new_config.bridges),
+            );
+            let removed_ids: Vec<u64> = old_ids.difference(&new_ids).copied().collect();
+            let added_webhook_ids: Vec<u64> =
+                new_webhooks.difference(&old_webhooks).copied().collect();
+            let removed_webhook_ids: Vec<u64> =
+                old_webhooks.difference(&new_webhooks).copied().collect();
             self.bridge_map = BridgeMap::from_config(&new_config.bridges);
             Some(DiscordCommand::ReloadBridges {
                 added_channel_ids: added_ids,
@@ -739,6 +733,23 @@ impl BridgeState {
         self.config = new_config;
         cmd
     }
+}
+
+/// The Discord channel IDs that `bridges` routes.
+fn channel_ids(bridges: &[BridgeEntry]) -> HashSet<u64> {
+    bridges
+        .iter()
+        .filter_map(|e| e.discord_channel_id.parse().ok())
+        .collect()
+}
+
+/// The webhook IDs of the webhook URLs in `bridges`.
+fn webhook_ids(bridges: &[BridgeEntry]) -> HashSet<u64> {
+    bridges
+        .iter()
+        .filter_map(|e| e.webhook_url.as_deref())
+        .filter_map(crate::discord::webhook_id_from_url)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -753,6 +764,8 @@ mod tests {
     };
     use crate::discord::DiscordPresence;
     use crate::test_util::{SnapshotOpts, member, snapshot, snapshot_with};
+    use hegel::prelude::*;
+    use std::collections::HashSet;
 
     fn test_config() -> Config {
         Config {
@@ -1553,6 +1566,151 @@ mod tests {
             cmd.is_none(),
             "reload_config with identical bridges should return None"
         );
+    }
+
+    // --- reload_config: routing and self-message filter -------------------
+
+    const BOT_USER_ID: u64 = 999;
+
+    fn webhook_url(id: u64) -> String {
+        format!("https://discord.com/api/webhooks/{id}/token")
+    }
+
+    /// A valid `[[bridge]]` list drawn from small pools, so that two lists
+    /// often share Discord channel IDs, IRC channels, and webhook IDs.
+    #[hegel::composite]
+    fn bridge_list(tc: &hegel::TestCase) -> Vec<BridgeEntry> {
+        let len = tc.draw(gs::integers::<usize>().max_value(4));
+        let ids = tc.draw(gs::permutations(vec![101u64, 102, 103, 104, 105]));
+        let channels = tc.draw(gs::permutations(vec!["#a", "#b", "#c", "#d", "#e"]));
+        let mut bridges = Vec::new();
+        for i in 0..len {
+            let webhook = tc.draw(gs::optional(
+                gs::integers::<u64>().min_value(1).max_value(3),
+            ));
+            bridges.push(BridgeEntry {
+                discord_channel_id: ids[i].to_string(),
+                irc_channel: channels[i].to_string(),
+                webhook_url: webhook.map(webhook_url),
+            });
+        }
+        bridges
+    }
+
+    fn routed_ids(bridges: &[BridgeEntry]) -> HashSet<u64> {
+        bridges
+            .iter()
+            .filter_map(|b| b.discord_channel_id.parse().ok())
+            .collect()
+    }
+
+    /// The self-message filter that a config should produce: every
+    /// configured webhook ID plus the bot's own user ID.
+    fn self_filter_for(bridges: &[BridgeEntry]) -> HashSet<u64> {
+        let mut filter: HashSet<u64> = bridges
+            .iter()
+            .filter_map(|b| b.webhook_url.as_deref())
+            .filter_map(crate::discord::webhook_id_from_url)
+            .collect();
+        filter.insert(BOT_USER_ID);
+        filter
+    }
+
+    /// Start from the routing and filter sets of `old`, reload to `new`, and
+    /// apply the resulting command as the Discord task does.  Returns the
+    /// command's `added_channel_ids` and the resulting sets.
+    fn reload_and_apply(
+        old: &[BridgeEntry],
+        new: &[BridgeEntry],
+    ) -> (Vec<u64>, HashSet<u64>, HashSet<u64>) {
+        let mut old_config = test_config();
+        old_config.bridges = old.to_vec();
+        let mut new_config = test_config();
+        new_config.bridges = new.to_vec();
+        let mut state = BridgeState::new(&old_config, HashMap::new());
+
+        let mut channel_ids = routed_ids(old);
+        let mut self_filter = self_filter_for(old);
+        let mut added = Vec::new();
+        if let Some(DiscordCommand::ReloadBridges {
+            added_channel_ids,
+            removed_channel_ids,
+            added_webhook_ids,
+            removed_webhook_ids,
+        }) = state.reload_config(new_config)
+        {
+            crate::discord::send::apply_reload(
+                &mut channel_ids,
+                &mut self_filter,
+                &added_channel_ids,
+                &removed_channel_ids,
+                &added_webhook_ids,
+                &removed_webhook_ids,
+            );
+            added = added_channel_ids;
+        }
+        (added, channel_ids, self_filter)
+    }
+
+    /// After a reload, Discord routes exactly the channels in the new config.
+    #[hegel::test]
+    fn reload_routes_exactly_the_new_channels(tc: TestCase) {
+        let old = tc.draw(bridge_list());
+        let new = tc.draw(bridge_list());
+        let (_, channel_ids, _) = reload_and_apply(&old, &new);
+        assert_eq!(channel_ids, routed_ids(&new));
+    }
+
+    /// After a reload, the self-message filter holds exactly the new config's
+    /// webhook IDs and the bot's ID.  A missing webhook ID makes the bridge
+    /// relay its own webhook posts back to IRC (an echo loop).
+    #[hegel::test]
+    fn reload_self_filter_matches_new_webhooks(tc: TestCase) {
+        let old = tc.draw(bridge_list());
+        let new = tc.draw(bridge_list());
+        let (_, _, self_filter) = reload_and_apply(&old, &new);
+        assert_eq!(self_filter, self_filter_for(&new));
+    }
+
+    /// The Discord task fetches a member snapshot for each added channel, and
+    /// the snapshot makes the pseudoclients join the IRC channel.  So exactly
+    /// the new or changed `(discord_channel_id, irc_channel)` entries are
+    /// added.  A changed webhook alone needs no IRC action (spec 01).
+    #[hegel::test]
+    fn reload_snapshots_exactly_the_new_bridge_entries(tc: TestCase) {
+        let old = tc.draw(bridge_list());
+        let new = tc.draw(bridge_list());
+        let (added, _, _) = reload_and_apply(&old, &new);
+        let mut expected: Vec<u64> = new
+            .iter()
+            .filter(|n| {
+                !old.iter().any(|o| {
+                    o.discord_channel_id == n.discord_channel_id && o.irc_channel == n.irc_channel
+                })
+            })
+            .filter_map(|n| n.discord_channel_id.parse().ok())
+            .collect();
+        let mut added = added;
+        expected.sort_unstable();
+        added.sort_unstable();
+        assert_eq!(added, expected);
+    }
+
+    /// Regression: a changed webhook URL added the new webhook ID to the
+    /// self-message filter and then removed it again.
+    #[test]
+    fn reload_with_changed_webhook_filters_the_new_webhook() {
+        let old = vec![BridgeEntry {
+            discord_channel_id: "101".into(),
+            irc_channel: "#a".into(),
+            webhook_url: Some(webhook_url(1)),
+        }];
+        let new = vec![BridgeEntry {
+            webhook_url: Some(webhook_url(2)),
+            ..old[0].clone()
+        }];
+        let (_, _, self_filter) = reload_and_apply(&old, &new);
+        assert_eq!(self_filter, HashSet::from([2, BOT_USER_ID]));
     }
 
     // --- Discord event IRC command gate ---

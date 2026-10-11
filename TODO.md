@@ -12,8 +12,24 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
 - [ ] `reload_config` / `apply_reload`: a changed webhook ID is added and then
       removed from the self-message filter (echo loop); a changed
       `irc_channel` drops the channel; a shared webhook ID is removed
-- [ ] `IrcMessage::to_wire` does not reject CR, LF, or NUL in parameters
-      (spec 07 says that it does)
+- [x] `IrcMessage::to_wire` does not reject CR, LF, or NUL in parameters
+      (spec 07 says that it does). Also fixed here: `IrcMessage`'s
+      `Display` panicked on an unserializable message (branch
+      `fix/serializer-rejects-crlf-nul`)
+- [x] Remove NUL from Discord text in `discord_to_irc`, and clean control
+      characters out of display names before they become the `UID` realname
+      (branch `fix/serializer-rejects-crlf-nul`)
+- [ ] Optional: check with the e2e Discord bots which control characters
+      Discord really delivers in message content and names. The bridge is
+      safe either way; this only tells us how often the cleaning applies.
+- [ ] Return serialize errors to the caller that can act on them: validated
+      types for UIDs, nicks, and channel names in `S2SCommand`, so that an
+      invalid command cannot be built, and the error surfaces in the bridge
+      before any state changes. Today an unserializable outbound message is
+      a bug that ends the IRC session (spec 07).
+- [ ] A multi-line DM sends only its first line to IRC:
+      `format_dm_to_irc` (`bridge/routing.rs`) keeps the first line from
+      `discord_to_irc` and drops the rest without telling the sender.
 - [ ] `validate_no_duplicates` misses `#Foo`/`#foo` and `0123`/`123`, which
       `BridgeMap` treats as the same
 - [ ] Check these suspected bugs from the same review (not yet confirmed);

@@ -23,6 +23,7 @@ Because the Discord user is represented as an IRC pseudoclient, no sender prefix
 | Underline `__text__` | Convert to IRC underline: `\x1ftext\x1f` |
 | Strikethrough `~~text~~` | Pass through unchanged, including markers (no IRC equivalent; preserving markers conveys intent) |
 | Newlines (`\n`, `\r\n`, `\r`) | Normalise to `\n`, then split; each non-empty line is a separate `PRIVMSG` (max 5 lines; truncate remainder with `[+N more lines]`) |
+| NUL (`\0`) | Removed. IRC lines cannot carry NUL, and the serializer rejects it, so the whole message would otherwise be lost. |
 
 ### Processing order (Discord → IRC)
 

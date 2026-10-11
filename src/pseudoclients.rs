@@ -235,6 +235,21 @@ impl NickSet {
 // Pseudoclient state
 // ---------------------------------------------------------------------------
 
+/// The `UID` realname for a Discord display name.
+///
+/// IRC lines cannot carry CR, LF, or NUL, and other control characters
+/// have no meaning in a realname, so every control character becomes a
+/// space.  If nothing is left, the realname is the nick.
+fn realname_for(display_name: &str, nick: &str) -> String {
+    let cleaned = display_name.replace(char::is_control, " ");
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        nick.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Per-pseudoclient state.
 #[derive(Debug, Clone)]
 pub(crate) struct PseudoclientState {
@@ -266,7 +281,7 @@ impl PseudoclientState {
             nick: self.nick.clone(),
             ident: ident.to_string(),
             host: format!("{}.discord.com", self.discord_user_id),
-            realname: self.display_name.clone(),
+            realname: realname_for(&self.display_name, &self.nick),
         }
     }
 
@@ -1351,6 +1366,23 @@ mod tests {
     // -------------------------------------------------------------------
 
     use hegel::prelude::*;
+
+    // --- realname_for ---
+
+    #[test]
+    fn realname_keeps_a_normal_display_name() {
+        assert_eq!(realname_for("Alice Smith ✨", "alice"), "Alice Smith ✨");
+    }
+
+    #[test]
+    fn realname_replaces_control_characters_with_spaces() {
+        assert_eq!(realname_for("Bob\r\nKILL\0x", "bob"), "Bob  KILL x");
+    }
+
+    #[test]
+    fn realname_falls_back_to_the_nick_when_nothing_is_left() {
+        assert_eq!(realname_for("\0\r\n ", "carol"), "carol");
+    }
 
     /// For ANY input — arbitrary Unicode included — the sanitized nick
     /// upholds every IRC nick invariant: non-empty, at most 30 bytes,

@@ -403,7 +403,21 @@ async fn run_session(
                             .as_secs();
                         for msg in translate_outbound(&cmd, our_sid, hs.mtags_active, ts) {
                             tracing::trace!(line = %msg, "IRC → outbound");
-                            writer.write_message(&msg).await.context("Write error")?;
+                            // Every outbound field is cleaned or validated at its
+                            // source (spec 07), so a serialize error is a bug in
+                            // disirc.  write_message reports it as InvalidInput.
+                            // Ending the session is loud, and the reconnect
+                            // burst rebuilds the IRC state from the bridge's
+                            // state.  Dropping the message would leave the two
+                            // out of step without anyone noticing.
+                            if let Err(e) = writer.write_message(&msg).await {
+                                let context = if e.kind() == std::io::ErrorKind::InvalidInput {
+                                    "cannot serialize an outbound IRC message; this is a bug in disirc"
+                                } else {
+                                    "Write error"
+                                };
+                                return Err(e).context(context);
+                            }
                         }
                     }
                 }
@@ -833,6 +847,61 @@ mod tests {
                 line.contains(":002AAAAAA PRIVMSG #test :hi"),
                 "unexpected wire line: {line:?}"
             );
+        })
+        .await;
+    }
+
+    /// Every outbound field is validated or generated before the session, so
+    /// a message that cannot be serialized is a bug.  The session ends with
+    /// an error that says so, and it writes nothing after the bad message.
+    #[tokio::test]
+    async fn session_ends_on_unserializable_command() {
+        within_deadline(async {
+            let (client_r, client_w, uplink_r, uplink_w) = make_pair(65_536);
+
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<S2SCommand>(4);
+            let (event_tx, _event_rx) = mpsc::channel::<S2SEvent>(4);
+
+            let message = |text: &str| S2SCommand::SendMessage {
+                from_uid: "002AAAAAA".into(),
+                target: "#test".into(),
+                text: text.into(),
+                timestamp: None,
+            };
+            cmd_tx.send(message("bad\0text")).await.unwrap();
+            cmd_tx.send(message("after")).await.unwrap();
+            drop(cmd_tx);
+
+            let read_task = tokio::spawn(async move {
+                let mut reader = LineReader::new(uplink_r);
+                let mut privmsgs = Vec::new();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if line.contains("PRIVMSG") {
+                        privmsgs.push(line);
+                    }
+                }
+                privmsgs
+            });
+
+            let result = run_session(
+                client_r,
+                client_w,
+                default_hs(),
+                &mut cmd_rx,
+                &event_tx,
+                "002",
+                "bridge.test",
+                SessionTimings::production(),
+            )
+            .await;
+            drop(uplink_w);
+
+            let err = result.expect_err("a bad message must end the session");
+            assert!(
+                format!("{err:#}").contains("this is a bug in disirc"),
+                "unexpected error: {err:#}"
+            );
+            assert_eq!(read_task.await.unwrap(), Vec::<String>::new());
         })
         .await;
     }

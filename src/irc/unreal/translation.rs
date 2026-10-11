@@ -1073,19 +1073,17 @@ mod tests {
             .max_size(4)
             .map(|parts: Vec<String>| parts.concat()),
         );
-        let state = crate::pseudoclients::PseudoclientState {
-            discord_user_id: 123,
-            uid: "002AAAAAA".into(),
-            nick: crate::pseudoclients::sanitize_nick(&username),
-            username,
-            display_name,
-            channels: vec![],
-            presence: crate::discord::DiscordPresence::Online,
-            needs_reintroduce: false,
-            last_active: 0,
-            channel_last_active: std::collections::HashMap::new(),
-            went_offline_at: None,
-        };
+        let mut pm = crate::pseudoclients::PseudoclientManager::new("002", "discord");
+        let state = pm
+            .introduce(
+                123,
+                &username,
+                &display_name,
+                &[],
+                0,
+                crate::discord::DiscordPresence::Online,
+            )
+            .expect("a new Discord user is introduced");
         for msg in translate_outbound(&state.introduce_command("discord"), "002", false, 0) {
             assert!(msg.to_wire().is_ok(), "{msg:?}: {:?}", msg.to_wire());
         }

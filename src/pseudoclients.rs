@@ -241,10 +241,7 @@ impl NickSet {
 /// have no meaning in a realname, so every control character becomes a
 /// space.  If nothing is left, the realname is the nick.
 fn realname_for(display_name: &str, nick: &str) -> String {
-    let cleaned: String = display_name
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
+    let cleaned = display_name.replace(char::is_control, " ");
     let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         nick.to_string()

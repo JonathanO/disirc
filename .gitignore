@@ -15,7 +15,9 @@ mutants.out/
 mutants.out.old/
 # Hegel failure database (local runs only; CI disables it).
 .hegel/
-.claude/
+# Local Claude Code state stays private; the shared review agents are tracked.
+.claude/*
+!.claude/agents/
 
 # OS
 .DS_Store

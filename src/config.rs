@@ -179,6 +179,8 @@ impl Config {
         require_non_empty("discord.token", &self.discord.token)?;
         require_non_empty("irc.uplink", &self.irc.uplink)?;
         require_non_empty("irc.link_password", &self.irc.link_password)?;
+        require_single_line("irc.link_password", &self.irc.link_password)?;
+        require_single_line("irc.description", &self.irc.description)?;
         validate_sid(&self.irc.sid)?;
         validate_link_name(&self.irc.link_name)?;
         validate_ident(&self.pseudoclients.ident)?;
@@ -205,6 +207,17 @@ impl Config {
 fn require_non_empty(field: &str, value: &str) -> Result<(), ConfigError> {
     if value.trim().is_empty() {
         return Err(ConfigError::Validation(format!("{field} cannot be empty")));
+    }
+    Ok(())
+}
+
+/// Fields that are sent as IRC parameters must not contain CR, LF, or NUL:
+/// they would end the line early or inject a second line.
+fn require_single_line(field: &str, value: &str) -> Result<(), ConfigError> {
+    if value.contains(['\r', '\n', '\0']) {
+        return Err(ConfigError::Validation(format!(
+            "{field} must not contain CR, LF, or NUL"
+        )));
     }
     Ok(())
 }
@@ -291,21 +304,44 @@ fn validate_link_name(name: &str) -> Result<(), ConfigError> {
 }
 
 /// Discord channel ID must be a non-empty string of ASCII digits.
+/// A Discord channel ID is a snowflake: a 64-bit unsigned integer.  Only its
+/// canonical decimal form is accepted (no leading zeros), so that two
+/// spellings of one ID cannot pass the duplicate check and then share a slot
+/// in the routing table.
 fn validate_discord_channel_id(id: &str) -> Result<(), ConfigError> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+    let canonical = id.parse::<u64>().is_ok_and(|n| n.to_string() == id);
+    if !canonical {
         return Err(ConfigError::Validation(format!(
-            "bridge discord_channel_id {id:?} is invalid: must be a non-empty string of digits"
+            "bridge discord_channel_id {id:?} is invalid: must be a 64-bit unsigned \
+             integer in decimal with no leading zeros"
         )));
     }
     Ok(())
 }
 
-/// IRC channel must start with `#`.
+/// Longest IRC channel name (RFC 2812 §1.3).
+const MAX_IRC_CHANNEL_BYTES: usize = 50;
+
+/// IRC channel must be a legal channel name (RFC 2812 §1.3 and §2.3.1): it
+/// starts with `#`, is at most 50 bytes, and contains none of the characters
+/// that would split an IRC line or a channel list.
 fn validate_irc_channel(channel: &str) -> Result<(), ConfigError> {
-    if !channel.starts_with('#') {
-        return Err(ConfigError::Validation(format!(
-            "bridge irc_channel {channel:?} is invalid: must start with '#'"
-        )));
+    let err = |why: &str| {
+        ConfigError::Validation(format!("bridge irc_channel {channel:?} is invalid: {why}"))
+    };
+    let Some(name) = channel.strip_prefix('#') else {
+        return Err(err("must start with '#'"));
+    };
+    if name.is_empty() {
+        return Err(err("must have a name after '#'"));
+    }
+    if channel.len() > MAX_IRC_CHANNEL_BYTES {
+        return Err(err("must be at most 50 bytes"));
+    }
+    if name.contains([' ', ',', ':', '\x07', '\r', '\n', '\0']) {
+        return Err(err(
+            "must not contain a space, comma, colon, BEL, CR, LF, or NUL",
+        ));
     }
     Ok(())
 }
@@ -326,6 +362,11 @@ fn validate_webhook_url(url: &str) -> Result<(), ConfigError> {
 }
 
 /// No two bridge entries may share a `discord_channel_id` or `irc_channel`.
+///
+/// IRC channel names are case-insensitive (RFC 2812 §2.2), and
+/// `BridgeMap` keys them by their lowercase form, so the check compares the
+/// same form.  Discord IDs are already canonical (see
+/// [`validate_discord_channel_id`]), so the string is the number.
 fn validate_no_duplicates(bridges: &[BridgeEntry]) -> Result<(), ConfigError> {
     let mut discord_ids = std::collections::HashSet::new();
     let mut irc_channels = std::collections::HashSet::new();
@@ -337,7 +378,7 @@ fn validate_no_duplicates(bridges: &[BridgeEntry]) -> Result<(), ConfigError> {
                 entry.discord_channel_id
             )));
         }
-        if !irc_channels.insert(entry.irc_channel.as_str()) {
+        if !irc_channels.insert(entry.irc_channel.to_lowercase()) {
             return Err(ConfigError::Validation(format!(
                 "duplicate irc_channel {:?} in [[bridge]] entries",
                 entry.irc_channel
@@ -1020,6 +1061,185 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use hegel::prelude::*;
+
+    // -- Bridge entries: validation must agree with the routing table ------
+
+    /// Discord channel IDs that spell the same number in different ways, plus
+    /// one that does not fit in a u64.
+    const ID_POOL: &[&str] = &["123", "0123", "00123", "456", "18446744073709551616"];
+
+    /// Channel names that differ only in case, and names with each character
+    /// that an IRC channel name must not contain.
+    const CHANNEL_POOL: &[&str] = &[
+        "#a", "#A", "#b", "#a b", "#a,b", "#a:b", "#a\x07b", "#a\rb", "#a\nb", "#a\0b", "#", "a",
+        "+a",
+    ];
+
+    #[hegel::composite]
+    fn bridge_list(tc: &hegel::TestCase) -> Vec<BridgeEntry> {
+        let len = tc.draw(gs::integers::<usize>().min_value(1).max_value(3));
+        (0..len)
+            .map(|_| {
+                let id = tc.draw(gs::sampled_from(ID_POOL));
+                let channel = tc.draw(gs::sampled_from(CHANNEL_POOL));
+                let webhook = tc.draw(gs::optional(gs::just(
+                    "https://discord.com/api/webhooks/1/t".to_string(),
+                )));
+                bridge(id, channel, webhook.as_deref())
+            })
+            .collect()
+    }
+
+    /// If validation accepts a bridge list, the routing table built from it
+    /// holds every entry, and both lookups agree.  Otherwise two entries
+    /// silently share one slot, and the two directions route differently.
+    #[hegel::test]
+    fn accepted_bridges_build_a_complete_routing_table(tc: TestCase) {
+        let bridges = tc.draw(bridge_list());
+        let mut cfg = valid_config();
+        cfg.bridges.clone_from(&bridges);
+        if cfg.validate().is_ok() {
+            tc.event("accepted");
+            let map = crate::bridge::map::BridgeMap::from_config(&bridges);
+            for entry in &bridges {
+                let id: u64 = entry
+                    .discord_channel_id
+                    .parse()
+                    .expect("accepted ID parses");
+                let by_id = map
+                    .by_discord_id(id)
+                    .expect("entry reachable by Discord ID");
+                let by_channel = map
+                    .by_irc_channel(&entry.irc_channel)
+                    .expect("entry reachable by IRC channel");
+                assert_eq!(by_id.irc_channel, entry.irc_channel, "{entry:?}");
+                assert_eq!(by_channel.discord_channel_id, id, "{entry:?}");
+            }
+        }
+    }
+
+    /// An accepted channel name is a legal IRC middle parameter: the bridge
+    /// must be able to PART it (and SJOIN and PRIVMSG it).
+    #[hegel::test]
+    fn accepted_irc_channel_serializes(tc: TestCase) {
+        let channel = tc.draw(hegel::one_of!(
+            gs::sampled_from(CHANNEL_POOL).map(str::to_string),
+            gs::text().max_size(60).map(|s| format!("#{s}")),
+        ));
+        let mut cfg = valid_config();
+        cfg.bridges[0].irc_channel.clone_from(&channel);
+        if cfg.validate().is_ok() {
+            tc.event("accepted");
+            let msg = crate::irc::unreal::IrcMessage {
+                tags: vec![],
+                prefix: Some("001AAAAAA".into()),
+                command: crate::irc::unreal::IrcCommand::Part {
+                    channel,
+                    reason: None,
+                },
+            };
+            assert!(msg.to_wire().is_ok(), "{msg:?}: {:?}", msg.to_wire());
+        }
+    }
+
+    /// Accepted handshake fields serialize as the PASS and SERVER lines.
+    #[hegel::test]
+    fn accepted_handshake_fields_serialize(tc: TestCase) {
+        let hostile = || {
+            gs::vecs(hegel::one_of!(
+                gs::sampled_from(vec!["\r", "\n", "\0", " ", ":"]).map(str::to_string),
+                gs::text().max_size(10),
+            ))
+            .max_size(4)
+            .map(|parts: Vec<String>| parts.concat())
+        };
+        let password = tc.draw(hostile());
+        let description = tc.draw(hostile());
+        let mut cfg = valid_config();
+        cfg.irc.link_password.clone_from(&password);
+        cfg.irc.description.clone_from(&description);
+        if cfg.validate().is_ok() {
+            tc.event("accepted");
+            use crate::irc::unreal::{IrcCommand, IrcMessage};
+            let line = |command| IrcMessage {
+                tags: vec![],
+                prefix: None,
+                command,
+            };
+            for msg in [
+                line(IrcCommand::Pass {
+                    password: password.clone(),
+                }),
+                line(IrcCommand::Server {
+                    name: cfg.irc.link_name.clone(),
+                    hop_count: 1,
+                    description: description.clone(),
+                }),
+            ] {
+                assert!(msg.to_wire().is_ok(), "{msg:?}: {:?}", msg.to_wire());
+            }
+        }
+    }
+
+    // Regressions for each new rule.
+
+    fn rejected(cfg: &Config, needle: &str) {
+        match cfg.validate() {
+            Err(ConfigError::Validation(m)) => assert!(m.contains(needle), "{m}"),
+            other => panic!("expected a validation error mentioning {needle:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_irc_channel_differing_only_in_case_is_rejected() {
+        let mut cfg = valid_config();
+        cfg.bridges = vec![bridge("1", "#Foo", None), bridge("2", "#foo", None)];
+        rejected(&cfg, "duplicate irc_channel");
+    }
+
+    #[test]
+    fn discord_channel_id_with_leading_zero_is_rejected() {
+        let mut cfg = valid_config();
+        cfg.bridges[0].discord_channel_id = "0123".into();
+        rejected(&cfg, "discord_channel_id");
+    }
+
+    #[test]
+    fn discord_channel_id_above_u64_is_rejected() {
+        let mut cfg = valid_config();
+        cfg.bridges[0].discord_channel_id = "18446744073709551616".into();
+        rejected(&cfg, "discord_channel_id");
+    }
+
+    #[test]
+    fn irc_channel_with_forbidden_characters_is_rejected() {
+        for channel in [
+            "#a b", "#a,b", "#a:b", "#a\x07b", "#a\rb", "#a\nb", "#a\0b", "#",
+        ] {
+            let mut cfg = valid_config();
+            cfg.bridges[0].irc_channel = channel.into();
+            rejected(&cfg, "irc_channel");
+        }
+    }
+
+    #[test]
+    fn irc_channel_length_limit_is_50_bytes() {
+        let mut cfg = valid_config();
+        cfg.bridges[0].irc_channel = format!("#{}", "a".repeat(49));
+        assert!(cfg.validate().is_ok(), "50 bytes is the maximum");
+        cfg.bridges[0].irc_channel = format!("#{}", "a".repeat(50));
+        rejected(&cfg, "irc_channel");
+    }
+
+    #[test]
+    fn handshake_fields_with_line_breaks_or_nul_are_rejected() {
+        let mut cfg = valid_config();
+        cfg.irc.description = "Discord\r\nbridge".into();
+        rejected(&cfg, "irc.description");
+        let mut cfg = valid_config();
+        cfg.irc.link_password = "sec\0ret".into();
+        rejected(&cfg, "irc.link_password");
+    }
 
     #[hegel::test]
     fn valid_sid_always_passes(tc: TestCase) {

@@ -257,13 +257,16 @@ impl IrcMessage {
     ///
     /// The trailing `\r\n` is stripped before parsing if present.
     ///
+    /// Fields are separated by the ASCII space (0x20) only, as in RFC 1459
+    /// and RFC 2812.  Other whitespace, such as U+00A0, is part of a field.
+    ///
     /// # Errors
     ///
     /// - [`ParseError::Empty`] if the line is empty or whitespace-only.
     /// - [`ParseError::MissingParams`] if a known command has fewer parameters than required.
     pub(crate) fn parse(line: &str) -> Result<Self, ParseError> {
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
-        if line.trim_start().is_empty() {
+        if line.trim_start_matches(' ').is_empty() {
             return Err(ParseError::Empty);
         }
 
@@ -278,7 +281,7 @@ impl IrcMessage {
             Vec::new()
         };
 
-        rest = rest.trim_start();
+        rest = rest.trim_start_matches(' ');
 
         // Prefix: ":server ..."
         let prefix = if rest.starts_with(':') {
@@ -289,14 +292,14 @@ impl IrcMessage {
             None
         };
 
-        rest = rest.trim_start();
+        rest = rest.trim_start_matches(' ');
         if rest.is_empty() {
             return Err(ParseError::Empty);
         }
 
         // Command token and remaining params
         let (cmd_str, params_str) = rest.split_once(' ').unwrap_or((rest, ""));
-        let params = parse_params(params_str.trim_start());
+        let params = parse_params(params_str.trim_start_matches(' '));
         let command = build_command(cmd_str, params)?;
 
         Ok(IrcMessage {
@@ -432,7 +435,7 @@ fn parse_params(s: &str) -> Vec<String> {
         if !param.is_empty() {
             params.push(param.to_string());
         }
-        rest = remainder.trim_start();
+        rest = remainder.trim_start_matches(' ');
     }
     params
 }
@@ -565,14 +568,16 @@ fn build_command(name: &str, params: Vec<String>) -> Result<IrcCommand, ParseErr
                 let m = p.next();
                 let members: Vec<String> = p
                     .trailing()
-                    .split_whitespace()
+                    .split(' ')
+                    .filter(|m| !m.is_empty())
                     .map(str::to_string)
                     .collect();
                 (m, members)
             } else {
                 let members: Vec<String> = p
                     .trailing()
-                    .split_whitespace()
+                    .split(' ')
+                    .filter(|m| !m.is_empty())
                     .map(str::to_string)
                     .collect();
                 (String::new(), members)
@@ -1797,6 +1802,22 @@ mod tests {
                 format!("<unserializable IRC message: {e}>")
             ),
         }
+    }
+
+    /// Regression: the parser split on any Unicode whitespace, so a parameter
+    /// that is only U+00A0 disappeared.  IRC separates fields with the ASCII
+    /// space only.
+    #[test]
+    fn parse_keeps_a_no_break_space_parameter() {
+        let parsed = IrcMessage::parse("KICK #chan \u{a0} :bye").unwrap();
+        assert_eq!(
+            parsed.command,
+            IrcCommand::Kick {
+                channel: "#chan".into(),
+                target: "\u{a0}".into(),
+                reason: Some("bye".into()),
+            }
+        );
     }
 
     /// Regression: CRLF in PRIVMSG text injected a second command.

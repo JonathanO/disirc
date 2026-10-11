@@ -29,13 +29,12 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
       (spec 07 says that it does). Also fixed here: one unserializable
       outbound message ended the IRC session, and `IrcMessage`'s `Display`
       panicked on one (branch `fix/serializer-rejects-crlf-nul`)
-- [ ] Check with the e2e Discord bots whether Discord delivers NUL, CR, or
-      other control characters in message content, in global display names,
-      and in server nicknames. Then decide whether `discord_to_irc` should
-      remove them (today the serializer rejects the whole message, and the
-      session drops it with a warning), and whether the display name needs
-      cleaning before it becomes the `UID` realname (today a bad name stops
-      the pseudoclient being introduced).
+- [x] Remove NUL from Discord text in `discord_to_irc`, and clean control
+      characters out of display names before they become the `UID` realname
+      (branch `fix/serializer-rejects-crlf-nul`)
+- [ ] Optional: check with the e2e Discord bots which control characters
+      Discord really delivers in message content and names. The bridge is
+      safe either way; this only tells us how often the cleaning applies.
 - [ ] A multi-line DM sends only its first line to IRC:
       `format_dm_to_irc` (`bridge/routing.rs`) keeps the first line from
       `discord_to_irc` and drops the rest without telling the sender.

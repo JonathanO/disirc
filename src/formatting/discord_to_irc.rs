@@ -347,8 +347,12 @@ const CODE_CONTINUATION: &str = "\x02>\x02 ";
 /// - Length splitting at word boundaries
 #[must_use]
 pub(crate) fn split_for_irc(text: &str) -> Vec<String> {
-    // Normalise newlines
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    // Normalise newlines, and remove NUL.  IRC lines cannot carry CR, LF, or
+    // NUL; each line break becomes a separate line, and NUL has no meaning.
+    let text = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\0', "");
 
     // Process code blocks: first line as-is, rest with continuation prefix
     let lines = split_code_blocks(&text);
@@ -1250,6 +1254,31 @@ mod tests {
 
     use hegel::prelude::*;
 
+    /// Regression: a NUL in Discord text reached the serializer, which
+    /// rejects it, so the whole message was dropped.
+    #[test]
+    fn discord_to_irc_removes_nul() {
+        assert_eq!(discord_to_irc("a\0b", &StubResolver), ["ab"]);
+    }
+
+    /// IRC lines cannot carry CR, LF, or NUL, so no emitted line may contain
+    /// them, whatever the Discord text holds.  The serializer rejects such a
+    /// line, and the whole message would be lost.
+    #[hegel::test]
+    fn discord_to_irc_lines_have_no_line_breaks_or_nul(tc: TestCase) {
+        let text = tc.draw(
+            gs::vecs(hegel::one_of!(
+                gs::sampled_from(vec!["\0", "\r", "\n", "\r\n"]).map(str::to_string),
+                gs::text().max_size(20),
+            ))
+            .max_size(8)
+            .map(|parts: Vec<String>| parts.concat()),
+        );
+        for line in discord_to_irc(&text, &StubResolver) {
+            assert!(!line.contains(['\r', '\n', '\0']), "line {line:?}");
+        }
+    }
+
     /// Generator for strings rich in Discord markdown syntax.
     fn discord_markdown_strategy() -> impl PrintableGenerator<String> {
         let atoms = gs::sampled_from(vec![
@@ -1298,7 +1327,9 @@ mod tests {
     fn split_for_irc_never_panics(tc: TestCase) {
         let text = tc.draw(gs::from_regex(".{0,2000}"));
         let lines = split_for_irc(&text);
-        assert!(!lines.is_empty() || text.trim().is_empty());
+        // split_for_irc removes NUL, so text that is only NUL and whitespace
+        // gives no lines.
+        assert!(!lines.is_empty() || text.replace('\0', "").trim().is_empty());
     }
 
     /// Every line from `split_for_irc` must respect `MAX_LINE_BYTES`,

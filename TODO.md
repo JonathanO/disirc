@@ -9,9 +9,14 @@ Updated by Claude at the start and end of each session, and whenever task status
 Bugs found by a read-only review of property-test coverage (2026-10-08). Each
 fix needs a failing Hegel property first, then a unit test, then the fix:
 
-- [ ] `reload_config` / `apply_reload`: a changed webhook ID is added and then
+- [x] `reload_config` / `apply_reload`: a changed webhook ID is added and then
       removed from the self-message filter (echo loop); a changed
       `irc_channel` drops the channel; a shared webhook ID is removed
+      (branch `fix/reload-self-filter`)
+- [ ] Config reload does not PART or QUIT pseudoclients from a removed
+      bridge's IRC channel, or from the old channel when `irc_channel`
+      changes (spec 06 "When a `[[bridge]]` entry is removed via config
+      reload"). Found while fixing the reload bug; not yet implemented.
 - [ ] `IrcMessage::to_wire` does not reject CR, LF, or NUL in parameters
       (spec 07 says that it does)
 - [ ] `validate_no_duplicates` misses `#Foo`/`#foo` and `0123`/`123`, which

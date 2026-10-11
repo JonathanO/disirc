@@ -6,18 +6,50 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-Move property tests from proptest to Hegel (branch `test/hegel`, started 2026-10-08):
+Bugs found by a read-only review of property-test coverage (2026-10-08). Each
+fix needs a failing Hegel property first, then a unit test, then the fix:
 
-- [x] Add `hegeltest` with the `static-engine` feature; remove `proptest`
-- [x] Convert all `proptest!` tests to `#[hegel::test]`; keep the short saved
-      proptest failures as `#[hegel::explicit_test_case]`
-- [x] Add `hegel.toml` (1000 cases for the `development` and `ci` profiles)
-- [x] Update CLAUDE.md, CONTRIBUTING.md, and add `research/hegel-property-testing.md`
-- [ ] Mutation testing on the changed modules (partial local run, 212 of 442
-      mutants: 0 missed, 3 timeouts in `discord/send.rs`; stopped for low memory)
-- [ ] Find new Hegel test candidates (analysis first, then agree the list)
+- [ ] `reload_config` / `apply_reload`: a changed webhook ID is added and then
+      removed from the self-message filter (echo loop); a changed
+      `irc_channel` drops the channel; a shared webhook ID is removed
+- [ ] `IrcMessage::to_wire` does not reject CR, LF, or NUL in parameters
+      (spec 07 says that it does)
+- [ ] `validate_no_duplicates` misses `#Foo`/`#foo` and `0123`/`123`, which
+      `BridgeMap` treats as the same
+- [ ] Check these suspected bugs from the same review (not yet confirmed);
+      items marked "spec" need a spec decision first:
+  - `apply_irc_event` ignores `ServerQuit`, so users behind a netsplit stay
+    in the nick tables
+  - `split_for_irc` drops a line that starts with three backticks
+  - `resolve_mentions` rewrites text such as `<#include>`, and it runs before
+    code protection (spec 05 says code is protected first)
+  - literal private-use sentinel characters in user text are corrupted
+  - `sanitize_nick` can return a nick that starts with `-`
+  - the UID fallback in `resolve_nick` is not checked against nicks in use
+  - the webhook-failure fallback can send more than 2000 characters
+  - `validate_irc_channel` accepts `#a b`, which then fails in `to_wire`
+  - (spec) the plain-text path can ping roles with `<@&id>`
+- [ ] New property tests: `parse`/`to_wire` for all 20 `IrcCommand` variants,
+      `translate_outbound`/`translate_inbound` mirror, `LineReader` model,
+      `diff_bridges` algebra, `webhook_id_from_url` hosts, idle timeouts,
+      `persist` round trip, `PseudoclientManager` stateful model
+- [ ] Strengthen weak property tests (narrow generators, length-only or
+      substring oracles), for example `code_content_is_never_markdown_converted`
+      and `split_for_irc_preserves_words`
 
 ## Completed work
+
+Move property tests from proptest to Hegel (2026-10-08 to 2026-10-11):
+
+- [x] `hegeltest` with `static-engine` replaces `proptest` (#103)
+- [x] `hegel.toml` profiles: `development` and `ci` (1000 cases), `mutants`
+      (no shrinking), `explore` (weekly scheduled run, 20000 random cases)
+- [x] Mutation-testing fixes: loops whose mutants never end (#105, #108),
+      equivalent `INTENTS` mutants (#106), time limits for duplex-pipe tests
+      (#107), eight round-robin shards (#104, #109), local memory limit
+      (#110)
+- [x] Full mutation run on 1d7b1a8: 627 mutants, 541 caught, 86 unviable,
+      0 missed, 0 timeouts; slowest shard 16 minutes
 
 Cleanup review follow-ups (2026-07-17) — six stand-alone PRs, all merged as of 2026-07-26:
 

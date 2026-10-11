@@ -62,6 +62,11 @@ jobs:
 
       - name: Test
         run: cargo test
+        env:
+          # The weekly scheduled run explores new random inputs (see
+          # hegel.toml). Other runs leave this empty, so Hegel uses the
+          # derandomized `ci` profile.
+          HEGEL_DEFAULT_PROFILE: ${{ github.event_name == 'schedule' && 'explore' || '' }}
 
   e2e:
     name: E2E (Layer 3 — real UnrealIRCd)

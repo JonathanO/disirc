@@ -2000,6 +2000,66 @@ mod tests {
         }
     }
 
+    /// One case for each serializer rule in spec 07.  The round-trip
+    /// property covers these only when every other field is valid, so each
+    /// rule also gets a direct case.
+    #[test]
+    fn to_wire_rejects_each_misreadable_field() {
+        let raw = |command: &str| {
+            msg(IrcCommand::Raw {
+                command: command.into(),
+                params: vec!["x".into()],
+            })
+        };
+        let sjoin = |members: &[&str]| {
+            msg(IrcCommand::Sjoin(SjoinParams {
+                timestamp: 1,
+                channel: "#a".into(),
+                modes: "+".into(),
+                members: members.iter().map(|m| (*m).to_string()).collect(),
+            }))
+        };
+        let with_prefix = |prefix: &str| IrcMessage {
+            prefix: Some(prefix.into()),
+            ..msg(IrcCommand::Eos)
+        };
+        let with_tag_key = |key: &str| IrcMessage {
+            tags: vec![(key.into(), None)],
+            ..msg(IrcCommand::Eos)
+        };
+        let field = |field: &'static str, value: &str| SerializeError::InvalidField {
+            field,
+            value: value.into(),
+        };
+        let cases = [
+            (
+                msg(IrcCommand::Kill {
+                    target: ":x".into(),
+                    reason: "r".into(),
+                }),
+                SerializeError::InvalidParam {
+                    index: 0,
+                    value: ":x".into(),
+                },
+            ),
+            (with_prefix(""), field("prefix", "")),
+            (with_prefix("a b"), field("prefix", "a b")),
+            (with_tag_key(""), field("tag key", "")),
+            (with_tag_key("a=b"), field("tag key", "a=b")),
+            (with_tag_key("a;b"), field("tag key", "a;b")),
+            (with_tag_key("a b"), field("tag key", "a b")),
+            (raw(""), field("command", "")),
+            (raw("A B"), field("command", "A B")),
+            (raw(":X"), field("command", ":X")),
+            (raw("kick"), field("command", "kick")),
+            (sjoin(&["001AAAAAA", ""]), field("SJOIN member", "")),
+            (sjoin(&["001AAAAAA", "a b"]), field("SJOIN member", "a b")),
+        ];
+        for (m, expected) in cases {
+            assert_eq!(m.to_wire(), Err(expected), "{m:?}");
+        }
+    }
+
     /// `Raw` is for commands without a typed variant.  A `Raw` with a typed
     /// command's name (in any case) is read back as that typed command, so
     /// the serializer rejects it.

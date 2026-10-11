@@ -17,3 +17,16 @@ test_cases = 1000
 [profiles.mutants]
 extends = "ci"
 phases = ["explicit", "generate"]
+
+# Weekly exploration (the scheduled CI run sets HEGEL_DEFAULT_PROFILE=explore).
+# Pull requests and pushes use the derandomized `ci` profile, so they always
+# run the same inputs and a new edge case cannot fail an unrelated change.
+# This profile uses a fresh random seed and many more cases, so the weekly run
+# searches new inputs. A failure prints a #[hegel::reproduce_failure("...")]
+# line; add it to the test to replay the failure, then keep the input as an
+# explicit test case.
+[profiles.explore]
+extends = "ci"
+derandomize = false
+test_cases = 20000
+print_blob = true

@@ -1059,6 +1059,38 @@ mod tests {
 
     use hegel::prelude::*;
 
+    /// A pseudoclient's `UID` line must serialize whatever its Discord
+    /// display name holds.  If it did not, the pseudoclient would never be
+    /// introduced, and none of its messages would reach IRC.
+    #[hegel::test]
+    fn introduce_user_serializes_for_any_display_name(tc: TestCase) {
+        let username = tc.draw(gs::text().max_size(40));
+        let display_name = tc.draw(
+            gs::vecs(hegel::one_of!(
+                gs::sampled_from(vec!["\0", "\r", "\n", "\x07", "\x02"]).map(str::to_string),
+                gs::text().max_size(16),
+            ))
+            .max_size(4)
+            .map(|parts: Vec<String>| parts.concat()),
+        );
+        let state = crate::pseudoclients::PseudoclientState {
+            discord_user_id: 123,
+            uid: "002AAAAAA".into(),
+            nick: crate::pseudoclients::sanitize_nick(&username),
+            username,
+            display_name,
+            channels: vec![],
+            presence: crate::discord::DiscordPresence::Online,
+            needs_reintroduce: false,
+            last_active: 0,
+            channel_last_active: std::collections::HashMap::new(),
+            went_offline_at: None,
+        };
+        for msg in translate_outbound(&state.introduce_command("discord"), "002", false, 0) {
+            assert!(msg.to_wire().is_ok(), "{msg:?}: {:?}", msg.to_wire());
+        }
+    }
+
     /// Prefixes an uplink could send: well-formed SIDs/UIDs, arbitrary
     /// non-control Unicode (multibyte chars can straddle any byte offset),
     /// and a fixed worst case whose third byte falls inside a multibyte

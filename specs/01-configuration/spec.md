@@ -94,6 +94,7 @@ Only `[[bridge]]` entries and their `webhook_url` values may change at runtime:
 | New `[[bridge]]` entry added | Fetch Discord members for the new channel, SJOIN existing pseudoclients to the new IRC channel, introduce any new pseudoclients, begin relaying |
 | `[[bridge]]` entry removed | Pseudoclients only in that channel receive `QUIT`; pseudoclients in other bridged channels `PART` the removed IRC channel; stop relaying |
 | `bridge[].webhook_url` changed | Update in memory; no IRC action required |
+| `bridge[].irc_channel` changed for the same `discord_channel_id` | Keep relaying the Discord channel. Fetch Discord members, and SJOIN pseudoclients to the new IRC channel, as for an added entry. Treat the old IRC channel as removed. |
 
 ### Non-reloadable fields
 

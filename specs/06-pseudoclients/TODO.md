@@ -9,4 +9,5 @@ Status: **Implemented**
 - [x] Introduction message generation (UID line + SJOIN line)
 - [x] Quit/Part message generation
 - [x] SVSNICK handling (apply forced nick change, update state)
-- [x] Runtime channel add/remove (SJOIN existing pseudoclients to new channel; PART/QUIT on removal)
+- [x] Runtime channel add (SJOIN existing pseudoclients to new channel)
+- [ ] Runtime channel removal: PART/QUIT pseudoclients from a removed bridge's IRC channel, and from the old channel when `irc_channel` changes (not implemented; see TODO.md)

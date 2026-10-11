@@ -239,6 +239,10 @@ pub(crate) enum SerializeError {
     /// A non-trailing parameter was empty or contained a space.
     #[error("non-trailing parameter {index} {value:?} is invalid (empty or contains space)")]
     InvalidParam { index: usize, value: String },
+    /// A field contained CR, LF, or NUL, which would end the line early or
+    /// inject a second line.
+    #[error("message contains a forbidden character {ch:?} (CR, LF, or NUL)")]
+    ForbiddenCharacter { ch: char },
     /// The serialized line exceeded 4096 bytes (excluding `\r\n`).
     #[error("serialized line is {len} bytes, exceeds 4096-byte limit")]
     LineTooLong { len: usize },
@@ -308,6 +312,8 @@ impl IrcMessage {
     ///
     /// - [`SerializeError::InvalidParam`] if a non-trailing parameter is empty or
     ///   contains a space.
+    /// - [`SerializeError::ForbiddenCharacter`] if any field contains CR, LF, or
+    ///   NUL.  Tag values escape CR and LF, so only NUL is forbidden there.
     /// - [`SerializeError::LineTooLong`] if the line (excluding `\r\n`) exceeds
     ///   4096 bytes.
     pub(crate) fn to_wire(&self) -> Result<String, SerializeError> {
@@ -339,6 +345,13 @@ impl IrcMessage {
         // Command and parameters
         write_command(&self.command, &mut out)?;
 
+        // A CR, LF, or NUL in any field would end the line early or inject a
+        // second line.  Checking the whole line covers every field at once:
+        // tags, prefix, command, and parameters.
+        if let Some(ch) = out.chars().find(|c| matches!(c, '\r' | '\n' | '\0')) {
+            return Err(SerializeError::ForbiddenCharacter { ch });
+        }
+
         // Length check (before \r\n)
         let len = out.len();
         if len > 4096 {
@@ -352,18 +365,16 @@ impl IrcMessage {
 
 /// Renders the message as a complete wire-format line (including `\r\n`).
 ///
-/// # Panics
-///
-/// Panics if the message cannot be serialized (e.g., a non-trailing parameter
-/// contains a space or the line exceeds 4096 bytes).  Prefer
-/// [`IrcMessage::to_wire`] in code paths where serialization errors must be
-/// handled gracefully.
+/// If the message cannot be serialized (for example, a field contains NUL),
+/// this writes `<unserializable IRC message: …>` with the error instead.
+/// Logging uses this, so it must never panic.  Use [`IrcMessage::to_wire`] to
+/// send a message.
 impl std::fmt::Display for IrcMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let wire = self
-            .to_wire()
-            .expect("IrcMessage::fmt called on an unserializable message");
-        f.write_str(&wire)
+        match self.to_wire() {
+            Ok(wire) => f.write_str(&wire),
+            Err(e) => write!(f, "<unserializable IRC message: {e}>"),
+        }
     }
 }
 
@@ -1693,6 +1704,113 @@ mod tests {
     // ---- Property-based round-trips ----------------------------------------
 
     use hegel::prelude::*;
+
+    // ---- Line injection (spec 07: no NUL/CR/LF) ----------------------------
+
+    /// Text that often contains CR, LF, NUL, spaces, and colons, mixed with
+    /// arbitrary Unicode.
+    fn hostile_text() -> impl PrintableGenerator<String> {
+        gs::vecs(hegel::one_of!(
+            gs::sampled_from(vec!["\r", "\n", "\0", "\r\n", " ", ":"]).map(str::to_string),
+            gs::text().max_size(10),
+        ))
+        .max_size(6)
+        .map(|parts: Vec<String>| parts.concat())
+    }
+
+    /// A message whose tags, prefix, and command fields all come from
+    /// `hostile_text`.
+    #[hegel::composite]
+    fn hostile_message(tc: &hegel::TestCase) -> IrcMessage {
+        let tags = tc.draw(
+            gs::vecs(hegel::tuples!(hostile_text(), gs::optional(hostile_text()))).max_size(2),
+        );
+        let prefix = tc.draw(gs::optional(hostile_text()));
+        let command = tc.draw(hegel::one_of!(
+            hegel::tuples!(hostile_text(), hostile_text())
+                .map(|(target, text)| IrcCommand::Privmsg { target, text }),
+            hostile_text().map(|reason| IrcCommand::Quit { reason }),
+            hegel::tuples!(hostile_text(), gs::vecs(hostile_text()).max_size(3))
+                .map(|(command, params)| IrcCommand::Raw { command, params }),
+        ));
+        IrcMessage {
+            tags,
+            prefix,
+            command,
+        }
+    }
+
+    fn has_line_break_or_nul(s: &str) -> bool {
+        s.contains(['\r', '\n', '\0'])
+    }
+
+    /// Whatever the fields contain, `to_wire` emits exactly one line: no CR,
+    /// LF, or NUL before the final CRLF.  Otherwise a field could inject a
+    /// second protocol line.
+    #[hegel::test]
+    fn to_wire_output_is_a_single_line(tc: TestCase) {
+        let msg = tc.draw(hostile_message());
+        if let Ok(wire) = msg.to_wire() {
+            let body = wire.strip_suffix("\r\n").expect("line ends with CRLF");
+            assert!(!has_line_break_or_nul(body), "{wire:?}");
+        }
+    }
+
+    /// `to_wire` reports a forbidden character only when a field really
+    /// contains CR, LF, or NUL.  (Tag values escape CR and LF, so only NUL is
+    /// forbidden there.)
+    #[hegel::test]
+    fn to_wire_forbids_only_line_breaks_and_nul(tc: TestCase) {
+        let msg = tc.draw(hostile_message());
+        if let Err(SerializeError::ForbiddenCharacter { .. }) = msg.to_wire() {
+            let tag_keys = msg.tags.iter().any(|(k, _)| has_line_break_or_nul(k));
+            let tag_values = msg
+                .tags
+                .iter()
+                .any(|(_, v)| v.as_deref().is_some_and(|v| v.contains('\0')));
+            let prefix = msg.prefix.as_deref().is_some_and(has_line_break_or_nul);
+            let command = match &msg.command {
+                IrcCommand::Privmsg { target, text } => {
+                    has_line_break_or_nul(target) || has_line_break_or_nul(text)
+                }
+                IrcCommand::Quit { reason } => has_line_break_or_nul(reason),
+                IrcCommand::Raw { command, params } => {
+                    has_line_break_or_nul(command)
+                        || params.iter().any(|p| has_line_break_or_nul(p))
+                }
+                other => unreachable!("hostile_message does not build {other:?}"),
+            };
+            assert!(tag_keys || tag_values || prefix || command, "{msg:?}");
+        }
+    }
+
+    /// Logging formats outbound messages with `Display`, so it must never
+    /// panic: it gives the wire line when `to_wire` succeeds and a
+    /// placeholder otherwise.
+    #[hegel::test]
+    fn display_matches_to_wire_or_names_the_error(tc: TestCase) {
+        let msg = tc.draw(hostile_message());
+        match msg.to_wire() {
+            Ok(wire) => assert_eq!(msg.to_string(), wire),
+            Err(e) => assert_eq!(
+                msg.to_string(),
+                format!("<unserializable IRC message: {e}>")
+            ),
+        }
+    }
+
+    /// Regression: CRLF in PRIVMSG text injected a second command.
+    #[test]
+    fn to_wire_rejects_crlf_in_trailing_text() {
+        let m = msg(IrcCommand::Privmsg {
+            target: "#general".into(),
+            text: "hi\r\nKILL 001AAAAAA :bye".into(),
+        });
+        assert_eq!(
+            m.to_wire(),
+            Err(SerializeError::ForbiddenCharacter { ch: '\r' })
+        );
+    }
 
     #[hegel::test]
     fn privmsg_roundtrip(tc: TestCase) {

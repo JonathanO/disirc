@@ -12,8 +12,13 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
 - [ ] `reload_config` / `apply_reload`: a changed webhook ID is added and then
       removed from the self-message filter (echo loop); a changed
       `irc_channel` drops the channel; a shared webhook ID is removed
-- [ ] `IrcMessage::to_wire` does not reject CR, LF, or NUL in parameters
-      (spec 07 says that it does)
+- [x] `IrcMessage::to_wire` does not reject CR, LF, or NUL in parameters
+      (spec 07 says that it does). Also fixed here: one unserializable
+      outbound message ended the IRC session, and `IrcMessage`'s `Display`
+      panicked on one (branch `fix/serializer-rejects-crlf-nul`)
+- [ ] Decide whether `discord_to_irc` should remove NUL and other unsafe
+      control characters from Discord text. Today the serializer rejects
+      the whole message, and the session drops it with a warning.
 - [ ] `validate_no_duplicates` misses `#Foo`/`#foo` and `0123`/`123`, which
       `BridgeMap` treats as the same
 - [ ] Check these suspected bugs from the same review (not yet confirmed);

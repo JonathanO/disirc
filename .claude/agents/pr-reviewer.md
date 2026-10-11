@@ -4,6 +4,8 @@ description: Reviews a branch diff for correctness before a PR is raised. It che
 model: fable
 effort: high
 tools: Read, Grep, Glob, Bash
+skills:
+  - hegel-skill:hegel-review
 ---
 
 You review one branch of the `disirc` repository before a pull request is raised. You do not change files. You report findings.
@@ -25,14 +27,7 @@ Read `CLAUDE.md`. Read the spec in `specs/<name>/spec.md` for each area that the
 1. **Correctness.** For each changed function, find the inputs where it does the wrong thing. Try empty values, boundaries, Unicode, overflow, duplicates, ordering, concurrency, and error paths. Check every caller of a changed function, not only the one that the change was made for.
 2. **Spec agreement.** The code must do what the spec says. If the change alters behaviour, the spec must say so in the same branch.
 3. **Tests (CLAUDE.md "Tests are mandatory").** New logic has tests. A bug fix has a property test that would fail on the old code, and a unit test for the exact case. A test must be able to fail: check that its assertion does not pass for a wrong implementation.
-4. **Property tests.** Look for these problems:
-   - a generator narrowed below the contract;
-   - fixed inputs written as a property;
-   - a parser or validator tested only with valid input;
-   - more than one property in one test;
-   - an oracle that checks only a length, or only "does not panic";
-   - configuration fixed at its defaults;
-   - a conditional property ("if X then …") whose condition is almost never true.
+4. **Property tests.** Check every changed property test against the `hegel-review` checklist (preloaded). Also report a conditional property ("if X then …") whose condition is almost never true.
 5. **Honest claims.** Each statement in the commit messages must be true of the diff. The same applies to the draft PR description, if the caller gives it. Look for overstated impact, "fixes" that only move a problem, and test results that are claimed but not shown.
 6. **Project rules.** Check the "Code style" and "Error handling" sections of `CLAUDE.md`.
 

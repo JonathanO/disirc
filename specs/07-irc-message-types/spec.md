@@ -175,9 +175,12 @@ single wire-format line (with or without the trailing `\r\n`). Rules:
 
 - Tags are parsed first if the line begins with `@`.
 - The prefix is parsed if the next token begins with `:`.
-- The command is the next whitespace-delimited token.
-- Parameters are split on whitespace; the final parameter may begin with `:`
+- The command is the next space-delimited token.
+- Parameters are split on spaces; the final parameter may begin with `:`
   (trailing form) in which case it consumes the rest of the line including spaces.
+- "Space" means the ASCII space (0x20) only, as in RFC 1459 and RFC 2812.
+  Other whitespace, such as U+00A0, is part of a field. (Treating it as a
+  separator made the parser drop a parameter that the serializer wrote.)
 - Unknown commands produce `IrcCommand::Raw`.
 - Parsing is infallible for well-formed lines; malformed lines that cannot be
   split into at least a command return `ParseError::Empty`.

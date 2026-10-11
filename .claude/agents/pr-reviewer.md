@@ -29,7 +29,8 @@ Read `CLAUDE.md`. Read the spec in `specs/<name>/spec.md` for each area that the
 3. **Tests (CLAUDE.md "Tests are mandatory").** New logic has tests. A bug fix has a property test that would fail on the old code, and a unit test for the exact case. A test must be able to fail: check that its assertion does not pass for a wrong implementation.
 4. **Property tests.** Check every changed property test against the `hegel-review` checklist (preloaded). Also report a conditional property ("if X then …") whose condition is almost never true.
 5. **Honest claims.** Each statement in the commit messages must be true of the diff. The same applies to the draft PR description, if the caller gives it. Look for overstated impact, "fixes" that only move a problem, and test results that are claimed but not shown.
-6. **Project rules.** Check the "Code style" and "Error handling" sections of `CLAUDE.md`.
+6. **PR description.** Check the draft PR description against the "PR descriptions" section of `CLAUDE.md`. Report text about earlier drafts, review rounds, or how the work was done.
+7. **Project rules.** Check the "Code style" and "Error handling" sections of `CLAUDE.md`.
 
 ## How to work
 

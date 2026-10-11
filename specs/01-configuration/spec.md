@@ -53,8 +53,8 @@ irc_channel        = "#dev"
 | `irc.link_name` | Our server name as configured in UnrealIRCd's `link{}` block |
 | `irc.link_password` | Link password matching UnrealIRCd's `link{}` block |
 | `irc.sid` | Our Server ID — 3 characters matching `[0-9][A-Z0-9]{2}`, unique on the network |
-| `bridge[].discord_channel_id` | Discord channel snowflake ID (string of digits) |
-| `bridge[].irc_channel` | IRC channel name (must start with `#`) |
+| `bridge[].discord_channel_id` | Discord channel snowflake ID (see "Validation rules") |
+| `bridge[].irc_channel` | IRC channel name (see "Validation rules") |
 
 ## Optional fields
 
@@ -71,11 +71,12 @@ irc_channel        = "#dev"
 
 - `irc.sid` must match `[0-9][A-Z0-9]{2}`.
 - `irc.link_name` must be a valid IRC server name (hostname format).
-- `bridge[].discord_channel_id` must be a non-empty string of ASCII digits.
-- `bridge[].irc_channel` must start with `#`.
+- `bridge[].discord_channel_id` must be the decimal form of a 64-bit unsigned integer (a Discord snowflake), with no leading zeros, so that each ID has exactly one spelling.
+- `bridge[].irc_channel` must be a legal IRC channel name (RFC 2812 §1.3 and §2.3.1). It starts with `#`, has at least one byte after the `#`, and is at most 50 bytes. It contains no space, comma, colon, NUL, BEL, CR, or LF; RFC 2812 excludes these from `chanstring`. Of these, space, comma, CR, LF, and NUL would also split an IRC line or a channel list.
 - `bridge[].webhook_url` if present must be a valid HTTPS URL with host `discord.com` or `discordapp.com`.
 - At least one `[[bridge]]` entry must be present.
-- Duplicate `discord_channel_id` or `irc_channel` values across bridge entries are an error.
+- Duplicate `discord_channel_id` or `irc_channel` values across bridge entries are an error. IRC channel names are compared case-insensitively, in the same way as the bridge's routing table matches them (Unicode lowercase).
+- `irc.description` and `irc.link_password` must not contain CR, LF, or NUL. They are sent as IRC parameters in the handshake.
 
 ## Error behaviour
 
@@ -119,3 +120,8 @@ All other fields require a full restart. Changing them at runtime is ignored wit
 ## Secrets
 
 `config.toml` contains credentials and must never be committed. Provide `config.example.toml` with placeholder values for documentation.
+
+## References
+
+- [RFC 2812 §1.3, §2.3.1](https://datatracker.ietf.org/doc/html/rfc2812) — channel name grammar; accessed 2026-10-11
+- [Discord Developer Docs: Reference, Snowflakes](https://docs.discord.com/developers/reference) — "Snowflake IDs are up to 64 bits in size (e.g. a uint64)"; accessed 2026-10-11

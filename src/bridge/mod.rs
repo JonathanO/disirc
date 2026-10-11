@@ -7,7 +7,7 @@
 //! - [`routing`] — Message routing, burst generation, and guild channel mapping.
 //! - [`orchestrator`] — Stateful event handler (`BridgeState`).
 
-mod map;
+pub(crate) mod map;
 pub(crate) mod orchestrator;
 mod relay;
 mod routing;

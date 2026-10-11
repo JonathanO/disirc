@@ -244,6 +244,15 @@ Do **not** commit:
 - Work in progress mid-implementation.
 - Spec drafts that haven't been reviewed.
 
+## Before raising a PR
+
+1. After the "Done means" checks pass, run `pr-reviewer` and `pr-simplifier` (`.claude/agents/`) on the branch, in parallel. Give `pr-reviewer` the draft PR description.
+2. Fix each finding, or record why not. Fix every `bug` finding.
+3. If anything changed, run the "Done means" checks again.
+4. Add a "Review" section to the PR description. List each finding and what was done with it.
+
+The agents are told not to change files, but they have `Bash`, so this is not enforced.
+
 ## Research workflow
 
 ### When to do research

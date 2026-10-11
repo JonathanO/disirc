@@ -403,20 +403,21 @@ async fn run_session(
                             .as_secs();
                         for msg in translate_outbound(&cmd, our_sid, hs.mtags_active, ts) {
                             tracing::trace!(line = %msg, "IRC → outbound");
-                            // Every field of an outbound message is validated
-                            // or generated before it gets here, so a serialize
-                            // error (InvalidInput) is a bug in disirc.  Ending
-                            // the session is loud, and the reconnect burst
-                            // rebuilds the IRC state from the bridge's state.
-                            // Dropping the message would leave the two out of
-                            // step without anyone noticing.
-                            writer.write_message(&msg).await.with_context(|| {
-                                if msg.to_wire().is_err() {
+                            // Every outbound field is cleaned or validated at its
+                            // source (spec 07), so a serialize error is a bug in
+                            // disirc.  write_message reports it as InvalidInput.
+                            // Ending the session is loud, and the reconnect
+                            // burst rebuilds the IRC state from the bridge's
+                            // state.  Dropping the message would leave the two
+                            // out of step without anyone noticing.
+                            if let Err(e) = writer.write_message(&msg).await {
+                                let context = if e.kind() == std::io::ErrorKind::InvalidInput {
                                     "cannot serialize an outbound IRC message; this is a bug in disirc"
                                 } else {
                                     "Write error"
-                                }
-                            })?;
+                                };
+                                return Err(e).context(context);
+                            }
                         }
                     }
                 }

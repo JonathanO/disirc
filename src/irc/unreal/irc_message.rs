@@ -236,9 +236,17 @@ pub(crate) enum ParseError {
 /// Error returned by [`IrcMessage::to_wire`].
 #[derive(Debug, Clone, PartialEq, Error)]
 pub(crate) enum SerializeError {
-    /// A non-trailing parameter was empty or contained a space.
-    #[error("non-trailing parameter {index} {value:?} is invalid (empty or contains space)")]
+    /// A non-trailing parameter was empty, contained a space, or started
+    /// with `:` (the receiver would read it as the trailing parameter).
+    #[error(
+        "non-trailing parameter {index} {value:?} is invalid \
+         (empty, contains a space, or starts with ':')"
+    )]
     InvalidParam { index: usize, value: String },
+    /// A prefix, tag key, command name, or `SJOIN` member was empty or
+    /// contained a character that would change how the line is read.
+    #[error("{field} {value:?} is invalid")]
+    InvalidField { field: &'static str, value: String },
     /// A field contained CR, LF, or NUL, which would end the line early or
     /// inject a second line.
     #[error("message contains a forbidden character {ch:?} (CR, LF, or NUL)")]
@@ -329,6 +337,13 @@ impl IrcMessage {
                 if i > 0 {
                     out.push(';');
                 }
+                // A tag key ends at '=', ';', or a space.
+                if key.is_empty() || key.contains(['=', ';', ' ']) {
+                    return Err(SerializeError::InvalidField {
+                        field: "tag key",
+                        value: key.clone(),
+                    });
+                }
                 out.push_str(key);
                 if let Some(v) = value {
                     out.push('=');
@@ -340,6 +355,13 @@ impl IrcMessage {
 
         // Prefix
         if let Some(prefix) = &self.prefix {
+            // The prefix ends at the first space.
+            if prefix.is_empty() || prefix.contains(' ') {
+                return Err(SerializeError::InvalidField {
+                    field: "prefix",
+                    value: prefix.clone(),
+                });
+            }
             out.push(':');
             out.push_str(prefix);
             out.push(' ');
@@ -709,8 +731,17 @@ fn escape_tag_value(val: &str) -> String {
     result
 }
 
+/// True if the parser reads `name` as a typed command rather than `Raw`.
+///
+/// Asks [`build_command`] itself, so this never disagrees with the parser.
+/// With no parameters, a typed command gives either the typed variant or a
+/// missing-parameter error; only an unknown name gives `Raw`.
+fn is_typed_command(name: &str) -> bool {
+    !matches!(build_command(name, Vec::new()), Ok(IrcCommand::Raw { .. }))
+}
+
 fn append_param(out: &mut String, param: &str, index: usize) -> Result<(), SerializeError> {
-    if param.is_empty() || param.contains(' ') {
+    if param.is_empty() || param.contains(' ') || param.starts_with(':') {
         return Err(SerializeError::InvalidParam {
             index,
             value: param.to_string(),
@@ -786,6 +817,14 @@ fn write_command(cmd: &IrcCommand, out: &mut String) -> Result<(), SerializeErro
             append_param(out, &p.channel, 1)?;
             if !p.modes.is_empty() {
                 append_param(out, &p.modes, 2)?;
+            }
+            // Members are joined with spaces into one trailing parameter, so
+            // a member must be non-empty and contain no space.
+            if let Some(member) = p.members.iter().find(|m| m.is_empty() || m.contains(' ')) {
+                return Err(SerializeError::InvalidField {
+                    field: "SJOIN member",
+                    value: member.clone(),
+                });
             }
             let members = p.members.join(" ");
             append_trailing(out, &members);
@@ -868,6 +907,16 @@ fn write_command(cmd: &IrcCommand, out: &mut String) -> Result<(), SerializeErro
             append_trailing(out, message);
         }
         IrcCommand::Raw { command, params } => {
+            if command.is_empty()
+                || command.contains(' ')
+                || command.starts_with(':')
+                || is_typed_command(command)
+            {
+                return Err(SerializeError::InvalidField {
+                    field: "command",
+                    value: command.clone(),
+                });
+            }
             out.push_str(command);
             if let Some((last, rest)) = params.split_last() {
                 for (i, param) in rest.iter().enumerate() {
@@ -1804,6 +1853,112 @@ mod tests {
         }
     }
 
+    /// A field value: often valid in any position (a middle-parameter token),
+    /// often valid only as a trailing parameter (text with spaces and
+    /// colons), and sometimes hostile.
+    fn field_text() -> impl PrintableGenerator<String> {
+        hegel::one_of!(
+            gs::from_regex("[A-Za-z0-9#&+@._-]{1,10}"),
+            crate::formatting::test_support::non_control_text(0, 10),
+            hostile_text(),
+        )
+    }
+
+    /// Any `IrcCommand` variant, with every string field from `field_text`.
+    #[hegel::composite]
+    fn hostile_command(tc: &hegel::TestCase) -> IrcCommand {
+        let text = || tc.draw(field_text());
+        let opt_text = || tc.draw(gs::optional(field_text()));
+        let list = || tc.draw(gs::vecs(field_text()).max_size(3));
+        match tc.draw(gs::integers::<u8>().max_value(19)) {
+            0 => IrcCommand::Pass { password: text() },
+            1 => IrcCommand::Server {
+                name: text(),
+                hop_count: tc.draw(gs::integers()),
+                description: text(),
+            },
+            2 => IrcCommand::Sid {
+                name: text(),
+                hop_count: tc.draw(gs::integers()),
+                sid: text(),
+                description: text(),
+            },
+            3 => IrcCommand::Protoctl { tokens: list() },
+            4 => IrcCommand::Uid(UidParams {
+                nick: text(),
+                hop_count: tc.draw(gs::integers()),
+                timestamp: tc.draw(gs::integers()),
+                ident: text(),
+                host: text(),
+                uid: text(),
+                services_stamp: text(),
+                umodes: text(),
+                vhost: text(),
+                cloaked_host: text(),
+                ip: text(),
+                realname: text(),
+            }),
+            5 => IrcCommand::Sjoin(SjoinParams {
+                timestamp: tc.draw(gs::integers()),
+                channel: text(),
+                modes: text(),
+                members: list(),
+            }),
+            6 => IrcCommand::Part {
+                channel: text(),
+                reason: opt_text(),
+            },
+            7 => IrcCommand::Kill {
+                target: text(),
+                reason: text(),
+            },
+            8 => IrcCommand::Kick {
+                channel: text(),
+                target: text(),
+                reason: opt_text(),
+            },
+            9 => IrcCommand::Nick {
+                new_nick: text(),
+                timestamp: tc.draw(gs::integers()),
+            },
+            10 => IrcCommand::Quit { reason: text() },
+            11 => IrcCommand::Away { reason: opt_text() },
+            12 => IrcCommand::Svsnick {
+                target_uid: text(),
+                new_nick: text(),
+            },
+            13 => IrcCommand::Privmsg {
+                target: text(),
+                text: text(),
+            },
+            14 => IrcCommand::Notice {
+                target: text(),
+                text: text(),
+            },
+            15 => IrcCommand::Ping { token: text() },
+            16 => IrcCommand::Pong {
+                server: text(),
+                token: text(),
+            },
+            17 => IrcCommand::Eos,
+            18 => IrcCommand::Error { message: text() },
+            _ => IrcCommand::Raw {
+                command: text(),
+                params: list(),
+            },
+        }
+    }
+
+    /// In `IRCv3`, a tag with an empty value (`key=`) is the same as a tag with
+    /// no value (`key`).
+    fn normalize_tags(msg: &mut IrcMessage) {
+        for (_, value) in &mut msg.tags {
+            if value.as_deref() == Some("") {
+                *value = None;
+            }
+        }
+    }
+
     /// Regression: the parser split on any Unicode whitespace, so a parameter
     /// that is only U+00A0 disappeared.  IRC separates fields with the ASCII
     /// space only.
@@ -1818,6 +1973,52 @@ mod tests {
                 reason: Some("bye".into()),
             }
         );
+    }
+
+    /// Any message that `to_wire` accepts is read back as the same message.
+    /// This checks every field of every command: a field that `to_wire`
+    /// writes but the receiver reads differently (a split, a shifted
+    /// parameter, a second line) is a serializer bug.
+    #[hegel::test]
+    fn to_wire_round_trips_every_command(tc: TestCase) {
+        let mut msg = IrcMessage {
+            tags: tc.draw(
+                gs::vecs(hegel::tuples!(field_text(), gs::optional(field_text()))).max_size(2),
+            ),
+            prefix: tc.draw(gs::optional(field_text())),
+            command: tc.draw(hostile_command()),
+        };
+        if let Ok(wire) = msg.to_wire() {
+            // Statistics show how often the generator builds a message that
+            // to_wire accepts, so the property is not passing on nothing.
+            tc.event("to_wire accepted");
+            let mut parsed = IrcMessage::parse(&wire)
+                .unwrap_or_else(|e| panic!("to_wire output {wire:?} does not parse: {e}"));
+            normalize_tags(&mut msg);
+            normalize_tags(&mut parsed);
+            assert_eq!(parsed, msg, "wire: {wire:?}");
+        }
+    }
+
+    /// `Raw` is for commands without a typed variant.  A `Raw` with a typed
+    /// command's name (in any case) is read back as that typed command, so
+    /// the serializer rejects it.
+    #[test]
+    fn to_wire_rejects_raw_with_a_typed_command_name() {
+        for name in ["PRIVMSG", "privmsg", "Eos"] {
+            let m = msg(IrcCommand::Raw {
+                command: name.into(),
+                params: vec!["#a".into(), "hi".into()],
+            });
+            assert_eq!(
+                m.to_wire(),
+                Err(SerializeError::InvalidField {
+                    field: "command",
+                    value: name.into(),
+                }),
+                "{name}"
+            );
+        }
     }
 
     /// Regression: CRLF in PRIVMSG text injected a second command.

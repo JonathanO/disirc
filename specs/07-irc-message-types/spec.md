@@ -134,13 +134,23 @@ significant machinery for limited benefit at this stage.
 
 The 4096-byte line-length constraint cannot be checked at construction time
 regardless: it depends on the fully assembled line, not any individual field.
-Field-level constraints (no spaces in non-trailing params, no NUL/CR/LF)
-could in principle be pushed earlier, but the serializer already catches them:
-`SerializeError::InvalidParam` for an empty non-trailing parameter or one with
-a space, and `SerializeError::ForbiddenCharacter` for CR, LF, or NUL in any
-field (tags, prefix, command, or parameters). Tag values escape CR and LF, so
-only NUL is forbidden there. A CR or LF in a field would otherwise end the
-line early and inject a second protocol line.
+Field-level constraints could in principle be pushed earlier, but the
+serializer already catches them. Its rule is: if `to_wire` succeeds, `parse`
+reads back exactly the same message. A field that would be read differently
+(a split, a shifted parameter, a second line) is an error:
+
+| Field | Rejected when | Error |
+|-------|---------------|-------|
+| Any field | contains CR, LF, or NUL (tag values escape CR and LF, so only NUL there) | `ForbiddenCharacter` |
+| Non-trailing parameter | empty, contains a space, or starts with `:` | `InvalidParam` |
+| Prefix | empty or contains a space | `InvalidField` |
+| Tag key | empty or contains `=`, `;`, or a space | `InvalidField` |
+| `Raw` command | empty, contains a space, starts with `:`, or is the name of a typed command (in any case) | `InvalidField` |
+| `SJOIN` member | empty or contains a space | `InvalidField` |
+
+A CR or LF in a field would otherwise end the line early and inject a second
+protocol line. A property test checks the rule for every `IrcCommand`
+variant with hostile values in every field.
 
 The session drops an outbound message that cannot be serialized and logs a
 warning. One bad message must not end the session and drop the link.

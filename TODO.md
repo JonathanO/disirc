@@ -16,9 +16,16 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
       (spec 07 says that it does). Also fixed here: one unserializable
       outbound message ended the IRC session, and `IrcMessage`'s `Display`
       panicked on one (branch `fix/serializer-rejects-crlf-nul`)
-- [ ] Decide whether `discord_to_irc` should remove NUL and other unsafe
-      control characters from Discord text. Today the serializer rejects
-      the whole message, and the session drops it with a warning.
+- [ ] Check with the e2e Discord bots whether Discord delivers NUL, CR, or
+      other control characters in message content, in global display names,
+      and in server nicknames. Then decide whether `discord_to_irc` should
+      remove them (today the serializer rejects the whole message, and the
+      session drops it with a warning), and whether the display name needs
+      cleaning before it becomes the `UID` realname (today a bad name stops
+      the pseudoclient being introduced).
+- [ ] A multi-line DM sends only its first line to IRC:
+      `format_dm_to_irc` (`bridge/routing.rs`) keeps the first line from
+      `discord_to_irc` and drops the rest without telling the sender.
 - [ ] `validate_no_duplicates` misses `#Foo`/`#foo` and `0123`/`123`, which
       `BridgeMap` treats as the same
 - [ ] Check these suspected bugs from the same review (not yet confirmed);

@@ -29,7 +29,7 @@ pub(crate) fn webhook_ids_from_bridges(bridges: &[BridgeEntry]) -> HashSet<u64> 
 
 /// Build the set of bridged Discord channel IDs for fast `MESSAGE_CREATE`
 /// routing decisions.
-fn bridged_channel_ids(bridges: &[BridgeEntry]) -> HashSet<u64> {
+pub(crate) fn bridged_channel_ids(bridges: &[BridgeEntry]) -> HashSet<u64> {
     bridges
         .iter()
         .filter_map(|b| b.discord_channel_id.parse::<u64>().ok())

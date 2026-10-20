@@ -17,6 +17,14 @@ ignore = [
     # reachable via CertRevocationList::from_der on application-supplied CRLs; neither disirc,
     # serenity, tungstenite, nor our reqwest configuration supplies CRLs, so the code is unreachable.
     { id = "RUSTSEC-2026-0104", reason = "transitive dep pinned by serenity; CRL parsing unreachable (no CRLs configured anywhere)" },
+    # rustls 0.22.4 — same serenity dep chain. No patched 0.22.x exists; our own rustls is
+    # 0.23.46, which has the fix. serenity PR #3599 (tokio-tungstenite 0.23.1) removes 0.22.
+    # 0346: Debug of the client session store shows secrets. Nothing formats that store, and
+    # the attack needs local access with high privileges.
+    { id = "RUSTSEC-2026-0346", reason = "transitive rustls 0.22 pinned by serenity; nothing Debug-formats the session store" },
+    # 0349: an unauthenticated ServerHello downgrades a hybrid key exchange to classical.
+    # rustls 0.22.4 has no hybrid group (only X25519, P-256, P-384), so there is nothing to downgrade.
+    { id = "RUSTSEC-2026-0349", reason = "transitive rustls 0.22 pinned by serenity; 0.22 has no hybrid group to downgrade" },
 ]
 
 [licenses]

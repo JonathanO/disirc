@@ -18,6 +18,13 @@
         "patch"
       ],
       "automerge": true
+    },
+    {
+      "description": "No release age for hegeltest. It releases almost daily, and cargo resolves the newest release when the range changes, even with --precise. A minimum age then makes every lock file update fail (renovatebot/renovate#41624).",
+      "matchPackageNames": [
+        "hegeltest"
+      ],
+      "minimumReleaseAge": null
     }
   ]
 }

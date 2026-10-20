@@ -25,6 +25,9 @@ ignore = [
     # 0349: an unauthenticated ServerHello downgrades a hybrid key exchange to classical.
     # rustls 0.22.4 has no hybrid group (only X25519, P-256, P-384), so there is nothing to downgrade.
     { id = "RUSTSEC-2026-0349", reason = "transitive rustls 0.22 pinned by serenity; 0.22 has no hybrid group to downgrade" },
+    # webpki-roots 0.26.11 is a shim: it re-exports TLS_SERVER_ROOTS from webpki-roots 1,
+    # which is 1.0.10 and does not contain the emSign roots. cargo-deny sees only the 0.26 version.
+    { id = "RUSTSEC-2026-0381", reason = "0.26.11 re-exports the roots of webpki-roots 1.0.10, which has the fix" },
 ]
 
 [licenses]

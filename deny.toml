@@ -18,7 +18,7 @@ ignore = [
     # serenity, tungstenite, nor our reqwest configuration supplies CRLs, so the code is unreachable.
     { id = "RUSTSEC-2026-0104", reason = "transitive dep pinned by serenity; CRL parsing unreachable (no CRLs configured anywhere)" },
     # rustls 0.22.4 — same serenity dep chain. No patched 0.22.x exists; our own rustls is
-    # 0.23.46, which has the fix. serenity PR #3599 (tokio-tungstenite 0.23.1) removes 0.22.
+    # 0.23.46, which has the fix. serenity 0.13 (tokio-tungstenite 0.28) removes 0.22; see TODO.md.
     # 0346: Debug of the client session store shows secrets. Nothing formats that store, and
     # the attack needs local access with high privileges.
     { id = "RUSTSEC-2026-0346", reason = "transitive rustls 0.22 pinned by serenity; nothing Debug-formats the session store" },
@@ -28,6 +28,11 @@ ignore = [
     # webpki-roots 0.26.11 is a shim: it re-exports TLS_SERVER_ROOTS from webpki-roots 1,
     # which is 1.0.10 and does not contain the emSign roots. cargo-deny sees only the 0.26 version.
     { id = "RUSTSEC-2026-0381", reason = "0.26.11 re-exports the roots of webpki-roots 1.0.10, which has the fix" },
+    # rustls-webpki 0.102.8 (serenity gateway) may accept a path through the leaked emSign
+    # intermediates. No patched 0.102.x exists. The gateway takes its roots from webpki-roots
+    # 1.0.10, which removed the emSign roots, so such a path has no trust anchor, unless another
+    # trusted root cross-signed an emSign intermediate (not checked).
+    { id = "RUSTSEC-2026-0382", reason = "transitive rustls-webpki 0.102 pinned by serenity; emSign roots removed from webpki-roots 1.0.10" },
 ]
 
 [licenses]

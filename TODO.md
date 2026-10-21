@@ -6,14 +6,6 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
-Next feature (needs a spec first, per CLAUDE.md):
-
-- [ ] Log to a channel: relay important bridge events (for example link
-      up/down, config reload results, dropped messages) to a configured
-      Discord and/or IRC channel. Open questions for the spec: which
-      channel(s), which events and levels, and how to avoid a log line
-      that itself fails and loops.
-
 Bugs found by a read-only review of property-test coverage (2026-10-08). Each
 fix needs a failing Hegel property first, then a unit test, then the fix:
 
@@ -43,8 +35,10 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
 - [ ] A multi-line DM sends only its first line to IRC:
       `format_dm_to_irc` (`bridge/routing.rs`) keeps the first line from
       `discord_to_irc` and drops the rest without telling the sender.
-- [ ] `validate_no_duplicates` misses `#Foo`/`#foo` and `0123`/`123`, which
-      `BridgeMap` treats as the same
+- [x] `validate_no_duplicates` misses `#Foo`/`#foo` and `0123`/`123`, which
+      `BridgeMap` treats as the same. Also done: `irc_channel` must be a
+      legal channel name, and `irc.description`/`irc.link_password` must
+      not contain CR, LF, or NUL (branch `fix/config-validation`)
 - [ ] Check these suspected bugs from the same review (not yet confirmed);
       items marked "spec" need a spec decision first:
   - `apply_irc_event` ignores `ServerQuit`, so users behind a netsplit stay
@@ -56,7 +50,6 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
   - `sanitize_nick` can return a nick that starts with `-`
   - the UID fallback in `resolve_nick` is not checked against nicks in use
   - the webhook-failure fallback can send more than 2000 characters
-  - `validate_irc_channel` accepts `#a b`, which then fails in `to_wire`
   - (spec) the plain-text path can ping roles with `<@&id>`
 - [ ] New property tests: `parse`/`to_wire` for all 20 `IrcCommand` variants,
       `translate_outbound`/`translate_inbound` mirror, `LineReader` model,
@@ -164,7 +157,13 @@ mutants spec 02 had documented as equivalent.
 
 ## Pending
 
-None.
+- [ ] Move to serenity 0.13 when it is released. serenity 0.12.5 uses
+      tokio-tungstenite 0.21, so the gateway uses rustls 0.22 and
+      rustls-webpki 0.102, which have unpatched advisories. `deny.toml`
+      ignores eight of them; remove those ignores in the same change.
+      serenity will not bump tungstenite on 0.12, because its errors are
+      public API (serenity PR #3599). The `next` branch already uses
+      tokio-tungstenite 0.28. Expect API changes.
 
 ## Future features
 

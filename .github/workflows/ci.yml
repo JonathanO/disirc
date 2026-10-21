@@ -33,16 +33,17 @@ jobs:
           command: check bans licenses sources
 
   # A new advisory can appear at any time, with no change in this repository.
-  # It fails only the weekly scheduled run, and it does not block pushes or
-  # pull requests.
+  # It fails only the weekly scheduled run. On pushes and pull requests, the
+  # step can fail but the job passes, so the check stays green and Renovate
+  # can still merge. A job-level continue-on-error still shows a failed check.
   advisories:
     name: Advisories
     runs-on: ubuntu-latest
-    continue-on-error: ${{ github.event_name != 'schedule' }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: EmbarkStudios/cargo-deny-action@v2
+        continue-on-error: ${{ github.event_name != 'schedule' }}
         with:
           command: check advisories
 

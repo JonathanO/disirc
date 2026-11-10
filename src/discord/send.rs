@@ -574,23 +574,22 @@ mod tests {
 
     // --- plain_content ---
 
-    /// Discord's message limit in characters. serenity rejects longer
-    /// content before it sends.
-    const DISCORD_LIMIT: usize = 2000;
+    use serenity::constants::MESSAGE_CODE_LIMIT;
 
     /// Filler of a drawn length near the limit, then trigger words, so
-    /// that the zero-width spaces push the text over the limit. Some
-    /// cases are arbitrary text instead.
+    /// that the zero-width spaces push the text over the limit. The filler
+    /// is any text, so multi-codepoint graphemes and newlines can come
+    /// near the cut. Some cases are arbitrary text instead.
     fn near_limit_text(tc: &TestCase) -> String {
         if tc.draw(gs::booleans()) {
             return tc.draw(gs::from_regex(".{0,2100}"));
         }
         let filler_len = tc.draw(
             gs::integers::<usize>()
-                .min_value(DISCORD_LIMIT - 100)
-                .max_value(DISCORD_LIMIT + 100),
+                .min_value(MESSAGE_CODE_LIMIT - 100)
+                .max_value(MESSAGE_CODE_LIMIT + 100),
         );
-        let filler = tc.draw(gs::from_regex("[a-z ]{1,10}"));
+        let filler = tc.draw(gs::text().min_size(1).max_size(10));
         let mut text: String = filler.chars().cycle().take(filler_len).collect();
         text.push_str(&tc.draw(mentionish_text()));
         text
@@ -603,10 +602,20 @@ mod tests {
         let text = near_limit_text(&tc);
         let out = plain_content(&text);
         assert!(
-            out.chars().count() <= DISCORD_LIMIT,
+            out.chars().count() <= MESSAGE_CODE_LIMIT,
             "{} chars",
             out.chars().count()
         );
+    }
+
+    /// A text that fits after mention suppression is sent whole: the cut
+    /// applies only to text that is too long.
+    #[hegel::test]
+    fn plain_content_keeps_text_that_fits(tc: TestCase) {
+        let text = near_limit_text(&tc);
+        let suppressed = suppress_mentions(&text);
+        tc.assume(suppressed.chars().count() <= MESSAGE_CODE_LIMIT);
+        assert_eq!(plain_content(&text), suppressed);
     }
 
     /// Truncation never brings back a pingable mention.
@@ -622,9 +631,9 @@ mod tests {
     /// zero-width space; the result must still fit.
     #[test]
     fn plain_content_of_full_length_text_with_mention_fits() {
-        let text = format!("{} @here", "a".repeat(DISCORD_LIMIT - 6));
-        assert_eq!(text.chars().count(), DISCORD_LIMIT);
-        assert!(plain_content(&text).chars().count() <= DISCORD_LIMIT);
+        let text = format!("{} @here", "a".repeat(MESSAGE_CODE_LIMIT - 6));
+        assert_eq!(text.chars().count(), MESSAGE_CODE_LIMIT);
+        assert!(plain_content(&text).chars().count() <= MESSAGE_CODE_LIMIT);
     }
 
     /// Suppression is idempotent: a second pass never inserts another
@@ -1055,8 +1064,9 @@ mod tests {
                 .mount_as_scoped(&server)
                 .await;
 
-            let text = "word ".repeat(400);
-            assert_eq!(text.chars().count(), 2000);
+            let limit = serenity::constants::MESSAGE_CODE_LIMIT;
+            let text = "word ".repeat(limit / 5);
+            assert_eq!(text.chars().count(), limit);
             send_discord_message(&http, 999, Some(&webhook_url()), "TestNick", &text).await;
 
             let requests = server.received_requests().await.expect("recording is on");
@@ -1066,8 +1076,11 @@ mod tests {
                 .expect("the fallback must POST the message");
             let body: serde_json::Value = serde_json::from_slice(&post.body).expect("JSON body");
             let content = body["content"].as_str().expect("content field");
-            assert!(content.chars().count() <= 2000);
-            assert!(content.starts_with("**[T\u{200B}estNick]** "));
+            assert!(content.chars().count() <= limit);
+            let body = content
+                .strip_prefix("**[T\u{200B}estNick]** ")
+                .expect("the nick prefix");
+            assert!(body.starts_with("word word "), "the text must survive");
 
             drop(post_mock);
         }

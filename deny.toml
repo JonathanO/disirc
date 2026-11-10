@@ -25,14 +25,16 @@ ignore = [
     # 0349: an unauthenticated ServerHello downgrades a hybrid key exchange to classical.
     # rustls 0.22.4 has no hybrid group (only X25519, P-256, P-384), so there is nothing to downgrade.
     { id = "RUSTSEC-2026-0349", reason = "transitive rustls 0.22 pinned by serenity; 0.22 has no hybrid group to downgrade" },
-    # webpki-roots 0.26.11 is a shim: it re-exports TLS_SERVER_ROOTS from webpki-roots 1,
-    # which is 1.0.10 and does not contain the emSign roots. cargo-deny sees only the 0.26 version.
-    { id = "RUSTSEC-2026-0381", reason = "0.26.11 re-exports the roots of webpki-roots 1.0.10, which has the fix" },
     # rustls-webpki 0.102.8 (serenity gateway) may accept a path through the leaked emSign
     # intermediates. No patched 0.102.x exists. The gateway takes its roots from webpki-roots
     # 1.0.10, which removed the emSign roots, so such a path has no trust anchor, unless another
     # trusted root cross-signed an emSign intermediate (not checked).
     { id = "RUSTSEC-2026-0382", reason = "transitive rustls-webpki 0.102 pinned by serenity; emSign roots removed from webpki-roots 1.0.10" },
+    # astral-tokio-tar is unmaintained, and no version fixes this. Only testcontainers 0.28 uses
+    # it, as a dev-dependency of the e2e tests. It puts our own test config into the container
+    # (`with_copy_to`). It is not in the disirc binary. Remove this ignore when testcontainers
+    # drops the crate; see TODO.md.
+    { id = "RUSTSEC-2026-0440", reason = "unmaintained; dev-dependency of testcontainers for the e2e tests only, not in the binary" },
 ]
 
 [licenses]

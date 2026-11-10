@@ -380,26 +380,45 @@ pub(crate) fn split_for_irc(text: &str) -> Vec<String> {
     result
 }
 
+/// The fence that opens and closes a Discord code block.
+const FENCE: &str = "```";
+
 /// Process code blocks: first line as-is, subsequent lines get continuation prefix.
+///
+/// - A fence at the start of a line opens a block. A language tag right
+///   after it is dropped; other text after it is the first code line.
+/// - A line that starts with a fence and has another fence is a one-line
+///   block. It stays as it is and opens no block.
+/// - In a block, the first fence on a line closes the block. The text before
+///   it is the last code line; the text after it is a normal line.
 fn split_code_blocks(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut in_code_block = false;
     let mut first_line_of_block = true;
 
     for line in text.split('\n') {
-        if line.starts_with("```") {
-            in_code_block = !in_code_block;
-            first_line_of_block = true;
-            // Skip the ``` marker line itself (both opening and closing)
-            continue;
-        }
-
         if in_code_block {
-            if first_line_of_block {
+            let Some((code, after)) = line.split_once(FENCE) else {
+                push_code_line(&mut lines, &mut first_line_of_block, line);
+                continue;
+            };
+            in_code_block = false;
+            if !code.is_empty() {
+                push_code_line(&mut lines, &mut first_line_of_block, code);
+            }
+            let after = after.trim_start();
+            if !after.is_empty() {
+                lines.push(after.to_string());
+            }
+        } else if let Some(rest) = line.strip_prefix(FENCE) {
+            if rest.contains(FENCE) {
                 lines.push(line.to_string());
-                first_line_of_block = false;
             } else {
-                lines.push(format!("{CODE_CONTINUATION}{line}"));
+                in_code_block = true;
+                first_line_of_block = true;
+                if !is_fence_info(rest) {
+                    push_code_line(&mut lines, &mut first_line_of_block, rest);
+                }
             }
         } else if !line.is_empty() {
             lines.push(line.to_string());
@@ -407,6 +426,24 @@ fn split_code_blocks(text: &str) -> Vec<String> {
     }
 
     lines
+}
+
+/// Push one code line: the first line of a block as it is, later lines
+/// with the continuation prefix.
+fn push_code_line(lines: &mut Vec<String>, first_line_of_block: &mut bool, code: &str) {
+    if *first_line_of_block {
+        lines.push(code.to_string());
+        *first_line_of_block = false;
+    } else {
+        lines.push(format!("{CODE_CONTINUATION}{code}"));
+    }
+}
+
+/// True if the text after an opening fence carries no code: it is empty,
+/// or it is one language tag such as `rust` or `c++`.
+fn is_fence_info(rest: &str) -> bool {
+    rest.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-' | '.' | '#'))
 }
 
 /// Split a line that exceeds `max_bytes` at word boundaries.
@@ -1149,6 +1186,41 @@ mod tests {
     }
 
     #[test]
+    fn code_on_the_opening_fence_line_is_the_first_code_line() {
+        let text = "```fn main() {\n    run();\n}\n```";
+        assert_eq!(
+            split_for_irc(text),
+            vec!["fn main() {", "\x02>\x02     run();", "\x02>\x02 }"]
+        );
+    }
+
+    #[test]
+    fn language_tag_with_symbols_is_dropped() {
+        assert_eq!(split_for_irc("```c++\nint x;\n```"), vec!["int x;"]);
+    }
+
+    #[test]
+    fn text_after_the_closing_fence_is_a_normal_line() {
+        let text = "```\ncode\n``` see above";
+        assert_eq!(split_for_irc(text), vec!["code", "see above"]);
+    }
+
+    #[test]
+    fn closing_fence_at_the_end_of_a_code_line_closes_the_block() {
+        let text = "```\nlet x = 1;\nx += 1;```\nafter";
+        assert_eq!(
+            split_for_irc(text),
+            vec!["let x = 1;", "\x02>\x02 x += 1;", "after"]
+        );
+    }
+
+    #[test]
+    fn one_line_block_at_line_start_is_kept_and_opens_no_block() {
+        let text = "```ls -la``` then run\nnext";
+        assert_eq!(split_for_irc(text), vec!["```ls -la``` then run", "next"]);
+    }
+
+    #[test]
     fn replace_paired_marker_empty_inner() {
         let r = replace_paired_marker("****", "**", '[');
         assert_eq!(r, "****");
@@ -1344,6 +1416,78 @@ mod tests {
                 "line exceeds {MAX_LINE_BYTES} bytes and has spaces (should have been split): {:?} ({} bytes)",
                 line,
                 line.len()
+            );
+        }
+    }
+
+    /// Text on a fence line is code or normal text, so it reaches IRC. Only
+    /// the fence itself and a language tag right after an opening fence are
+    /// dropped. The generator follows the block state, so it knows which
+    /// fence opens and which closes, and it gives each word a unique counter
+    /// suffix. At most `MAX_LINES` short lines, so nothing is truncated.
+    #[hegel::test]
+    fn split_for_irc_keeps_text_on_fence_lines(tc: TestCase) {
+        let mut counter = 0;
+        let mut in_block = false;
+        let mut input = Vec::new();
+        let mut expected = Vec::new();
+        let parts = tc.draw(gs::integers::<usize>().min_value(1).max_value(MAX_LINES));
+        for _ in 0..parts {
+            let word_count = tc.draw(gs::integers::<usize>().min_value(1).max_value(3));
+            let words: Vec<String> = (0..word_count)
+                .map(|_| {
+                    counter += 1;
+                    format!("{}{counter}", tc.draw(gs::from_regex("[a-z]{1,6}")))
+                })
+                .collect();
+            let text = words.join(" ");
+            let line = match (tc.draw(gs::integers::<u8>().max_value(3)), in_block) {
+                // A plain line: code inside a block, normal text outside.
+                (0, _) => {
+                    expected.extend(words);
+                    text
+                }
+                // An opening fence with an optional language tag.
+                (1, false) => {
+                    in_block = true;
+                    format!("```{}", tc.draw(gs::from_regex("[a-z0-9+#]{0,6}")))
+                }
+                // A closing fence alone.
+                (1, true) => {
+                    in_block = false;
+                    "```".to_string()
+                }
+                // A fence, then text: the first code line of a new block, or
+                // normal text after a closing fence.
+                (2, _) => {
+                    in_block = !in_block;
+                    expected.extend(words);
+                    format!("``` {text}")
+                }
+                // A one-line block, which stays one line.
+                (_, false) => {
+                    expected.extend(words);
+                    format!("```{text}```")
+                }
+                // A last code line that ends with the closing fence.
+                (_, true) => {
+                    in_block = false;
+                    expected.extend(words);
+                    format!("{text}```")
+                }
+            };
+            input.push(line);
+        }
+        let input = input.join("\n");
+
+        let output = split_for_irc(&input).join(" ");
+        let tokens: std::collections::HashSet<&str> = output
+            .split(|c: char| c.is_whitespace() || matches!(c, '`' | '\x02' | '>'))
+            .collect();
+        for word in &expected {
+            assert!(
+                tokens.contains(word.as_str()),
+                "word {word:?} lost.\n  input: {input:?}\n  output: {output:?}"
             );
         }
     }

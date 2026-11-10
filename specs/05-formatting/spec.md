@@ -16,7 +16,7 @@ Because the Discord user is represented as an IRC pseudoclient, no sender prefix
 | Animated emoji `<a:name:id>` | Reduce to `:name:` |
 | Backslash escape `\*`, `\_`, etc. | Remove the backslash; pass the escaped character through literally (do not treat it as a formatting marker) |
 | Inline code `` `code` `` | Pass through unchanged; no formatting is applied inside inline code spans |
-| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 `. No formatting is applied inside code blocks |
+| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 `. No formatting is applied inside code blocks. Fence lines (see "Code block fences" below) |
 | Bold `**text**` | Convert to IRC bold: `\x02text\x02` |
 | Italic `*text*` | Convert to IRC italic: `\x1dtext\x1d` |
 | Italic `_text_` | Convert to IRC italic **only** when the underscores are at a word boundary (i.e. preceded/followed by whitespace or start/end of string). Intraword underscores (e.g. `some_variable_name`) are left unchanged. This matches Discord's actual rendering behaviour |
@@ -38,6 +38,15 @@ Transformations must be applied in a specific order to match Discord's own parsi
 7. **Strikethrough** `~~text~~` — passed through unchanged.
 
 This order is derived from Discord's own parser (a fork of [simple-markdown](https://github.com/discord/simple-markdown)) which uses rule priority: code > underline > bold > italic > strikethrough.
+
+### Code block fences
+
+A fence is three backticks (` ``` `). The splitter drops only the fence and a language tag. It never drops other text on a fence line:
+
+- A fence at the start of a line opens a block. If the text after it is empty or one language tag (ASCII letters, digits, and `_ + - . #`, for example `rust` or `c++`), drop that text. Otherwise, that text is the first code line.
+- A line that starts with a fence and contains another fence is a one-line block. Send the line unchanged, with its backticks, the same as a ` ``` ` span in the middle of a line. It does not open a block.
+- In a block, the first fence on a line closes the block (Discord cannot nest blocks; see [research/discord-markdown-parsing.md](../../research/discord-markdown-parsing.md)). The text before the fence is the last code line. The text after the fence, with leading spaces removed, is a normal line.
+- A fence in the middle of a line, outside a block, does not open a block.
 
 ### Length splitting
 

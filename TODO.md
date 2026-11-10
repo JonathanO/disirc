@@ -43,7 +43,10 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
       items marked "spec" need a spec decision first:
   - `apply_irc_event` ignores `ServerQuit`, so users behind a netsplit stay
     in the nick tables
-  - `split_for_irc` drops a line that starts with three backticks
+  - ~~`split_for_irc` drops a line that starts with three backticks~~
+    confirmed and fixed, with the text after a closing fence and a
+    closing fence at the end of a code line (branch
+    `fix/split-for-irc-fence-lines`)
   - `resolve_mentions` rewrites text such as `<#include>`, and it runs before
     code protection (spec 05 says code is protected first)
   - literal private-use sentinel characters in user text are corrupted

@@ -100,11 +100,21 @@ pub(crate) async fn send_discord_message(
     }
 }
 
+/// The content of a plain (non-webhook) message or a DM: `@everyone` and
+/// `@here` suppressed, then cut to Discord's 2000-character limit.
+///
+/// The cut comes last, because each suppressed mention adds a character,
+/// and the webhook fallback adds the `**[nick]**` prefix. If the content is
+/// too long, serenity rejects it and the bridge drops the message. A cut
+/// only removes text from the end, so it cannot make a new mention.
+pub(crate) fn plain_content(text: &str) -> String {
+    crate::formatting::truncate_for_discord(&suppress_mentions(text)).into_owned()
+}
+
 /// Plain (non-webhook) channel send.  Suppresses `@everyone` / `@here`
 /// and logs failures.
 async fn send_plain(http: &Http, channel_id: u64, text: &str) {
-    let safe_text = suppress_mentions(text);
-    let msg = CreateMessage::new().content(safe_text);
+    let msg = CreateMessage::new().content(plain_content(text));
     if let Err(e) = ChannelId::new(channel_id).send_message(http, msg).await {
         warn!(error = %e, channel_id, "Channel send failed; dropping message");
     }
@@ -126,8 +136,7 @@ pub(crate) async fn send_dm(http: &Http, recipient_user_id: u64, text: &str) {
             return;
         }
     };
-    let safe_text = suppress_mentions(text);
-    let msg = CreateMessage::new().content(safe_text);
+    let msg = CreateMessage::new().content(plain_content(text));
     if let Err(e) = dm_channel.id.send_message(http, msg).await {
         warn!(
             error = %e,
@@ -563,6 +572,61 @@ mod tests {
         assert!(!out.contains("@here"), "output still pings: {out:?}");
     }
 
+    // --- plain_content ---
+
+    /// Discord's message limit in characters. serenity rejects longer
+    /// content before it sends.
+    const DISCORD_LIMIT: usize = 2000;
+
+    /// Filler of a drawn length near the limit, then trigger words, so
+    /// that the zero-width spaces push the text over the limit. Some
+    /// cases are arbitrary text instead.
+    fn near_limit_text(tc: &TestCase) -> String {
+        if tc.draw(gs::booleans()) {
+            return tc.draw(gs::from_regex(".{0,2100}"));
+        }
+        let filler_len = tc.draw(
+            gs::integers::<usize>()
+                .min_value(DISCORD_LIMIT - 100)
+                .max_value(DISCORD_LIMIT + 100),
+        );
+        let filler = tc.draw(gs::from_regex("[a-z ]{1,10}"));
+        let mut text: String = filler.chars().cycle().take(filler_len).collect();
+        text.push_str(&tc.draw(mentionish_text()));
+        text
+    }
+
+    /// Every plain message and DM fits in Discord's limit, also after
+    /// mention suppression adds zero-width spaces.
+    #[hegel::test]
+    fn plain_content_fits_discord_limit(tc: TestCase) {
+        let text = near_limit_text(&tc);
+        let out = plain_content(&text);
+        assert!(
+            out.chars().count() <= DISCORD_LIMIT,
+            "{} chars",
+            out.chars().count()
+        );
+    }
+
+    /// Truncation never brings back a pingable mention.
+    #[hegel::test]
+    fn plain_content_leaves_no_pingable_mention(tc: TestCase) {
+        let text = near_limit_text(&tc);
+        let out = plain_content(&text).to_lowercase();
+        assert!(!out.contains("@everyone"), "output still pings: {out:?}");
+        assert!(!out.contains("@here"), "output still pings: {out:?}");
+    }
+
+    /// A text of exactly 2000 characters that ends in `@here` grows by one
+    /// zero-width space; the result must still fit.
+    #[test]
+    fn plain_content_of_full_length_text_with_mention_fits() {
+        let text = format!("{} @here", "a".repeat(DISCORD_LIMIT - 6));
+        assert_eq!(text.chars().count(), DISCORD_LIMIT);
+        assert!(plain_content(&text).chars().count() <= DISCORD_LIMIT);
+    }
+
     /// Suppression is idempotent: a second pass never inserts another
     /// zero-width space.
     #[hegel::test]
@@ -967,6 +1031,44 @@ mod tests {
             send_discord_message(&http, 999, Some(&webhook_url()), "TestNick", "hello world").await;
 
             // Asserts exactly 1 plain channel POST on drop.
+            drop(post_mock);
+        }
+
+        /// The relay truncates webhook text to 2000 characters. The fallback
+        /// adds the `**[nick]**` prefix, so it must truncate again, or
+        /// serenity rejects the message and the bridge drops it.
+        #[tokio::test]
+        async fn webhook_resolve_failure_with_full_length_text_still_sends() {
+            let server = MockServer::start().await;
+            let http = mock_http(&server);
+
+            Mock::given(method("GET"))
+                .and(path_regex(r"webhooks/\d+/"))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+
+            let post_mock = Mock::given(method("POST"))
+                .and(path_regex(r"/api/v\d+/channels/999/messages"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(message_json()))
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+
+            let text = "word ".repeat(400);
+            assert_eq!(text.chars().count(), 2000);
+            send_discord_message(&http, 999, Some(&webhook_url()), "TestNick", &text).await;
+
+            let requests = server.received_requests().await.expect("recording is on");
+            let post = requests
+                .iter()
+                .find(|r| r.method.as_str() == "POST")
+                .expect("the fallback must POST the message");
+            let body: serde_json::Value = serde_json::from_slice(&post.body).expect("JSON body");
+            let content = body["content"].as_str().expect("content field");
+            assert!(content.chars().count() <= 2000);
+            assert!(content.starts_with("**[T\u{200B}estNick]** "));
+
             drop(post_mock);
         }
 

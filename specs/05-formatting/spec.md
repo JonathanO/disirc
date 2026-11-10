@@ -16,7 +16,7 @@ Because the Discord user is represented as an IRC pseudoclient, no sender prefix
 | Animated emoji `<a:name:id>` | Reduce to `:name:` |
 | Backslash escape `\*`, `\_`, etc. | Remove the backslash; pass the escaped character through literally (do not treat it as a formatting marker) |
 | Inline code `` `code` `` | Pass through unchanged; no formatting is applied inside inline code spans |
-| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 `. No formatting is applied inside code blocks. Fence lines (see "Code block fences" below) |
+| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 `. No formatting is applied inside code blocks. Lines with a fence follow "Code block fences" below |
 | Bold `**text**` | Convert to IRC bold: `\x02text\x02` |
 | Italic `*text*` | Convert to IRC italic: `\x1dtext\x1d` |
 | Italic `_text_` | Convert to IRC italic **only** when the underscores are at a word boundary (i.e. preceded/followed by whitespace or start/end of string). Intraword underscores (e.g. `some_variable_name`) are left unchanged. This matches Discord's actual rendering behaviour |
@@ -41,12 +41,12 @@ This order is derived from Discord's own parser (a fork of [simple-markdown](htt
 
 ### Code block fences
 
-A fence is three backticks (` ``` `). The splitter drops only the fence and a language tag. It never drops other text on a fence line:
+A fence is three backticks (` ``` `). An escaped backtick (`` \` ``) is not part of a fence: the pipeline restores escaped characters only after it splits the lines. The splitter drops only a fence, a language tag, and whitespace next to a fence. It never drops other text on a fence line:
 
-- A fence at the start of a line opens a block. If the text after it is empty or one language tag (ASCII letters, digits, and `_ + - . #`, for example `rust` or `c++`), drop that text. Otherwise, that text is the first code line.
-- A line that starts with a fence and contains another fence is a one-line block. Send the line unchanged, with its backticks, the same as a ` ``` ` span in the middle of a line. It does not open a block.
-- In a block, the first fence on a line closes the block (Discord cannot nest blocks; see [research/discord-markdown-parsing.md](../../research/discord-markdown-parsing.md)). The text before the fence is the last code line. The text after the fence, with leading spaces removed, is a normal line.
-- A fence in the middle of a line, outside a block, does not open a block.
+- Each fence opens or closes a block, also in the middle of a line. This agrees with the code-span protection in step 2 of the processing order.
+- A line outside a block that starts with a fence, and has no other fence, opens a block. If the rest of the line, without trailing whitespace, is empty or one language tag (ASCII letters, digits, and `_ + - . #`, for example `rust` or `c++`), drop it. Otherwise, the rest is the first code line.
+- Any other line outside a block, one-line blocks such as ` ```ls``` ` included, is sent unchanged with its backticks. If it has an odd number of fences, a block is open at the end of the line.
+- In a block, the first fence on a line closes the block (Discord cannot nest blocks; see [research/discord-markdown-parsing.md](../../research/discord-markdown-parsing.md)). The text before the fence is the last code line, unless it is only whitespace. The text after the fence, without leading whitespace, follows the rules for text outside a block.
 
 ### Length splitting
 

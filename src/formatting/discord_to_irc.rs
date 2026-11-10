@@ -94,6 +94,14 @@ const ESCAPABLE: &[char] = &['*', '_', '~', '`', '>', '#', '-', '\\', '|'];
 /// `ESCAPABLE[i]` maps to `char::from_u32(ESCAPE_BASE + i)`.
 const ESCAPE_BASE: u32 = 0xF_0000;
 
+/// [`markdown_to_irc_keeping_escapes`] with the escaped characters restored:
+/// the whole markdown transform, for tests.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn markdown_to_irc(text: &str) -> String {
+    restore_escaped_chars(&markdown_to_irc_keeping_escapes(text))
+}
+
 /// Convert Discord markdown formatting to IRC control codes.
 ///
 /// Processing order matches Discord's simple-markdown parser:
@@ -103,8 +111,11 @@ const ESCAPE_BASE: u32 = 0xF_0000;
 /// 4. Bold `**` (before single `*`)
 /// 5. Italic `*` and word-boundary `_`
 /// 6. Strikethrough `~~` — passed through unchanged
-#[must_use]
-pub(crate) fn markdown_to_irc(text: &str) -> String {
+///
+/// Escaped characters stay as sentinels. [`discord_to_irc`] restores them
+/// after [`split_for_irc`], so that an escaped backtick is never read as a
+/// code block fence.
+fn markdown_to_irc_keeping_escapes(text: &str) -> String {
     // Step 1: Replace backslash escapes with sentinels
     let mut result = replace_backslash_escapes(text);
 
@@ -126,11 +137,7 @@ pub(crate) fn markdown_to_irc(text: &str) -> String {
 
     // Step 6: Strikethrough ~~text~~ → pass through unchanged
 
-    // Restore code spans and escaped characters
-    result = restore_code_spans(&result, &code_spans);
-    result = restore_escaped_chars(&result);
-
-    result
+    restore_code_spans(&result, &code_spans)
 }
 
 /// Map an escapable character to its unique PUA sentinel.
@@ -385,57 +392,76 @@ const FENCE: &str = "```";
 
 /// Process code blocks: first line as-is, subsequent lines get continuation prefix.
 ///
-/// - A fence at the start of a line opens a block. A language tag right
-///   after it is dropped; other text after it is the first code line.
-/// - A line that starts with a fence and has another fence is a one-line
-///   block. It stays as it is and opens no block.
-/// - In a block, the first fence on a line closes the block. The text before
-///   it is the last code line; the text after it is a normal line.
+/// Each fence opens or closes a block, also in the middle of a line, the same
+/// as `protect_code_spans`. Spec 05 "Code block fences" gives the rules for
+/// the text on a fence line.
 fn split_code_blocks(text: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut in_code_block = false;
-    let mut first_line_of_block = true;
-
+    let mut out = CodeBlockLines::default();
     for line in text.split('\n') {
-        if in_code_block {
-            let Some((code, after)) = line.split_once(FENCE) else {
-                push_code_line(&mut lines, &mut first_line_of_block, line);
-                continue;
-            };
-            in_code_block = false;
-            if !code.is_empty() {
-                push_code_line(&mut lines, &mut first_line_of_block, code);
+        if !out.in_block {
+            out.push_outside(line);
+        } else if let Some((code, after)) = line.split_once(FENCE) {
+            // The first fence on the line closes the block.
+            if !code.trim().is_empty() {
+                out.push_code(code);
             }
-            let after = after.trim_start();
-            if !after.is_empty() {
-                lines.push(after.to_string());
-            }
-        } else if let Some(rest) = line.strip_prefix(FENCE) {
-            if rest.contains(FENCE) {
-                lines.push(line.to_string());
-            } else {
-                in_code_block = true;
-                first_line_of_block = true;
-                if !is_fence_info(rest) {
-                    push_code_line(&mut lines, &mut first_line_of_block, rest);
-                }
-            }
-        } else if !line.is_empty() {
-            lines.push(line.to_string());
+            out.in_block = false;
+            out.push_outside(after.trim_start());
+        } else {
+            out.push_code(line);
+        }
+    }
+    out.lines
+}
+
+/// The lines that [`split_code_blocks`] builds, and its block state.
+#[derive(Default)]
+struct CodeBlockLines {
+    lines: Vec<String>,
+    in_block: bool,
+    /// True until the open block has its first code line.
+    first_line_of_block: bool,
+}
+
+impl CodeBlockLines {
+    fn open_block(&mut self) {
+        self.in_block = true;
+        self.first_line_of_block = true;
+    }
+
+    /// Push one code line: the first line of a block as it is, later lines
+    /// with the continuation prefix.
+    fn push_code(&mut self, code: &str) {
+        if self.first_line_of_block {
+            self.lines.push(code.to_string());
+            self.first_line_of_block = false;
+        } else {
+            self.lines.push(format!("{CODE_CONTINUATION}{code}"));
         }
     }
 
-    lines
-}
-
-/// Push one code line: the first line of a block as it is, later lines
-/// with the continuation prefix.
-fn push_code_line(lines: &mut Vec<String>, first_line_of_block: &mut bool, code: &str) {
-    if *first_line_of_block {
-        lines.push(code.to_string());
-        *first_line_of_block = false;
-    } else {
-        lines.push(format!("{CODE_CONTINUATION}{code}"));
+    /// Push text that starts outside a block.
+    fn push_outside(&mut self, text: &str) {
+        match text.strip_prefix(FENCE) {
+            // An opening fence with no other fence on the line: drop a
+            // language tag, and keep any other text as the first code line.
+            Some(rest) if !rest.contains(FENCE) => {
+                self.open_block();
+                if !is_fence_info(rest.trim_end()) {
+                    self.push_code(rest);
+                }
+            }
+            // Other text stays as it is, one-line blocks included. After an
+            // odd number of fences, a block is open at the end of the line.
+            _ => {
+                if !text.is_empty() {
+                    self.lines.push(text.to_string());
+                }
+                if text.matches(FENCE).count() % 2 == 1 {
+                    self.open_block();
+                }
+            }
+        }
     }
 }
 
@@ -535,8 +561,12 @@ fn split_long_line(line: &str, max_bytes: usize) -> Vec<String> {
 #[must_use]
 pub(crate) fn discord_to_irc(text: &str, resolver: &dyn DiscordResolver) -> Vec<String> {
     let resolved = resolve_mentions(text, resolver);
-    let formatted = markdown_to_irc(&resolved);
+    let formatted = markdown_to_irc_keeping_escapes(&resolved);
+    // A sentinel is longer than its character, so a line only gets shorter.
     split_for_irc(&formatted)
+        .iter()
+        .map(|line| restore_escaped_chars(line))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,6 +1251,45 @@ mod tests {
     }
 
     #[test]
+    fn odd_fence_count_on_a_line_leaves_a_block_open() {
+        let text = "```a``` b ```\ncode\n```\nafter\nmore";
+        assert_eq!(
+            split_for_irc(text),
+            vec!["```a``` b ```", "code", "after", "more"]
+        );
+    }
+
+    #[test]
+    fn fence_at_the_end_of_a_normal_line_opens_a_block() {
+        let text = "see ```\ncode\nmore code\n```\nafter";
+        assert_eq!(
+            split_for_irc(text),
+            vec!["see ```", "code", "\x02>\x02 more code", "after"]
+        );
+    }
+
+    #[test]
+    fn whitespace_after_a_fence_is_not_a_code_line() {
+        assert_eq!(split_for_irc("``` \ncode\n  ```"), vec!["code"]);
+        assert_eq!(split_for_irc("```rust \ncode\n```"), vec!["code"]);
+    }
+
+    /// An escaped backtick is plain text in Discord. The split must not
+    /// read it as a fence.
+    #[test]
+    fn escaped_backticks_are_not_a_fence() {
+        let text = "```md\nUse \\`\\`\\` here\n```\nafter\nmore";
+        assert_eq!(
+            discord_to_irc(text, &StubResolver),
+            vec!["Use ``` here", "after", "more"]
+        );
+        assert_eq!(
+            discord_to_irc("\\`\\`\\`rust\ncode", &StubResolver),
+            vec!["```rust", "code"]
+        );
+    }
+
+    #[test]
     fn replace_paired_marker_empty_inner() {
         let r = replace_paired_marker("****", "**", '[');
         assert_eq!(r, "****");
@@ -1421,16 +1490,19 @@ mod tests {
     }
 
     /// Text on a fence line is code or normal text, so it reaches IRC. Only
-    /// the fence itself and a language tag right after an opening fence are
-    /// dropped. The generator follows the block state, so it knows which
-    /// fence opens and which closes, and it gives each word a unique counter
-    /// suffix. At most `MAX_LINES` short lines, so nothing is truncated.
+    /// a fence, a language tag right after an opening fence, and whitespace
+    /// next to a fence are dropped. The generator follows the block state,
+    /// so it knows which fence opens and which closes, how many lines each
+    /// input line gives (0 or 1), and which words must arrive, in order. Each
+    /// word has a unique counter suffix. At most `MAX_LINES` short lines, so
+    /// nothing is truncated or split.
     #[hegel::test]
     fn split_for_irc_keeps_text_on_fence_lines(tc: TestCase) {
         let mut counter = 0;
         let mut in_block = false;
         let mut input = Vec::new();
-        let mut expected = Vec::new();
+        let mut expected_words = Vec::new();
+        let mut expected_lines = 0;
         let parts = tc.draw(gs::integers::<usize>().min_value(1).max_value(MAX_LINES));
         for _ in 0..parts {
             let word_count = tc.draw(gs::integers::<usize>().min_value(1).max_value(3));
@@ -1441,55 +1513,69 @@ mod tests {
                 })
                 .collect();
             let text = words.join(" ");
-            let line = match (tc.draw(gs::integers::<u8>().max_value(3)), in_block) {
+            let (line, gives_line) = match (tc.draw(gs::integers::<u8>().max_value(4)), in_block) {
                 // A plain line: code inside a block, normal text outside.
-                (0, _) => {
-                    expected.extend(words);
-                    text
-                }
-                // An opening fence with an optional language tag.
+                (0, _) => (text, true),
+                // An opening fence with an optional language tag, or a
+                // closing fence, each with optional trailing whitespace.
                 (1, false) => {
                     in_block = true;
-                    format!("```{}", tc.draw(gs::from_regex("[a-z0-9+#]{0,6}")))
+                    let tag = tc.draw(gs::from_regex(r"[A-Za-z0-9_+.#-]{0,6}[ \t]{0,2}"));
+                    (format!("```{tag}"), false)
                 }
-                // A closing fence alone.
                 (1, true) => {
                     in_block = false;
-                    "```".to_string()
+                    let space = tc.draw(gs::from_regex(r"[ \t]{0,2}"));
+                    (format!("{space}```{space}"), false)
                 }
                 // A fence, then text: the first code line of a new block, or
                 // normal text after a closing fence.
                 (2, _) => {
                     in_block = !in_block;
-                    expected.extend(words);
-                    format!("``` {text}")
+                    (format!("``` {text}"), true)
                 }
                 // A one-line block, which stays one line.
-                (_, false) => {
-                    expected.extend(words);
-                    format!("```{text}```")
-                }
+                (3, false) => (format!("```{text}```"), true),
                 // A last code line that ends with the closing fence.
-                (_, true) => {
+                (3, true) => {
                     in_block = false;
-                    expected.extend(words);
-                    format!("{text}```")
+                    (format!("{text}```"), true)
                 }
+                // A fence at the end of a normal line opens a block.
+                (_, false) => {
+                    in_block = true;
+                    (format!("{text} ```"), true)
+                }
+                // A closing fence, then text that opens a new block.
+                (_, true) => (format!("```{text} ```"), true),
             };
+            if gives_line {
+                expected_lines += 1;
+                expected_words.extend(words);
+            }
             input.push(line);
         }
         let input = input.join("\n");
 
-        let output = split_for_irc(&input).join(" ");
-        let tokens: std::collections::HashSet<&str> = output
+        let output = split_for_irc(&input);
+        assert_eq!(
+            output.len(),
+            expected_lines,
+            "line count.\n  input: {input:?}\n  output: {output:?}"
+        );
+        let joined = output.join(" ");
+        let tokens: Vec<&str> = joined
             .split(|c: char| c.is_whitespace() || matches!(c, '`' | '\x02' | '>'))
+            .filter(|t| !t.is_empty())
             .collect();
-        for word in &expected {
-            assert!(
-                tokens.contains(word.as_str()),
-                "word {word:?} lost.\n  input: {input:?}\n  output: {output:?}"
-            );
-        }
+        let found: Vec<&str> = tokens
+            .into_iter()
+            .filter(|t| expected_words.iter().any(|w| w == t))
+            .collect();
+        assert_eq!(
+            found, expected_words,
+            "words lost or out of order.\n  input: {input:?}\n  output: {output:?}"
+        );
     }
 
     /// `split_for_irc` must preserve all non-whitespace content from the

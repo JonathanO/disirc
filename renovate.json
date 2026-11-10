@@ -6,7 +6,8 @@
   "osvVulnerabilityAlerts": true,
   "lockFileMaintenance": {
     "enabled": true,
-    "automerge": true
+    "automerge": true,
+    "minimumReleaseAge": null
   },
   "minimumReleaseAge": "3 days",
   "platformAutomerge": false,

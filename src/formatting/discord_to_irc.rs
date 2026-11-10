@@ -214,7 +214,9 @@ impl CodeSpan<'_> {
 ///   next ` ``` `. If there is none, the scan stops and returns `None`.
 /// - A run of one or two backticks begins inline code. It ends at the next
 ///   run of exactly the same length, as in simple-markdown's `inlineCode`
-///   rule. If there is none, the run is plain text and the scan goes on.
+///   rule. A run of two with no such partner ends at the next run of one,
+///   because the rule's regex backtracks. If there is none, the run is
+///   plain text and the scan goes on.
 ///
 /// `protect_code_spans` and `split_code_blocks` both read spans with this
 /// function, so they agree on where every block starts and ends.
@@ -230,13 +232,21 @@ fn next_code_span(text: &str) -> Option<CodeSpan<'_>> {
                 rest,
             });
         }
-        if let Some(&(close, _)) = runs[i + 1..].iter().find(|&&(_, len)| len == run) {
-            return Some(CodeSpan {
-                before: &text[..pos],
-                delimiter: if run == 1 { "`" } else { "``" },
-                code: &text[pos + run..close],
-                rest: &text[close + run..],
-            });
+        // The regex backtracks: a run of two with no partner of two can
+        // still open a span of one, whose code starts with a backtick.
+        for delimiter in ["``", "`"] {
+            let len = delimiter.len();
+            if len > run {
+                continue;
+            }
+            if let Some(&(close, _)) = runs[i + 1..].iter().find(|&&(_, l)| l == len) {
+                return Some(CodeSpan {
+                    before: &text[..pos],
+                    delimiter,
+                    code: &text[pos + len..close],
+                    rest: &text[close + len..],
+                });
+            }
         }
     }
     None
@@ -1389,6 +1399,15 @@ mod tests {
         );
     }
 
+    /// A run of two backticks with no partner of two ends at the next single
+    /// backtick, because simple-markdown's regex backtracks.
+    #[test]
+    fn double_backtick_with_no_partner_ends_at_a_single_backtick() {
+        let (_out, spans) = protect_code_spans("``*`*```");
+        assert_eq!(spans, vec!["``*`".to_string()]);
+        assert_eq!(markdown_to_irc("``*`*```"), "``*`*```");
+    }
+
     /// In the text after an unclosed fence, only a fence at the start of a
     /// source line opens a block. A fence after a closing fence on the same
     /// line is plain text.
@@ -1647,7 +1666,7 @@ mod tests {
     /// block state, so it knows which fence opens and which closes, and for
     /// each output line its words and whether it has the code prefix (each
     /// input line gives 0 or 1 lines). Each word has a unique counter suffix.
-    /// The first word can hold an unpaired backtick. The test calls
+    /// One word can hold an unpaired backtick. The test calls
     /// `split_code_blocks` directly, so the line limit does not cap the
     /// number of parts.
     #[hegel::test]
@@ -1663,12 +1682,14 @@ mod tests {
         }
 
         let mut counter = 0;
+        let mut tick_used = false;
         let mut in_block = false;
         // Whether the open block already has a code line.
         let mut block_has_line = false;
-        // Where the open block was opened in `expected`, if it was opened in
-        // the middle of a line. Such a block that never closes is plain text.
-        let mut opened_mid_line: Option<usize> = None;
+        // If the open block was opened in the middle of a line: where its
+        // lines start in `expected`, and whether its fence line is a line of
+        // its own when the block never closes. Such a block is plain text.
+        let mut opened_mid_line: Option<(usize, bool)> = None;
         let mut input = Vec::new();
         let mut expected: Vec<Expected> = Vec::new();
         let parts = tc.draw(gs::integers::<usize>().min_value(1).max_value(12));
@@ -1677,9 +1698,10 @@ mod tests {
             let words: Vec<String> = (0..word_count)
                 .map(|_| {
                     counter += 1;
-                    // The first word can hold one backtick, used as an
+                    // One word can hold one backtick, used as an
                     // apostrophe. It is the only one, so it never pairs.
-                    let pattern = if counter == 1 && tc.draw(gs::booleans()) {
+                    let pattern = if !tick_used && tc.draw(gs::booleans()) {
+                        tick_used = true;
                         "[a-z]{1,3}`[a-z]{1,3}"
                     } else {
                         "[a-z]{1,6}"
@@ -1708,9 +1730,17 @@ mod tests {
                     format!("```{tag}")
                 }
                 (1, true) => {
-                    in_block = false;
                     let space = tc.draw(gs::from_regex(r"[ \t]{0,2}"));
-                    format!("{space}```{space}")
+                    if tc.draw(gs::booleans()) {
+                        // A new opening fence after the closing fence, on the
+                        // same line: not at the start of a source line.
+                        block_has_line = false;
+                        opened_mid_line = Some((expected.len(), true));
+                        format!("{space}```{space}```")
+                    } else {
+                        in_block = false;
+                        format!("{space}```{space}")
+                    }
                 }
                 // A fence, then text: the first code line of a new block, or
                 // normal text after a closing fence.
@@ -1742,14 +1772,14 @@ mod tests {
                     expected.push((false, words));
                     in_block = true;
                     block_has_line = false;
-                    opened_mid_line = Some(expected.len());
+                    opened_mid_line = Some((expected.len(), false));
                     format!("{text} ```")
                 }
                 // A closing fence, then text that opens a new block.
                 (_, true) => {
                     expected.push((false, words));
                     block_has_line = false;
-                    opened_mid_line = Some(expected.len());
+                    opened_mid_line = Some((expected.len(), false));
                     format!("```{text} ```")
                 }
             };
@@ -1757,9 +1787,12 @@ mod tests {
         }
         // A block opened in the middle of a line that never closes is plain
         // text: its lines have no code prefix.
-        if in_block && let Some(first) = opened_mid_line {
+        if in_block && let Some((first, fence_line)) = opened_mid_line {
             for line in &mut expected[first..] {
                 line.0 = false;
+            }
+            if fence_line {
+                expected.insert(first, (false, Vec::new()));
             }
         }
         let input = input.join("\n");

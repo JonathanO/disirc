@@ -47,7 +47,9 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
   - `resolve_mentions` rewrites text such as `<#include>`, and it runs before
     code protection (spec 05 says code is protected first)
   - literal private-use sentinel characters in user text are corrupted
-  - `sanitize_nick` can return a nick that starts with `-`
+  - ~~`sanitize_nick` can return a nick that starts with `-`~~ confirmed
+    and fixed: UnrealIRCd kills such a UID (branch
+    `fix/sanitize-nick-leading-hyphen`)
   - the UID fallback in `resolve_nick` is not checked against nicks in use
   - the webhook-failure fallback can send more than 2000 characters
   - (spec) the plain-text path can ping roles with `<@&id>`

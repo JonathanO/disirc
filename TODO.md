@@ -43,7 +43,18 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
       items marked "spec" need a spec decision first:
   - `apply_irc_event` ignores `ServerQuit`, so users behind a netsplit stay
     in the nick tables
-  - `split_for_irc` drops a line that starts with three backticks
+  - ~~`split_for_irc` drops a line that starts with three backticks~~
+    confirmed and fixed. The splitter now reads code spans with the same
+    scan as `protect_code_spans` (branch `fix/split-for-irc-fence-lines`)
+  - (spec) an unclosed fence: `protect_code_spans` treats the text after
+    it as plain text (formatting applies), but the splitter treats the
+    lines after a fence at the start of a line as code.
+    `research/discord-markdown-parsing.md` says that Discord shows it as
+    code; check this with the e2e Discord bots, then make both agree
+  - a block with only a tag-like word (```` ```code\n``` ````) sends
+    nothing, because the word is read as a language tag. Discord shows
+    `code`. A block that starts with an empty line (```` ```\n\ncode ````)
+    sends an empty first line, and the DM path then sends an empty message
   - `resolve_mentions` rewrites text such as `<#include>`, and it runs before
     code protection (spec 05 says code is protected first)
   - literal private-use sentinel characters in user text are corrupted

@@ -16,7 +16,7 @@ Because the Discord user is represented as an IRC pseudoclient, no sender prefix
 | Animated emoji `<a:name:id>` | Reduce to `:name:` |
 | Backslash escape `\*`, `\_`, etc. | Remove the backslash; pass the escaped character through literally (do not treat it as a formatting marker) |
 | Inline code `` `code` `` | Pass through unchanged; no formatting is applied inside inline code spans |
-| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 `. No formatting is applied inside code blocks |
+| Code block ` ```lang\ncode\n``` ` | First line sent as-is; remaining lines sent as continuation `PRIVMSG` lines prefixed with `\x02>\x02 `. No formatting is applied inside code blocks. Lines with a fence follow "Code block fences" below |
 | Bold `**text**` | Convert to IRC bold: `\x02text\x02` |
 | Italic `*text*` | Convert to IRC italic: `\x1dtext\x1d` |
 | Italic `_text_` | Convert to IRC italic **only** when the underscores are at a word boundary (i.e. preceded/followed by whitespace or start/end of string). Intraword underscores (e.g. `some_variable_name`) are left unchanged. This matches Discord's actual rendering behaviour |
@@ -38,6 +38,25 @@ Transformations must be applied in a specific order to match Discord's own parsi
 7. **Strikethrough** `~~text~~` — passed through unchanged.
 
 This order is derived from Discord's own parser (a fork of [simple-markdown](https://github.com/discord/simple-markdown)) which uses rule priority: code > underline > bold > italic > strikethrough.
+
+### Code block fences
+
+A fence is three backticks (` ``` `). The splitter reads code spans in the same way as the code-span protection in step 2 of the processing order, so the two always agree on where a block starts and ends:
+
+- A run of three or more backticks begins a block. The block ends at the next ` ``` `. A run of four backticks is a fence and one backtick.
+- A run of one or two backticks begins inline code. It ends at the next run of exactly the same length, as in the `inlineCode` rule of [simple-markdown](https://github.com/discord/simple-markdown/blob/master/simple-markdown.js) (`` /^(`+)([\s\S]*?[^`])\1(?!`)/ ``). Because that regex backtracks, a run of two backticks with no partner of two ends at the next run of one backtick, and its code starts with the second backtick. If there is no partner at all, the backticks are plain text, and the scan continues after them. So an unpaired backtick (for example an apostrophe in ``don`t``) does not affect a later block.
+- An escaped backtick (`` \` ``) is not a backtick here. The pipeline restores escaped characters after it finds the code blocks, and before the length split.
+
+A block whose code contains a line break becomes code lines. It never loses text other than these parts: the fences, a language tag, whitespace between a fence and the text before or after it on the same line, and a line that is only whitespace next to a fence.
+
+- The text before the opening fence, on the same line, is a normal line.
+- If the text after the opening fence, on the same line, is empty or one language tag (ASCII letters, digits, and `_ + - . #`, for example `rust` or `c++`), drop it. Otherwise, it is the first code line. Trailing whitespace does not matter.
+- The text before the closing fence, on the same line, is the last code line, unless it is only whitespace.
+- The text after the closing fence continues as normal text.
+
+Inline code, and a block on one line (` ```ls -la``` `), stay in their line unchanged, with their backticks.
+
+If a block does not close, the code-span protection protects nothing after it, and the splitter reads no more spans. In that text, a fence at the start of a source line still opens a block to the end of the message. (Open question: [research/discord-markdown-parsing.md](../../research/discord-markdown-parsing.md) says that Discord shows an unclosed fence as code, but the code-span protection treats it as plain text. See TODO.md.)
 
 ### Length splitting
 

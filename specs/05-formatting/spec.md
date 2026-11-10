@@ -41,12 +41,21 @@ This order is derived from Discord's own parser (a fork of [simple-markdown](htt
 
 ### Code block fences
 
-A fence is three backticks (` ``` `). An escaped backtick (`` \` ``) is not part of a fence: the pipeline restores escaped characters only after it splits the lines. The splitter drops only a fence, a language tag, and whitespace next to a fence. It never drops other text on a fence line:
+A fence is three backticks (` ``` `). The splitter reads code spans in the same way as the code-span protection in step 2 of the processing order, so the two always agree on where a block starts and ends:
 
-- Each fence opens or closes a block, also in the middle of a line. This agrees with the code-span protection in step 2 of the processing order.
-- A line outside a block that starts with a fence, and has no other fence, opens a block. If the rest of the line, without trailing whitespace, is empty or one language tag (ASCII letters, digits, and `_ + - . #`, for example `rust` or `c++`), drop it. Otherwise, the rest is the first code line.
-- Any other line outside a block, one-line blocks such as ` ```ls``` ` included, is sent unchanged with its backticks. If it has an odd number of fences, a block is open at the end of the line.
-- In a block, the first fence on a line closes the block (Discord cannot nest blocks; see [research/discord-markdown-parsing.md](../../research/discord-markdown-parsing.md)). The text before the fence is the last code line, unless it is only whitespace. The text after the fence, without leading whitespace, follows the rules for text outside a block.
+- The first backtick starts a span. The span is a block if that backtick begins a fence, otherwise inline code. The span ends at the next copy of its delimiter. A run of four backticks is a fence and one backtick.
+- An escaped backtick (`` \` ``) is not a backtick here. The pipeline restores escaped characters after it finds the code blocks, and before the length split.
+
+A block whose code contains a line break becomes code lines. The splitter drops only the fences, a language tag, and whitespace next to a fence on the fence lines. It never drops other text on a fence line:
+
+- The text before the opening fence, on the same line, is a normal line.
+- If the text after the opening fence, on the same line, is empty or one language tag (ASCII letters, digits, and `_ + - . #`, for example `rust` or `c++`), drop it. Otherwise, it is the first code line. Trailing whitespace does not matter.
+- The text before the closing fence, on the same line, is the last code line, unless it is only whitespace.
+- The text after the closing fence continues as normal text.
+
+Inline code, and a block on one line (` ```ls -la``` `), stay in their line unchanged, with their backticks.
+
+If a span does not close, the code-span protection protects nothing after it, and the splitter reads no more spans. In that text, a fence at the start of a line still opens a block to the end of the message. (Open question: [research/discord-markdown-parsing.md](../../research/discord-markdown-parsing.md) says that Discord shows an unclosed fence as code, but the code-span protection treats it as plain text. See TODO.md.)
 
 ### Length splitting
 

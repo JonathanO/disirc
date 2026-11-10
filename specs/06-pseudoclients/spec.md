@@ -20,9 +20,10 @@ A pseudoclient is a virtual IRC user introduced by `disirc` under its own SID. T
 Discord usernames may contain characters not valid in IRC nicks. Sanitization rules:
 
 1. Replace any character not in `[A-Za-z0-9_\-\[\]\\^{}|`]` with `_`.
-2. If the result starts with a digit, prefix with `d`.
+2. If the result starts with a digit or `-`, prefix with `d`. UnrealIRCd rejects a nick that starts with either one, and it kills the UID ([research/unrealircd-nick-rules.md](../../research/unrealircd-nick-rules.md)).
 3. Truncate to 30 characters.
-4. If the sanitized nick collides with an existing IRC nick (known from the burst), apply the following fallback chain in order, stopping at the first non-colliding result:
+4. If the result is `irc` or `ircd` in any case, append `_`. UnrealIRCd keeps these nicks for itself and kills a UID that uses one (same reference).
+5. If the sanitized nick collides with an existing IRC nick (known from the burst), apply the following fallback chain in order, stopping at the first non-colliding result:
    - Append `_` and retry, up to 3 times (e.g. `alice_`, `alice__`, `alice___`).
    - Truncate the sanitized nick as needed and append the last 8 hex digits of the Discord user ID (e.g. `alice_a1b2c3d4`). This resolves pseudoclient-vs-pseudoclient collisions in all but astronomically unlikely cases (1 in ~4 billion per pair).
    - **Final fallback**: use `d` + the 6-character unique portion of the pseudoclient's UID (i.e. the UID with the 3-character SID prefix stripped). Since UIDs are globally unique on the network by definition, this form is guaranteed collision-free. Example: UID `0D0ABCXYZ` → nick `dABCXYZ`.
@@ -230,3 +231,7 @@ processed one at a time, so the manager never needs locking.
 **Constraint for spec-02 (IRC connection) and spec-03 (Discord connection)**:
 the reader/gateway tasks must communicate exclusively via the mpsc channel.
 They must not accept a shared reference to `PseudoclientManager`.
+
+## References
+
+- [research/unrealircd-nick-rules.md](../../research/unrealircd-nick-rules.md) — the nicks that UnrealIRCd accepts in a `UID`

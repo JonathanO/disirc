@@ -51,6 +51,10 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
     lines after a fence at the start of a line as code.
     `research/discord-markdown-parsing.md` says that Discord shows it as
     code; check this with the e2e Discord bots, then make both agree
+  - a block with only a tag-like word (```` ```code\n``` ````) sends
+    nothing, because the word is read as a language tag. Discord shows
+    `code`. A block that starts with an empty line (```` ```\n\ncode ````)
+    sends an empty first line, and the DM path then sends an empty message
   - `resolve_mentions` rewrites text such as `<#include>`, and it runs before
     code protection (spec 05 says code is protected first)
   - literal private-use sentinel characters in user text are corrupted

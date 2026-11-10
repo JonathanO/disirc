@@ -208,28 +208,50 @@ impl CodeSpan<'_> {
     }
 }
 
-/// Find the first code span in `text`. The first backtick starts it. It is a
-/// block if that backtick begins a fence, otherwise inline code. It ends at
-/// the next copy of its delimiter. Returns `None` if there is no backtick, or
-/// if the first span does not close.
+/// Find the first code span in `text`.
+///
+/// - A run of three or more backticks begins a block. The block ends at the
+///   next ` ``` `. If there is none, the scan stops and returns `None`.
+/// - A run of one or two backticks begins inline code. It ends at the next
+///   run of exactly the same length, as in simple-markdown's `inlineCode`
+///   rule. If there is none, the run is plain text and the scan goes on.
 ///
 /// `protect_code_spans` and `split_code_blocks` both read spans with this
 /// function, so they agree on where every block starts and ends.
 fn next_code_span(text: &str) -> Option<CodeSpan<'_>> {
-    let pos = text.find('`')?;
-    let (before, from_open) = text.split_at(pos);
-    let delimiter = if from_open.starts_with(FENCE) {
-        FENCE
-    } else {
-        "`"
-    };
-    let (code, rest) = from_open[delimiter.len()..].split_once(delimiter)?;
-    Some(CodeSpan {
-        before,
-        delimiter,
-        code,
-        rest,
-    })
+    let runs = backtick_runs(text);
+    for (i, &(pos, run)) in runs.iter().enumerate() {
+        if run >= FENCE.len() {
+            let (code, rest) = text[pos + FENCE.len()..].split_once(FENCE)?;
+            return Some(CodeSpan {
+                before: &text[..pos],
+                delimiter: FENCE,
+                code,
+                rest,
+            });
+        }
+        if let Some(&(close, _)) = runs[i + 1..].iter().find(|&&(_, len)| len == run) {
+            return Some(CodeSpan {
+                before: &text[..pos],
+                delimiter: if run == 1 { "`" } else { "``" },
+                code: &text[pos + run..close],
+                rest: &text[close + run..],
+            });
+        }
+    }
+    None
+}
+
+/// The runs of backticks in `text`, as (byte offset, length), in order.
+fn backtick_runs(text: &str) -> Vec<(usize, usize)> {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for (pos, _) in text.match_indices('`') {
+        match runs.last_mut() {
+            Some((start, len)) if *start + *len == pos => *len += 1,
+            _ => runs.push((pos, 1)),
+        }
+    }
+    runs
 }
 
 /// Extract code blocks and inline code, replacing them with placeholders.
@@ -427,6 +449,7 @@ const FENCE: &str = "```";
 fn split_code_blocks(text: &str) -> Vec<String> {
     let mut out = CodeBlockLines::default();
     let mut remaining = text;
+    let mut at_line_start = true;
     while let Some(span) = next_code_span(remaining) {
         if span.delimiter == FENCE && span.code.contains('\n') {
             // Drop whitespace next to the fences, but only on the fence lines.
@@ -439,8 +462,9 @@ fn split_code_blocks(text: &str) -> Vec<String> {
             out.push_text(&remaining[..span.len()]);
             remaining = span.rest;
         }
+        at_line_start = false;
     }
-    out.push_unclosed_tail(remaining);
+    out.push_unclosed_tail(remaining, at_line_start);
     out.end_line();
     out.lines
 }
@@ -451,8 +475,6 @@ struct CodeBlockLines {
     lines: Vec<String>,
     /// The normal line that is not complete yet.
     line: String,
-    /// True until the current block has its first code line.
-    first_line_of_block: bool,
 }
 
 impl CodeBlockLines {
@@ -480,51 +502,43 @@ impl CodeBlockLines {
     /// opening fence line is dropped if it is empty or a language tag. The
     /// text on the closing fence line is dropped if it is only whitespace.
     fn push_block(&mut self, code: &str) {
-        self.first_line_of_block = true;
         let mut pieces: Vec<&str> = code.split('\n').collect();
         let last = pieces.pop().filter(|last| !last.trim().is_empty());
         let mut pieces = pieces.into_iter();
-        if let Some(first) = pieces.next()
-            && !is_fence_info(first.trim_end())
-        {
-            self.push_code(first);
-        }
-        for piece in pieces.chain(last) {
-            self.push_code(piece);
-        }
+        let first = pieces
+            .next()
+            .filter(|first| !is_fence_info(first.trim_end()));
+        self.push_code_lines(first.into_iter().chain(pieces).chain(last));
     }
 
-    /// Push one code line: the first line of a block as it is, later lines
+    /// Push the code lines of one block: the first as it is, later lines
     /// with the continuation prefix.
-    fn push_code(&mut self, code: &str) {
-        if self.first_line_of_block {
-            self.lines.push(code.to_string());
-            self.first_line_of_block = false;
-        } else {
-            self.lines.push(format!("{CODE_CONTINUATION}{code}"));
+    fn push_code_lines<'a>(&mut self, code: impl IntoIterator<Item = &'a str>) {
+        for (i, line) in code.into_iter().enumerate() {
+            if i == 0 {
+                self.lines.push(line.to_string());
+            } else {
+                self.lines.push(format!("{CODE_CONTINUATION}{line}"));
+            }
         }
     }
 
     /// Push the text after the last span that closes. `protect_code_spans`
-    /// protects none of it. A fence at the start of a line in this text
-    /// still opens a block to the end of the message.
-    fn push_unclosed_tail(&mut self, text: &str) {
+    /// protects none of it. A fence at the start of a source line in this
+    /// text still opens a block to the end of the message. `at_line_start`
+    /// says whether the text starts a source line.
+    fn push_unclosed_tail(&mut self, text: &str, at_line_start: bool) {
         let mut pieces = text.split('\n');
+        let mut starts_line = at_line_start;
         while let Some(piece) = pieces.next() {
-            if let Some(rest) = piece.strip_prefix(FENCE)
-                && self.line.is_empty()
-            {
-                self.first_line_of_block = true;
-                if !is_fence_info(rest.trim_end()) {
-                    self.push_code(rest);
-                }
-                for code in pieces.by_ref() {
-                    self.push_code(code);
-                }
+            if starts_line && let Some(rest) = piece.strip_prefix(FENCE) {
+                let first = Some(rest).filter(|rest| !is_fence_info(rest.trim_end()));
+                self.push_code_lines(first.into_iter().chain(pieces.by_ref()));
                 return;
             }
             self.line.push_str(piece);
             self.end_line();
+            starts_line = true;
         }
     }
 }
@@ -1349,6 +1363,41 @@ mod tests {
         assert_eq!(split_for_irc("`a```b`\nx\ny"), vec!["`a```b`", "x", "y"]);
     }
 
+    /// An unpaired backtick (here an apostrophe) is plain text. It must not
+    /// pair with the first backtick of a later fence.
+    #[test]
+    fn unpaired_backtick_before_a_block_is_plain_text() {
+        let text = "I don`t get this:\n```\nfoo\nbar\n```\nany ideas?";
+        assert_eq!(
+            split_for_irc(text),
+            vec!["I don`t get this:", "foo", "\x02>\x02 bar", "any ideas?"]
+        );
+        // The protection agrees, so no formatting applies inside the block.
+        let text = "I don`t get it:\n```\n**foo**\n```";
+        assert_eq!(markdown_to_irc(text), text);
+    }
+
+    /// Inline code ends at a run of the same length (simple-markdown's
+    /// `inlineCode` rule), so a double-backtick span can hold one backtick.
+    #[test]
+    fn inline_code_ends_at_a_run_of_the_same_length() {
+        let (_out, spans) = protect_code_spans("a ``x ` y`` **b**");
+        assert_eq!(spans, vec!["``x ` y``".to_string()]);
+        assert_eq!(
+            markdown_to_irc("a ``x ` *y*`` **b**"),
+            "a ``x ` *y*`` \x02b\x02"
+        );
+    }
+
+    /// In the text after an unclosed fence, only a fence at the start of a
+    /// source line opens a block. A fence after a closing fence on the same
+    /// line is plain text.
+    #[test]
+    fn unclosed_fence_after_a_closing_fence_is_plain_text() {
+        let text = "```\na\n```  ```\nb\nc";
+        assert_eq!(split_for_irc(text), vec!["a", "```", "b", "c"]);
+    }
+
     /// Four backticks: the fence is the first three, as in
     /// `protect_code_spans`, so a backtick is left on each fence line.
     #[test]
@@ -1592,84 +1641,150 @@ mod tests {
         }
     }
 
-    /// Text on a fence line is code or normal text, so it reaches IRC. Only
-    /// a fence, a language tag right after an opening fence, and whitespace
-    /// next to a fence are dropped. The generator follows the block state,
-    /// so it knows which fence opens and which closes, and which words each
-    /// output line must hold (each input line gives 0 or 1 lines). Each word
-    /// has a unique counter suffix. At most `MAX_LINES` short lines, so
-    /// nothing is truncated or split.
+    /// Text on a fence line is code or normal text, so it reaches the
+    /// output. Only fences, a language tag right after an opening fence, and
+    /// whitespace on the fence lines are dropped. The generator follows the
+    /// block state, so it knows which fence opens and which closes, and for
+    /// each output line its words and whether it has the code prefix (each
+    /// input line gives 0 or 1 lines). Each word has a unique counter suffix.
+    /// The first word can hold an unpaired backtick. The test calls
+    /// `split_code_blocks` directly, so the line limit does not cap the
+    /// number of parts.
     #[hegel::test]
-    fn split_for_irc_keeps_text_on_fence_lines(tc: TestCase) {
+    fn split_code_blocks_keeps_text_on_fence_lines(tc: TestCase) {
+        /// One expected output line: whether it has the code prefix, and
+        /// its words.
+        type Expected = (bool, Vec<String>);
+
+        /// Add a code line: it has the prefix if the block has a line already.
+        fn code_line(expected: &mut Vec<Expected>, block_has_line: &mut bool, words: Vec<String>) {
+            expected.push((*block_has_line, words));
+            *block_has_line = true;
+        }
+
         let mut counter = 0;
         let mut in_block = false;
+        // Whether the open block already has a code line.
+        let mut block_has_line = false;
+        // Where the open block was opened in `expected`, if it was opened in
+        // the middle of a line. Such a block that never closes is plain text.
+        let mut opened_mid_line: Option<usize> = None;
         let mut input = Vec::new();
-        let mut expected: Vec<Vec<String>> = Vec::new();
-        let parts = tc.draw(gs::integers::<usize>().min_value(1).max_value(MAX_LINES));
+        let mut expected: Vec<Expected> = Vec::new();
+        let parts = tc.draw(gs::integers::<usize>().min_value(1).max_value(12));
         for _ in 0..parts {
             let word_count = tc.draw(gs::integers::<usize>().min_value(1).max_value(3));
             let words: Vec<String> = (0..word_count)
                 .map(|_| {
                     counter += 1;
-                    format!("{}{counter}", tc.draw(gs::from_regex("[a-z]{1,6}")))
+                    // The first word can hold one backtick, used as an
+                    // apostrophe. It is the only one, so it never pairs.
+                    let pattern = if counter == 1 && tc.draw(gs::booleans()) {
+                        "[a-z]{1,3}`[a-z]{1,3}"
+                    } else {
+                        "[a-z]{1,6}"
+                    };
+                    format!("{}{counter}", tc.draw(gs::from_regex(pattern)))
                 })
                 .collect();
             let text = words.join(" ");
-            let (line, gives_line) = match (tc.draw(gs::integers::<u8>().max_value(4)), in_block) {
+            let line = match (tc.draw(gs::integers::<u8>().max_value(4)), in_block) {
                 // A plain line: code inside a block, normal text outside.
-                (0, _) => (text, true),
+                (0, true) => {
+                    code_line(&mut expected, &mut block_has_line, words);
+                    text
+                }
+                (0, false) => {
+                    expected.push((false, words));
+                    text
+                }
                 // An opening fence with an optional language tag, or a
                 // closing fence, each with optional trailing whitespace.
                 (1, false) => {
                     in_block = true;
+                    block_has_line = false;
+                    opened_mid_line = None;
                     let tag = tc.draw(gs::from_regex(r"[A-Za-z0-9_+.#-]{0,6}[ \t]{0,2}"));
-                    (format!("```{tag}"), false)
+                    format!("```{tag}")
                 }
                 (1, true) => {
                     in_block = false;
                     let space = tc.draw(gs::from_regex(r"[ \t]{0,2}"));
-                    (format!("{space}```{space}"), false)
+                    format!("{space}```{space}")
                 }
                 // A fence, then text: the first code line of a new block, or
                 // normal text after a closing fence.
-                (2, _) => {
-                    in_block = !in_block;
-                    (format!("``` {text}"), true)
+                (2, false) => {
+                    in_block = true;
+                    block_has_line = false;
+                    opened_mid_line = None;
+                    code_line(&mut expected, &mut block_has_line, words);
+                    format!("``` {text}")
+                }
+                (2, true) => {
+                    in_block = false;
+                    expected.push((false, words));
+                    format!("``` {text}")
                 }
                 // A one-line block, which stays one line.
-                (3, false) => (format!("```{text}```"), true),
+                (3, false) => {
+                    expected.push((false, words));
+                    format!("```{text}```")
+                }
                 // A last code line that ends with the closing fence.
                 (3, true) => {
                     in_block = false;
-                    (format!("{text}```"), true)
+                    code_line(&mut expected, &mut block_has_line, words);
+                    format!("{text}```")
                 }
                 // A fence at the end of a normal line opens a block.
                 (_, false) => {
+                    expected.push((false, words));
                     in_block = true;
-                    (format!("{text} ```"), true)
+                    block_has_line = false;
+                    opened_mid_line = Some(expected.len());
+                    format!("{text} ```")
                 }
                 // A closing fence, then text that opens a new block.
-                (_, true) => (format!("```{text} ```"), true),
+                (_, true) => {
+                    expected.push((false, words));
+                    block_has_line = false;
+                    opened_mid_line = Some(expected.len());
+                    format!("```{text} ```")
+                }
             };
-            if gives_line {
-                expected.push(words);
-            }
             input.push(line);
+        }
+        // A block opened in the middle of a line that never closes is plain
+        // text: its lines have no code prefix.
+        if in_block && let Some(first) = opened_mid_line {
+            for line in &mut expected[first..] {
+                line.0 = false;
+            }
         }
         let input = input.join("\n");
 
-        let output = split_for_irc(&input);
-        let words_per_line: Vec<Vec<&str>> = output
+        let output = split_code_blocks(&input);
+        let actual: Vec<Expected> = output
             .iter()
             .map(|line| {
-                line.split(|c: char| c.is_whitespace() || matches!(c, '`' | '\x02' | '>'))
+                let (prefixed, body) = match line.strip_prefix(CODE_CONTINUATION) {
+                    Some(body) => (true, body),
+                    None => (false, line.as_str()),
+                };
+                // Fences touch words only at their ends.
+                let words = body
+                    .split_whitespace()
+                    .map(|t| t.trim_matches('`'))
                     .filter(|t| !t.is_empty())
-                    .collect()
+                    .map(str::to_string)
+                    .collect();
+                (prefixed, words)
             })
             .collect();
         assert_eq!(
-            words_per_line, expected,
-            "words per line.\n  input: {input:?}\n  output: {output:?}"
+            actual, expected,
+            "(prefix, words) per line.\n  input: {input:?}\n  output: {output:?}"
         );
     }
 

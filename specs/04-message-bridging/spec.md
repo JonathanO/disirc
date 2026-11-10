@@ -56,6 +56,7 @@ If the channel has a `webhook_url` configured:
 If no webhook is configured, or the webhook send fails:
 - Format as `**[nick]** message text` and send via `channel.send()`.
 - Suppress `@everyone`/`@here` by inserting a zero-width space (`U+200B`) after the `@`.
+- Then truncate the result to Discord's 2000-character limit (see `05-formatting.md`). The prefix and each zero-width space add characters, so text that fit before can be too long now. Discord DMs use the same last step.
 
 ### IRC event types
 

@@ -49,7 +49,17 @@ fix needs a failing Hegel property first, then a unit test, then the fix:
   - literal private-use sentinel characters in user text are corrupted
   - `sanitize_nick` can return a nick that starts with `-`
   - the UID fallback in `resolve_nick` is not checked against nicks in use
-  - the webhook-failure fallback can send more than 2000 characters
+  - ~~the webhook-failure fallback can send more than 2000 characters~~
+    confirmed and fixed; the plain path and DMs had the same problem,
+    because mention suppression adds characters (branch
+    `fix/discord-plain-send-length`)
+  - the webhook-failure fallback ping-fixes a nick that the relay already
+    ping-fixed, so the `**[nick]**` prefix has two zero-width spaces
+  - (spec) `truncate_for_discord` cuts at the last space, with no lower
+    limit. If a long body has no space (CJK text, one long URL), the only
+    space is the one after `**[nick]**`, so the plain path and the
+    webhook fallback send only the prefix and `… [truncated]`. Spec 05
+    must say how much text a word-boundary cut may drop
   - (spec) the plain-text path can ping roles with `<@&id>`
 - [ ] New property tests: `parse`/`to_wire` for all 20 `IrcCommand` variants,
       `translate_outbound`/`translate_inbound` mirror, `LineReader` model,

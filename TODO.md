@@ -160,10 +160,14 @@ mutants spec 02 had documented as equivalent.
 - [ ] Move to serenity 0.13 when it is released. serenity 0.12.5 uses
       tokio-tungstenite 0.21, so the gateway uses rustls 0.22 and
       rustls-webpki 0.102, which have unpatched advisories. `deny.toml`
-      ignores eight of them; remove those ignores in the same change.
+      ignores seven of them; remove those ignores in the same change.
       serenity will not bump tungstenite on 0.12, because its errors are
       public API (serenity PR #3599). The `next` branch already uses
       tokio-tungstenite 0.28. Expect API changes.
+- [ ] Remove the `deny.toml` ignore for RUSTSEC-2026-0440 when
+      testcontainers no longer uses `astral-tokio-tar`. That crate is
+      unmaintained. testcontainers 0.28.0 (the newest on 2026-11-10)
+      still uses it, only in the e2e tests.
 
 ## Future features
 

@@ -2,6 +2,6 @@
 # for each new Rust release, so new clippy lints fail in that pull request
 # and not on main.
 [toolchain]
-channel = "1.99.1"
+channel = "1.100.0"
 components = ["clippy", "rustfmt"]
 profile = "minimal"

@@ -409,7 +409,7 @@ impl BridgeState {
                     author_display_name,
                     content,
                     attachments,
-                    Some(*timestamp),
+                    *timestamp,
                     now_ts,
                     &resolver,
                 );
@@ -451,7 +451,7 @@ impl BridgeState {
                             from_uid,
                             target: target_uid,
                             text,
-                            timestamp: Some(*timestamp),
+                            timestamp: *timestamp,
                         });
                     }
                     DmRouteResult::Error(msg) => {
@@ -856,8 +856,7 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello world".into(),
                 attachments: vec![],
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             },
             ts,
         );
@@ -1824,8 +1823,7 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello".into(),
                 attachments: vec![],
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             },
             ts,
         );
@@ -1944,8 +1942,7 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "still here".into(),
                 attachments: vec![],
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             },
             ts + 150,
         );
@@ -2032,8 +2029,7 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hi".into(),
                 attachments: vec![],
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             },
             ts,
         );
@@ -2492,8 +2488,7 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello".into(),
                 attachments: vec![],
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             },
             ts + 10,
         );
@@ -2634,8 +2629,7 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello".into(),
                 attachments: vec![],
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             },
             ts + 10,
         );
@@ -2781,8 +2775,7 @@ mod tests {
                 author_name: "alice".into(),
                 content: "hello bridge".into(),
                 referenced_content: None,
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             },
             ts,
         );
@@ -2805,7 +2798,7 @@ mod tests {
     fn discord_message_timestamp_propagates_to_irc_send() {
         let mut state = BridgeState::new(&test_config(), HashMap::new());
         let ts = 1_000_000;
-        let msg_ts = chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_123, 0).unwrap();
+        let msg_ts = jiff::Timestamp::from_second(1_700_000_123).unwrap();
 
         state.handle_irc_event(&S2SEvent::LinkUp, ts);
         state.handle_discord_event(
@@ -2822,7 +2815,7 @@ mod tests {
                 author_display_name: "Alice".into(),
                 content: "hello".into(),
                 attachments: vec![],
-                timestamp: msg_ts,
+                timestamp: Some(msg_ts),
             },
             ts + 10,
         );
@@ -2848,7 +2841,7 @@ mod tests {
         config.pseudoclients.dm_bridging = true;
         let mut state = BridgeState::new(&config, HashMap::new());
         let ts = 1_000_000;
-        let msg_ts = chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_456, 0).unwrap();
+        let msg_ts = jiff::Timestamp::from_second(1_700_000_456).unwrap();
 
         // Introduce alice + bob so the DM has a valid target (alice DMs bob).
         state.handle_discord_event(
@@ -2869,7 +2862,7 @@ mod tests {
                 author_name: "alice".into(),
                 content: "hi there".into(),
                 referenced_content: Some("**[bob]** earlier message".into()),
-                timestamp: msg_ts,
+                timestamp: Some(msg_ts),
             },
             ts + 5,
         );

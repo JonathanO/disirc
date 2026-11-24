@@ -19,18 +19,31 @@ wiremock = "0.6"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
-serenity = { version = "0.12", features = ["cache", "chrono", "client", "gateway", "model"] }
+# The default features without "chrono" (unmaintained, RUSTSEC-2026-0543).
+# Without it, serenity's Timestamp wraps time::OffsetDateTime.
+serenity = { version = "0.12", default-features = false, features = [
+    "builder",
+    "cache",
+    "client",
+    "framework",
+    "gateway",
+    "http",
+    "model",
+    "rustls_backend",
+    "standard_framework",
+    "utils",
+] }
 toml = "1.0"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 thiserror = "2"
 anyhow = "1"
 rand = "0.10.0"
 serde_json = "1"
 unicode-segmentation = "1"
 mutants = "0.0.4"
+jiff = { version = "1", default-features = false, features = ["std"] }
 
 [profile.mutants]
 inherits = "test"

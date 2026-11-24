@@ -104,7 +104,9 @@ When the uplink has negotiated `server-time`, outgoing `PRIVMSG` messages on the
 @time=2024-01-15T12:34:56.789Z :<uid> PRIVMSG #channel :<text>
 ```
 
-Timestamps are formatted as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
+Timestamps are formatted as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SS.mmmZ`). The bridge truncates the time to milliseconds.
+
+If `jiff::Timestamp` cannot represent the Discord timestamp, the bridge omits the tag. This occurs only within about one day of the ends of years -9999 and 9999.
 
 ## References
 

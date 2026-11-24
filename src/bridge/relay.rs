@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::discord::DiscordCommand;
 use crate::formatting::{DiscordResolver, IrcMentionResolver};
@@ -20,7 +20,7 @@ pub(crate) fn discord_to_irc_commands(
     irc_channel: &str,
     content: &str,
     attachments: &[String],
-    timestamp: Option<DateTime<Utc>>,
+    timestamp: Option<Timestamp>,
     resolver: &dyn DiscordResolver,
 ) -> Vec<S2SCommand> {
     let trimmed = content.trim();
@@ -219,8 +219,7 @@ mod tests {
 
     #[test]
     fn timestamp_is_propagated_to_all_commands() {
-        use chrono::TimeZone;
-        let ts = chrono::Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let ts = jiff::Timestamp::from_second(1_700_000_000).unwrap();
         let urls = vec!["https://cdn.discord.com/x.png".to_string()];
         let cmds = discord_to_irc_commands("uid1", "#chan", "hi", &urls, Some(ts), &NullResolver);
         for cmd in &cmds {

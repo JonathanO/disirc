@@ -304,7 +304,7 @@ pub(crate) enum IncomingMessage {
         author_name: String,
         content: String,
         referenced_message_id: Option<MessageId>,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        timestamp: Option<jiff::Timestamp>,
     },
     /// A message in a guild channel.
     Guild {
@@ -314,8 +314,18 @@ pub(crate) enum IncomingMessage {
         display_name: String,
         content: String,
         attachments: Vec<String>,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        timestamp: Option<jiff::Timestamp>,
     },
+}
+
+/// Convert a serenity message timestamp to a `jiff::Timestamp`.
+///
+/// serenity 0.12 stores it as a `time::OffsetDateTime`.  `jiff` covers a
+/// slightly smaller range: it stops about one day before the ends of years
+/// -9999 and 9999.  Outside that range this returns `None`, and the relayed
+/// message has no `@time=` tag.
+fn message_time(ts: &serenity::model::Timestamp) -> Option<jiff::Timestamp> {
+    jiff::Timestamp::from_nanosecond(ts.unix_timestamp_nanos()).ok()
 }
 
 /// Decide how to handle an incoming `MESSAGE_CREATE` and marshal its fields.
@@ -333,7 +343,7 @@ pub(crate) fn classify_message(msg: &Message) -> IncomingMessage {
                 .message_reference
                 .as_ref()
                 .and_then(|msg_ref| msg_ref.message_id),
-            timestamp: *msg.timestamp,
+            timestamp: message_time(&msg.timestamp),
         }
     } else {
         let member_nick = msg.member.as_ref().and_then(|m| m.nick.as_deref());
@@ -349,7 +359,7 @@ pub(crate) fn classify_message(msg: &Message) -> IncomingMessage {
             .to_owned(),
             content: msg.content.clone(),
             attachments: msg.attachments.iter().map(|a| a.url.clone()).collect(),
-            timestamp: *msg.timestamp,
+            timestamp: message_time(&msg.timestamp),
         }
     }
 }
@@ -396,7 +406,7 @@ impl DiscordHandler {
         author_name: String,
         content: String,
         referenced_content: Option<String>,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        timestamp: Option<jiff::Timestamp>,
     ) {
         let filter = self.self_filter.read().await;
         if filter.contains(&author_id) {
@@ -426,7 +436,7 @@ impl DiscordHandler {
         author_display_name: String,
         content: String,
         attachments: Vec<String>,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        timestamp: Option<jiff::Timestamp>,
     ) {
         let channels = self.bridged_channel_ids.read().await;
         let filter = self.self_filter.read().await;
@@ -1052,9 +1062,7 @@ mod tests {
 
     /// Fixed test timestamp; value is arbitrary — tests that care about
     /// propagation assert on exact equality with this constant.
-    fn stock_ts() -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap()
-    }
+    const STOCK_TS: Option<jiff::Timestamp> = Some(jiff::Timestamp::constant(1_700_000_000, 0));
 
     // ---------------------------------------------------------------------------
     // handle_ready
@@ -1093,7 +1101,7 @@ mod tests {
             "Alice".into(),
             "hello".into(),
             vec![],
-            stock_ts(),
+            STOCK_TS,
         )
         .await;
         let event = rx.try_recv().expect("expected MessageReceived event");
@@ -1118,7 +1126,7 @@ mod tests {
             "Bot".into(),
             "echo".into(),
             vec![],
-            stock_ts(),
+            STOCK_TS,
         )
         .await;
         assert!(
@@ -1138,7 +1146,7 @@ mod tests {
             "User".into(),
             "hi".into(),
             vec![],
-            stock_ts(),
+            STOCK_TS,
         )
         .await;
         assert!(
@@ -1154,7 +1162,7 @@ mod tests {
     async fn dm_event_emits_dm_received() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[], &[]);
-        h.handle_dm_event(42, "alice".into(), "hello".into(), None, stock_ts())
+        h.handle_dm_event(42, "alice".into(), "hello".into(), None, STOCK_TS)
             .await;
         let event = rx.try_recv().expect("expected DmReceived event");
         assert!(matches!(
@@ -1167,7 +1175,7 @@ mod tests {
     async fn dm_from_self_is_dropped() {
         let (tx, mut rx) = mpsc::channel(1);
         let h = make_handler(tx, &[], &[42]); // 42 is in self-filter
-        h.handle_dm_event(42, "bot".into(), "echo".into(), None, stock_ts())
+        h.handle_dm_event(42, "bot".into(), "echo".into(), None, STOCK_TS)
             .await;
         assert!(rx.try_recv().is_err(), "DM from self should be dropped");
     }
@@ -1181,7 +1189,7 @@ mod tests {
             "alice".into(),
             "reply text".into(),
             Some("**[bob]** original".into()),
-            stock_ts(),
+            STOCK_TS,
         )
         .await;
         let event = rx.try_recv().expect("expected DmReceived event");
@@ -1459,5 +1467,86 @@ mod tests {
         for (status, expected) in cases {
             assert_eq!(map_online_status(status), expected, "status={status:?}");
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // message_time
+    // ---------------------------------------------------------------------------
+
+    use hegel::prelude::*;
+    use serenity::model::Timestamp as SerenityTimestamp;
+
+    #[test]
+    fn message_time_keeps_microseconds() {
+        // Discord sends microsecond precision with a `+00:00` offset.
+        let ts = SerenityTimestamp::parse("2024-01-15T12:34:56.789123+00:00").unwrap();
+        assert_eq!(
+            message_time(&ts),
+            Some(jiff::Timestamp::new(1_705_322_096, 789_123_000).unwrap())
+        );
+    }
+
+    /// `message_time` of the serenity timestamp at `millis`, in nanoseconds.
+    fn message_time_at(millis: i64) -> Option<i128> {
+        message_time(&SerenityTimestamp::from_millis(millis).unwrap())
+            .map(jiff::Timestamp::as_nanosecond)
+    }
+
+    #[test]
+    fn message_time_is_some_at_both_jiff_limits() {
+        for limit in [jiff::Timestamp::MIN, jiff::Timestamp::MAX] {
+            let millis = limit.as_millisecond();
+            assert_eq!(
+                message_time_at(millis),
+                Some(i128::from(millis) * 1_000_000),
+                "{limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn message_time_is_none_outside_the_jiff_limits() {
+        assert_eq!(
+            message_time_at(jiff::Timestamp::MIN.as_millisecond() - 1),
+            None
+        );
+        assert_eq!(
+            message_time_at(jiff::Timestamp::MAX.as_millisecond() + 1),
+            None
+        );
+    }
+
+    /// Two days in milliseconds: the width of the edge regions below.
+    const TWO_DAYS_MS: i64 = 2 * 86_400_000;
+
+    /// For every instant that serenity can hold, `message_time` gives the
+    /// same instant if `jiff` can represent it, and `None` if not.
+    #[hegel::test]
+    fn message_time_is_exact_inside_the_jiff_range(tc: TestCase) {
+        let min = jiff::Timestamp::MIN.as_millisecond();
+        let max = jiff::Timestamp::MAX.as_millisecond();
+        // Most draws fall far inside the range, so also draw near each end.
+        let millis = tc.draw(hegel::one_of!(
+            gs::integers::<i64>()
+                .min_value(min - TWO_DAYS_MS)
+                .max_value(max + TWO_DAYS_MS),
+            gs::integers::<i64>()
+                .min_value(min - TWO_DAYS_MS)
+                .max_value(min + TWO_DAYS_MS),
+            gs::integers::<i64>()
+                .min_value(max - TWO_DAYS_MS)
+                .max_value(max + TWO_DAYS_MS),
+        ));
+        let Ok(ts) = SerenityTimestamp::from_millis(millis) else {
+            return;
+        };
+        let expected = (min..=max)
+            .contains(&millis)
+            .then(|| i128::from(millis) * 1_000_000);
+        assert_eq!(
+            message_time(&ts).map(jiff::Timestamp::as_nanosecond),
+            expected,
+            "millis={millis}"
+        );
     }
 }

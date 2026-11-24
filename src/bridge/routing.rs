@@ -250,7 +250,7 @@ pub(crate) fn route_discord_to_irc(
     author_display_name: &str,
     content: &str,
     attachments: &[String],
-    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    timestamp: Option<jiff::Timestamp>,
     now_ts: u64,
     resolver: &dyn DiscordResolver,
 ) -> Vec<S2SCommand> {

@@ -88,7 +88,7 @@ Do not simplify them.
 | `serenity` | Discord Gateway + REST client |
 | `serde` + `toml` | Config deserialization |
 | `tracing` + `tracing-subscriber` | Structured logging (with `env-filter` feature for `RUST_LOG`) |
-| `chrono` | Timestamp handling (server-time in formatting) |
+| `jiff` | Timestamp handling (the `IRCv3` `server-time` tag) |
 | `thiserror` | Derive macros for typed error enums in each module |
 | `anyhow` | Error propagation with context chains in the application/connection layer |
 | `rand` | Random jitter for reconnect backoff |

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 /// Protocol-agnostic events emitted by the connection module to the processing task.
 ///
@@ -75,7 +75,7 @@ pub enum S2SEvent {
         target: String,
         text: String,
         /// Parsed from the `@time=` message tag; `None` if the tag was absent.
-        timestamp: Option<DateTime<Utc>>,
+        timestamp: Option<Timestamp>,
     },
 
     /// A NOTICE was received from an IRC user.
@@ -146,7 +146,7 @@ pub enum S2SCommand {
         target: String,
         text: String,
         /// If `Some`, emitted as an `@time=` tag (only when uplink advertised MTAGS).
-        timestamp: Option<DateTime<Utc>>,
+        timestamp: Option<Timestamp>,
     },
 
     /// Change a pseudoclient's nick.

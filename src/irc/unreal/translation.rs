@@ -1,17 +1,16 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use super::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
 use crate::irc::types::{S2SCommand, S2SEvent};
 
-/// Parse the `@time=` message tag value into a `DateTime<Utc>`.
+/// Parse the `@time=` message tag value into a `Timestamp`.
 ///
 /// Returns `None` if the tag is absent, malformed, or out of range.
-fn parse_time_tag(tags: &[(String, Option<String>)]) -> Option<DateTime<Utc>> {
+fn parse_time_tag(tags: &[(String, Option<String>)]) -> Option<Timestamp> {
     tags.iter()
         .find(|(k, _)| k == "time")
         .and_then(|(_, v)| v.as_deref())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Utc))
+        .and_then(|s| s.parse::<Timestamp>().ok())
 }
 
 /// Translate an inbound `IrcMessage` into an `S2SEvent`.
@@ -239,7 +238,9 @@ pub(crate) fn translate_outbound(
                     .map(|t| {
                         vec![(
                             "time".to_owned(),
-                            Some(t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()),
+                            // Spec 05: `YYYY-MM-DDTHH:MM:SS.mmmZ`. The `.3`
+                            // precision truncates to milliseconds.
+                            Some(format!("{t:.3}")),
                         )]
                     })
                     .unwrap_or_default()
@@ -297,7 +298,6 @@ pub(crate) fn translate_outbound(
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
 
     use super::*;
     use crate::irc::unreal::irc_message::{IrcCommand, IrcMessage, SjoinParams, UidParams};
@@ -676,7 +676,7 @@ mod tests {
         };
         assert_eq!(
             timestamp,
-            Some(Utc.timestamp_opt(1_700_000_000, 0).unwrap())
+            Some(Timestamp::from_second(1_700_000_000).unwrap())
         );
     }
 
@@ -932,7 +932,7 @@ mod tests {
 
     #[test]
     fn outbound_message_with_timestamp_and_mtags_emits_time_tag() {
-        let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let t = Timestamp::from_second(1_700_000_000).unwrap();
         let cmd = S2SCommand::SendMessage {
             from_uid: UID.into(),
             target: "#general".into(),
@@ -944,9 +944,98 @@ mod tests {
         assert!(time_tag.is_some(), "expected @time= tag when mtags_active");
     }
 
+    /// Builds a UTC instant from Unix seconds and nanoseconds.
+    fn instant(secs: i64, nanos: i32) -> Timestamp {
+        Timestamp::new(secs, nanos).unwrap()
+    }
+
+    /// Returns the value of the `@time=` tag on an outbound `SendMessage`.
+    fn outbound_time_tag(t: Timestamp) -> Option<String> {
+        let cmd = S2SCommand::SendMessage {
+            from_uid: UID.into(),
+            target: "#general".into(),
+            text: "hi".into(),
+            timestamp: Some(t),
+        };
+        let msgs = translate_outbound(&cmd, SID, true, 0);
+        msgs[0]
+            .tags
+            .iter()
+            .find(|(k, _)| k == "time")
+            .and_then(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn outbound_time_tag_has_milliseconds_and_zulu() {
+        assert_eq!(
+            outbound_time_tag(instant(1_700_000_000, 0)).as_deref(),
+            Some("2023-11-14T22:13:20.000Z")
+        );
+    }
+
+    #[test]
+    fn outbound_time_tag_truncates_below_milliseconds() {
+        assert_eq!(
+            outbound_time_tag(instant(1_700_000_000, 123_999_999)).as_deref(),
+            Some("2023-11-14T22:13:20.123Z")
+        );
+    }
+
+    #[test]
+    fn outbound_time_tag_pads_years_below_1000() {
+        // 0099-01-01T00:00:00Z
+        assert_eq!(
+            outbound_time_tag(instant(-59_042_995_200, 0)).as_deref(),
+            Some("0099-01-01T00:00:00.000Z")
+        );
+    }
+
+    /// Unix seconds of 0001-01-01T00:00:00Z.  Before it, years are negative.
+    const YEAR_1_SECS: i64 = -62_135_596_800;
+
+    /// The `@time=` tag is always `YYYY-MM-DDTHH:MM:SS.mmmZ` (spec 05), and
+    /// parsing it back gives the instant truncated to milliseconds.
+    #[hegel::test]
+    fn outbound_time_tag_round_trips_at_millisecond_precision(tc: TestCase) {
+        let secs = tc.draw(
+            gs::integers::<i64>()
+                .min_value(YEAR_1_SECS)
+                .max_value(Timestamp::MAX.as_second()),
+        );
+        let nanos = tc.draw(gs::integers::<i32>().min_value(0).max_value(999_999_999));
+        let tag = outbound_time_tag(instant(secs, nanos)).expect("tag is present");
+
+        let b = tag.as_bytes();
+        let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+        assert_eq!(b.len(), 24, "{tag}");
+        assert!(
+            digits(0..4)
+                && b[4] == b'-'
+                && digits(5..7)
+                && b[7] == b'-'
+                && digits(8..10)
+                && b[10] == b'T'
+                && digits(11..13)
+                && b[13] == b':'
+                && digits(14..16)
+                && b[16] == b':'
+                && digits(17..19)
+                && b[19] == b'.'
+                && digits(20..23)
+                && b[23] == b'Z',
+            "{tag}"
+        );
+
+        let tags = vec![("time".to_owned(), Some(tag))];
+        assert_eq!(
+            parse_time_tag(&tags),
+            Some(instant(secs, nanos / 1_000_000 * 1_000_000))
+        );
+    }
+
     #[test]
     fn outbound_message_timestamp_suppressed_without_mtags() {
-        let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let t = Timestamp::from_second(1_700_000_000).unwrap();
         let cmd = S2SCommand::SendMessage {
             from_uid: UID.into(),
             target: "#general".into(),
@@ -1049,8 +1138,14 @@ mod tests {
         let tags = vec![("time".into(), Some("2023-11-14T22:13:20.000Z".into()))];
         assert_eq!(
             parse_time_tag(&tags),
-            Some(Utc.timestamp_opt(1_700_000_000, 0).unwrap())
+            Some(Timestamp::from_second(1_700_000_000).unwrap())
         );
+    }
+
+    #[test]
+    fn parse_time_tag_applies_a_non_zero_offset() {
+        let tags = vec![("time".into(), Some("2023-11-14T23:13:20.000+01:00".into()))];
+        assert_eq!(parse_time_tag(&tags), Some(instant(1_700_000_000, 0)));
     }
 
     // -----------------------------------------------------------------------

@@ -80,7 +80,7 @@ S2SEvent::MessageReceived {
     from_uid: String,
     target: String,    // channel or UID
     text: String,
-    timestamp: Option<DateTime<Utc>>,  // from @time= tag; None if absent
+    timestamp: Option<jiff::Timestamp>,  // from @time= tag; None if absent
 }
 
 S2SEvent::NoticeReceived {
@@ -131,7 +131,7 @@ S2SCommand::SendMessage {
     from_uid: String,
     target: String,
     text: String,
-    timestamp: Option<DateTime<Utc>>,  // emitted as @time= tag if MTAGS active
+    timestamp: Option<jiff::Timestamp>,  // emitted as @time= tag if MTAGS active
 }
 
 S2SCommand::SendNotice {
@@ -304,7 +304,7 @@ When `MTAGS` is active, incoming messages may carry message tags.
 
 | Tag | Action |
 |-----|--------|
-| `@time=` | Parsed as `DateTime<Utc>`; placed in `S2SEvent::MessageReceived::timestamp` |
+| `@time=` | Parsed as `jiff::Timestamp`; placed in `S2SEvent::MessageReceived::timestamp` |
 | `@msgid=` | Recorded for future edit/delete correlation; not forwarded to Discord in v1 |
 | `@account=` | Ignored; IRC account names are not mapped to Discord identities in v1 |
 | `@bot=` | Ignored |

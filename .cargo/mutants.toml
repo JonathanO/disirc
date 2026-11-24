@@ -8,6 +8,12 @@
 # Use the mutants profile (no debug symbols) for faster builds.
 profile = "mutants"
 
+# Do not copy gitignored files into the build directories. The default is
+# off since cargo-mutants 25.0.2. Without this, each job copies
+# .claude/worktrees, with a target directory for each worktree, and the disk
+# fills. https://mutants.rs/build-dirs.html#gitignore
+gitignore = true
+
 # Skip doctests (none in this project, avoids discovery overhead).
 additional_cargo_test_args = ["--all-targets"]
 

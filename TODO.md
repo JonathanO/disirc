@@ -163,7 +163,9 @@ mutants spec 02 had documented as equivalent.
       ignores eight of them; remove those ignores in the same change.
       serenity will not bump tungstenite on 0.12, because its errors are
       public API (serenity PR #3599). The `next` branch already uses
-      tokio-tungstenite 0.28. Expect API changes.
+      tokio-tungstenite 0.28. Expect API changes. The `next` branch also
+      uses `jiff` for `Timestamp`; remove `message_time` in
+      `src/discord/handler.rs` in the same change.
 
 ## Future features
 

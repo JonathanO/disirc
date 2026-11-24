@@ -930,20 +930,6 @@ mod tests {
         assert_eq!(msgs[0].tags, []);
     }
 
-    #[test]
-    fn outbound_message_with_timestamp_and_mtags_emits_time_tag() {
-        let t = Timestamp::from_second(1_700_000_000).unwrap();
-        let cmd = S2SCommand::SendMessage {
-            from_uid: UID.into(),
-            target: "#general".into(),
-            text: "hi".into(),
-            timestamp: Some(t),
-        };
-        let msgs = translate_outbound(&cmd, SID, true, 0);
-        let time_tag = msgs[0].tags.iter().find(|(k, _)| k == "time");
-        assert!(time_tag.is_some(), "expected @time= tag when mtags_active");
-    }
-
     /// Builds a UTC instant from Unix seconds and nanoseconds.
     fn instant(secs: i64, nanos: i32) -> Timestamp {
         Timestamp::new(secs, nanos).unwrap()
@@ -990,20 +976,26 @@ mod tests {
         );
     }
 
-    /// Unix seconds of 0001-01-01T00:00:00Z.  Before it, years are negative.
-    const YEAR_1_SECS: i64 = -62_135_596_800;
+    /// Unix seconds of 0000-01-01T00:00:00Z.  Before it, years are negative
+    /// and the text has a sign and six year digits.
+    const YEAR_0_SECS: i64 = -62_167_219_200;
 
-    /// The `@time=` tag is always `YYYY-MM-DDTHH:MM:SS.mmmZ` (spec 05), and
-    /// parsing it back gives the instant truncated to milliseconds.
-    #[hegel::test]
-    fn outbound_time_tag_round_trips_at_millisecond_precision(tc: TestCase) {
+    /// Draws an instant in `min_secs..=Timestamp::MAX`, with any nanoseconds.
+    fn draw_instant(tc: &TestCase, min_secs: i64) -> Timestamp {
         let secs = tc.draw(
             gs::integers::<i64>()
-                .min_value(YEAR_1_SECS)
+                .min_value(min_secs)
                 .max_value(Timestamp::MAX.as_second()),
         );
         let nanos = tc.draw(gs::integers::<i32>().min_value(0).max_value(999_999_999));
-        let tag = outbound_time_tag(instant(secs, nanos)).expect("tag is present");
+        instant(secs, nanos)
+    }
+
+    /// For years 0 to 9999, the `@time=` tag is `YYYY-MM-DDTHH:MM:SS.mmmZ`
+    /// (spec 05).
+    #[hegel::test]
+    fn outbound_time_tag_has_the_spec_05_shape(tc: TestCase) {
+        let tag = outbound_time_tag(draw_instant(&tc, YEAR_0_SECS)).expect("tag is present");
 
         let b = tag.as_bytes();
         let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
@@ -1025,11 +1017,19 @@ mod tests {
                 && b[23] == b'Z',
             "{tag}"
         );
+    }
 
+    /// Parsing the `@time=` tag gives the instant truncated to milliseconds.
+    #[hegel::test]
+    fn outbound_time_tag_round_trips_at_millisecond_precision(tc: TestCase) {
+        let t = draw_instant(&tc, Timestamp::MIN.as_second());
+        let tag = outbound_time_tag(t).expect("tag is present");
         let tags = vec![("time".to_owned(), Some(tag))];
+        // The tag truncates the clock time, so round down, also before 1970.
+        let millis = t.as_nanosecond().div_euclid(1_000_000) * 1_000_000;
         assert_eq!(
             parse_time_tag(&tags),
-            Some(instant(secs, nanos / 1_000_000 * 1_000_000))
+            Some(Timestamp::from_nanosecond(millis).unwrap())
         );
     }
 
@@ -1140,6 +1140,31 @@ mod tests {
             parse_time_tag(&tags),
             Some(Timestamp::from_second(1_700_000_000).unwrap())
         );
+    }
+
+    /// jiff accepts the wider grammar of `jiff::fmt::temporal`, not only
+    /// RFC 3339 (spec 02).
+    #[test]
+    fn parse_time_tag_accepts_the_jiff_temporal_grammar() {
+        for value in [
+            "20231114T221320Z",
+            "2023-11-14T22:13:20,000Z",
+            "2023-11-14T22:13:20Z[Europe/London]",
+            "2023-11-14T23:13:20+01",
+        ] {
+            let tags = vec![("time".into(), Some(value.into()))];
+            assert_eq!(
+                parse_time_tag(&tags),
+                Some(instant(1_700_000_000, 0)),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_time_tag_turns_a_leap_second_into_59() {
+        let tags = vec![("time".into(), Some("2016-12-31T23:59:60Z".into()))];
+        assert_eq!(parse_time_tag(&tags), Some(instant(1_483_228_799, 0)));
     }
 
     #[test]

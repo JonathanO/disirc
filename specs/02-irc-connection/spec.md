@@ -304,7 +304,7 @@ When `MTAGS` is active, incoming messages may carry message tags.
 
 | Tag | Action |
 |-----|--------|
-| `@time=` | Parsed as `jiff::Timestamp`; placed in `S2SEvent::MessageReceived::timestamp` |
+| `@time=` | Parsed as `jiff::Timestamp`; placed in `S2SEvent::MessageReceived::timestamp`. The parser accepts RFC 3339 and the wider grammar of `jiff::fmt::temporal` (for example basic format, a comma before the fraction, an offset of hours only, or a time zone annotation). An offset is required. A leap second (`:60`) becomes `:59`. A value that does not parse gives `None` |
 | `@msgid=` | Recorded for future edit/delete correlation; not forwarded to Discord in v1 |
 | `@account=` | Ignored; IRC account names are not mapped to Discord identities in v1 |
 | `@bot=` | Ignored |
@@ -398,3 +398,4 @@ that distinguishes the two forms.
 - [UnrealIRCd Server Protocol — Introduction](https://www.unrealircd.org/docs/Server_protocol:Introduction) — accessed 2026-03-22
 - [UnrealIRCd Server Protocol — UID command](https://www.unrealircd.org/docs/Server_protocol:UID_command) — accessed 2026-03-22
 - [UnrealIRCd Server Protocol — SJOIN command](https://www.unrealircd.org/docs/Server_protocol:SJOIN_command) — accessed 2026-03-22
+- [jiff::fmt::temporal](https://docs.rs/jiff/1.0.2/jiff/fmt/temporal/index.html) — the grammar of `jiff::Timestamp`'s `FromStr` — accessed 2026-11-24

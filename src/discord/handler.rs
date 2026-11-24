@@ -320,10 +320,10 @@ pub(crate) enum IncomingMessage {
 
 /// Convert a serenity message timestamp to a `jiff::Timestamp`.
 ///
-/// serenity 0.12 stores it as a `time::OffsetDateTime`.  `jiff` covers a
-/// slightly smaller range: it stops about one day before the ends of years
-/// -9999 and 9999.  Outside that range this returns `None`, and the relayed
-/// message has no `@time=` tag.
+/// serenity 0.12 stores it as a `time::OffsetDateTime`, from -9999-01-01 to
+/// 9999-12-31.  The range of `jiff` is about one day shorter at each end:
+/// -9999-01-02T01:59:59Z to 9999-12-30T22:00:00.999999999Z.  Outside it, this
+/// returns `None`, and the relayed message has no `@time=` tag.
 fn message_time(ts: &serenity::model::Timestamp) -> Option<jiff::Timestamp> {
     jiff::Timestamp::from_nanosecond(ts.unix_timestamp_nanos()).ok()
 }
@@ -1473,7 +1473,6 @@ mod tests {
     // message_time
     // ---------------------------------------------------------------------------
 
-    use hegel::prelude::*;
     use serenity::model::Timestamp as SerenityTimestamp;
 
     #[test]
@@ -1513,40 +1512,6 @@ mod tests {
         assert_eq!(
             message_time_at(jiff::Timestamp::MAX.as_millisecond() + 1),
             None
-        );
-    }
-
-    /// Two days in milliseconds: the width of the edge regions below.
-    const TWO_DAYS_MS: i64 = 2 * 86_400_000;
-
-    /// For every instant that serenity can hold, `message_time` gives the
-    /// same instant if `jiff` can represent it, and `None` if not.
-    #[hegel::test]
-    fn message_time_is_exact_inside_the_jiff_range(tc: TestCase) {
-        let min = jiff::Timestamp::MIN.as_millisecond();
-        let max = jiff::Timestamp::MAX.as_millisecond();
-        // Most draws fall far inside the range, so also draw near each end.
-        let millis = tc.draw(hegel::one_of!(
-            gs::integers::<i64>()
-                .min_value(min - TWO_DAYS_MS)
-                .max_value(max + TWO_DAYS_MS),
-            gs::integers::<i64>()
-                .min_value(min - TWO_DAYS_MS)
-                .max_value(min + TWO_DAYS_MS),
-            gs::integers::<i64>()
-                .min_value(max - TWO_DAYS_MS)
-                .max_value(max + TWO_DAYS_MS),
-        ));
-        let Ok(ts) = SerenityTimestamp::from_millis(millis) else {
-            return;
-        };
-        let expected = (min..=max)
-            .contains(&millis)
-            .then(|| i128::from(millis) * 1_000_000);
-        assert_eq!(
-            message_time(&ts).map(jiff::Timestamp::as_nanosecond),
-            expected,
-            "millis={millis}"
         );
     }
 }

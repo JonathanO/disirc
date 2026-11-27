@@ -21,8 +21,11 @@ pub(crate) fn is_valid_nick_char(c: char) -> bool {
 /// Sanitize a Discord username into a valid IRC nick.
 ///
 /// 1. Replace invalid chars with `_`.
-/// 2. If result starts with a digit, prefix with `d`.
+/// 2. If result starts with a digit or `-`, prefix with `d`. `UnrealIRCd`
+///    kills a UID whose nick starts with one of these.
 /// 3. Truncate to 30 characters.
+/// 4. If the result is `irc` or `ircd` in any case, append `_`. `UnrealIRCd`
+///    keeps these nicks for itself and kills a UID that uses one.
 #[must_use]
 pub(crate) fn sanitize_nick(username: &str) -> String {
     let mut nick: String = username
@@ -30,7 +33,7 @@ pub(crate) fn sanitize_nick(username: &str) -> String {
         .map(|c| if is_valid_nick_char(c) { c } else { '_' })
         .collect();
 
-    if nick.starts_with(|c: char| c.is_ascii_digit()) {
+    if nick.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
         nick.insert(0, 'd');
     }
 
@@ -39,6 +42,11 @@ pub(crate) fn sanitize_nick(username: &str) -> String {
     }
 
     nick.truncate(30);
+
+    if nick.eq_ignore_ascii_case("irc") || nick.eq_ignore_ascii_case("ircd") {
+        nick.push('_');
+    }
+
     nick
 }
 
@@ -740,6 +748,17 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_prefixes_hyphen_start() {
+        assert_eq!(sanitize_nick("-alice"), "d-alice");
+    }
+
+    #[test]
+    fn sanitize_appends_underscore_to_reserved_nicks() {
+        assert_eq!(sanitize_nick("IRC"), "IRC_");
+        assert_eq!(sanitize_nick("ircd"), "ircd_");
+    }
+
+    #[test]
     fn sanitize_truncates_to_30() {
         let long_name = "a".repeat(40);
         let result = sanitize_nick(&long_name);
@@ -1386,14 +1405,24 @@ mod tests {
 
     /// For ANY input — arbitrary Unicode included — the sanitized nick
     /// upholds every IRC nick invariant: non-empty, at most 30 bytes,
-    /// no leading digit, and only valid nick characters.
+    /// no leading digit or `-`, not `irc` or `ircd` in any case, and only
+    /// valid nick characters. `UnrealIRCd` kills a UID whose nick breaks
+    /// the rule for the first character or is one of the reserved nicks.
     #[hegel::test]
     fn sanitize_result_is_valid_irc_nick(tc: TestCase) {
-        let s = tc.draw(gs::from_regex(".{0,100}"));
+        let s = tc.draw(hegel::one_of!(
+            gs::from_regex(".{0,100}"),
+            // Only nick characters, so that each one, `-` and the digits
+            // included, is often the first character.
+            gs::from_regex(r"[-0-9A-Za-z_\[\]\\^{}|`]{0,100}"),
+            // The reserved nicks in mixed case.
+            gs::from_regex("[iI][rR][cC][dD]?"),
+        ));
         let nick = sanitize_nick(&s);
         assert_ne!(nick, "");
         assert!(nick.len() <= 30);
-        assert!(!nick.starts_with(|c: char| c.is_ascii_digit()));
+        assert!(!nick.starts_with(|c: char| c.is_ascii_digit() || c == '-'));
+        assert!(!nick.eq_ignore_ascii_case("irc") && !nick.eq_ignore_ascii_case("ircd"));
         assert!(nick.chars().all(is_valid_nick_char));
     }
 

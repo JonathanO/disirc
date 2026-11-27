@@ -80,7 +80,7 @@ S2SEvent::MessageReceived {
     from_uid: String,
     target: String,    // channel or UID
     text: String,
-    timestamp: Option<DateTime<Utc>>,  // from @time= tag; None if absent
+    timestamp: Option<jiff::Timestamp>,  // from @time= tag; None if absent
 }
 
 S2SEvent::NoticeReceived {
@@ -131,7 +131,7 @@ S2SCommand::SendMessage {
     from_uid: String,
     target: String,
     text: String,
-    timestamp: Option<DateTime<Utc>>,  // emitted as @time= tag if MTAGS active
+    timestamp: Option<jiff::Timestamp>,  // emitted as @time= tag if MTAGS active
 }
 
 S2SCommand::SendNotice {
@@ -304,7 +304,7 @@ When `MTAGS` is active, incoming messages may carry message tags.
 
 | Tag | Action |
 |-----|--------|
-| `@time=` | Parsed as `DateTime<Utc>`; placed in `S2SEvent::MessageReceived::timestamp` |
+| `@time=` | Parsed as `jiff::Timestamp`; placed in `S2SEvent::MessageReceived::timestamp`. The parser accepts RFC 3339 and the wider grammar of `jiff::fmt::temporal` (for example basic format, a comma before the fraction, an offset of hours only, or a time zone annotation). An offset is required. A leap second (`:60`) becomes `:59`. A value that does not parse gives `None` |
 | `@msgid=` | Recorded for future edit/delete correlation; not forwarded to Discord in v1 |
 | `@account=` | Ignored; IRC account names are not mapped to Discord identities in v1 |
 | `@bot=` | Ignored |
@@ -398,3 +398,4 @@ that distinguishes the two forms.
 - [UnrealIRCd Server Protocol — Introduction](https://www.unrealircd.org/docs/Server_protocol:Introduction) — accessed 2026-03-22
 - [UnrealIRCd Server Protocol — UID command](https://www.unrealircd.org/docs/Server_protocol:UID_command) — accessed 2026-03-22
 - [UnrealIRCd Server Protocol — SJOIN command](https://www.unrealircd.org/docs/Server_protocol:SJOIN_command) — accessed 2026-03-22
+- [jiff::fmt::temporal](https://docs.rs/jiff/1.0.2/jiff/fmt/temporal/index.html) — the grammar of `jiff::Timestamp`'s `FromStr` — accessed 2026-11-24

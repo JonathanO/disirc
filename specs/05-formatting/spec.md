@@ -104,7 +104,9 @@ When the uplink has negotiated `server-time`, outgoing `PRIVMSG` messages on the
 @time=2024-01-15T12:34:56.789Z :<uid> PRIVMSG #channel :<text>
 ```
 
-Timestamps are formatted as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
+Timestamps are formatted as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SS.mmmZ`). The bridge truncates the time to milliseconds.
+
+If `jiff::Timestamp` cannot represent the Discord timestamp, the bridge omits the tag. serenity 0.12 holds timestamps from -9999-01-01 to 9999-12-31. The range of `jiff::Timestamp` is about one day shorter at each end: -9999-01-02T01:59:59Z to 9999-12-30T22:00:00.999999999Z.
 
 ## References
 
@@ -113,4 +115,5 @@ Timestamps are formatted as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
 - [discord/simple-markdown](https://github.com/discord/simple-markdown) — Discord's markdown parser (fork of Khan Academy simple-markdown) — accessed 2026-03-24
 - [IRCv3 Message Tags specification](https://ircv3.net/specs/extensions/message-tags) — accessed 2026-03-22
 - [IRCv3 server-time specification](https://ircv3.net/specs/extensions/server-time) — accessed 2026-03-22
+- [jiff::Timestamp (MIN, MAX)](https://docs.rs/jiff/1.0.2/jiff/struct.Timestamp.html) — accessed 2026-11-24
 - [IRC formatting reference (modern.ircdocs.horse)](https://modern.ircdocs.horse/formatting) — accessed 2026-03-22

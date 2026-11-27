@@ -251,8 +251,7 @@ async fn relay_probe_until_seen(
                 author_display_name: probe.author_display_name.into(),
                 content: probe.content.into(),
                 attachments: vec![],
-                timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
-                    .unwrap(),
+                timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
             })
             .await
             .unwrap();
@@ -919,7 +918,7 @@ async fn e2e_discord_dm_with_nick_colon_relays_to_irc() {
             author_name: "alice".into(),
             content: "testbot: hey from discord dm".into(),
             referenced_content: None,
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
+            timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
         })
         .await
         .unwrap();
@@ -978,7 +977,7 @@ async fn e2e_discord_dm_unresolvable_sends_help() {
             author_name: "alice".into(),
             content: "just a random message".into(),
             referenced_content: None,
-            timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
+            timestamp: jiff::Timestamp::from_second(1_700_000_000).ok(),
         })
         .await
         .unwrap();

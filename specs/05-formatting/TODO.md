@@ -7,4 +7,4 @@ Status: **Implemented**
 - [x] Discord→IRC: newline splitting, code block handling, length splitting at 400 bytes
 - [x] IRC→Discord: control character stripping/conversion (Unicode Cc category)
 - [x] IRC→Discord: `@nick` mention conversion, ping-fix zero-width space, length truncation at 2000 chars
-- [x] `server-time` ISO 8601 timestamp formatting (chrono) + proptest suite across all transforms
+- [x] `server-time` ISO 8601 timestamp formatting (jiff; chrono until 2026-11) + proptest suite across all transforms

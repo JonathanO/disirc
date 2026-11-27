@@ -50,7 +50,8 @@ pub enum DiscordEvent {
         attachments: Vec<String>,
         /// Discord-side creation timestamp (from `msg.timestamp`).  Used to
         /// emit the `IRCv3` `@time=` server-time tag on the relayed `PRIVMSG`.
-        timestamp: chrono::DateTime<chrono::Utc>,
+        /// `None` if `jiff` cannot represent it; the tag is then omitted.
+        timestamp: Option<jiff::Timestamp>,
     },
     /// A user's presence changed.
     PresenceUpdated {
@@ -84,8 +85,9 @@ pub enum DiscordEvent {
         /// determine the target IRC user.
         referenced_content: Option<String>,
         /// Discord-side creation timestamp.  Emitted as the `IRCv3` `@time=`
-        /// tag when the DM is relayed as an IRC `PRIVMSG`.
-        timestamp: chrono::DateTime<chrono::Utc>,
+        /// tag when the DM is relayed as an IRC `PRIVMSG`.  `None` if `jiff`
+        /// cannot represent it; the tag is then omitted.
+        timestamp: Option<jiff::Timestamp>,
     },
     /// Initial member snapshot delivered once per guild after `guild_create`.
     /// Used to populate the IRC burst and mention resolution lookup tables.

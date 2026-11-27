@@ -6,6 +6,14 @@ Updated by Claude at the start and end of each session, and whenever task status
 
 ## In progress
 
+Next feature (needs a spec first, per CLAUDE.md):
+
+- [ ] Log to a channel: relay important bridge events (for example link
+      up/down, config reload results, dropped messages) to a configured
+      Discord and/or IRC channel. Open questions for the spec: which
+      channel(s), which events and levels, and how to avoid a log line
+      that itself fails and loops.
+
 Bugs found by a read-only review of property-test coverage (2026-10-08). Each
 fix needs a failing Hegel property first, then a unit test, then the fix:
 
